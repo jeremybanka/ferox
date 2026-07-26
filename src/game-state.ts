@@ -3,6 +3,7 @@ import { atom } from "atom.io"
 export type GameHudState = {
 	ammo: number
 	connection: "connecting" | "offline" | "online"
+	drones: number
 	health: number
 	jump: 0 | 1 | 2
 	players: number
@@ -16,6 +17,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 	default: {
 		ammo: 28,
 		connection: "connecting",
+		drones: 0,
 		health: 100,
 		jump: 0,
 		players: 1,

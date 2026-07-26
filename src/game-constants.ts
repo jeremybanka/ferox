@@ -1,0 +1,4 @@
+export const DRONE_POPULATION_CAP = 6
+export const DRONE_VISION_DISTANCE = 28
+export const DRONE_VISION_HALF_ANGLE = Math.PI / 5
+export const DRONE_AUDITORY_RADIUS = 14

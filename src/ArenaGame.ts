@@ -1,6 +1,7 @@
 import type { Socket } from "socket.io-client"
 import * as THREE from "three"
 
+import { DroneBotSystem } from "./DroneBotSystem.ts"
 import type { GameHudState } from "./game-state.ts"
 
 type PlayerSnapshot = {
@@ -22,8 +23,10 @@ type ArenaGameOptions = {
 }
 
 type Projectile = {
+	damage: number
 	life: number
 	mesh: THREE.Mesh
+	team: "bot" | "player"
 	velocity: THREE.Vector3
 }
 
@@ -57,6 +60,7 @@ function smoothNoise(seed: number, x: number, z: number): number {
 export class ArenaGame {
 	readonly #canvas: HTMLCanvasElement
 	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 280)
+	readonly #drones: DroneBotSystem
 	readonly #keys = new Set<string>()
 	readonly #onHud: (state: GameHudState) => void
 	readonly #player = {
@@ -83,6 +87,7 @@ export class ArenaGame {
 	#jumpQueued = false
 	#lastFrame = performance.now()
 	#lookGamepad = new THREE.Vector2()
+	#noiseTimer = 0
 	#score = 0
 	#shotHeld = false
 	#slide = false
@@ -106,6 +111,19 @@ export class ArenaGame {
 		this.#scene.fog = new THREE.FogExp2("#171a31", 0.014)
 		this.#buildWorld()
 		this.#buildWeapon()
+		this.#drones = new DroneBotSystem({
+			heightAt: (x, z) => this.#heightAt(x, z),
+			onBotDestroyed: () => {
+				this.#score += 1
+			},
+			onPlayerDamage: (damage) => {
+				this.#damagePlayer(damage)
+			},
+			scene: this.#scene,
+			shoot: (origin, direction, damage, color) => {
+				this.#spawnProjectile(origin, direction, "bot", damage, color)
+			},
+		})
 		this.#bindEvents()
 		this.#player.position.y = this.#heightAt(0, 13) + PLAYER_EYE
 		this.#connected = this.#socket.connected
@@ -130,6 +148,7 @@ export class ArenaGame {
 		this.#socket.off("disconnect", this.#onDisconnect)
 		this.#socket.off("arena:players", this.#onPlayers)
 		this.#socket.off("arena:blast", this.#onRemoteBlast)
+		this.#drones.dispose()
 		this.#renderer.dispose()
 	}
 
@@ -538,7 +557,8 @@ export class ArenaGame {
 		const origin = this.#camera
 			.getWorldPosition(new THREE.Vector3())
 			.addScaledVector(direction, 0.8)
-		this.#spawnProjectile(origin, direction)
+		this.#spawnProjectile(origin, direction, "player", 20, "#b8fff1")
+		this.#noiseTimer = 0.85
 		this.#weapon.position.z += 0.12
 		this.#socket.emit("arena:blast", {
 			direction: direction.toArray(),
@@ -546,18 +566,26 @@ export class ArenaGame {
 		} satisfies BlastSnapshot)
 	}
 
-	#spawnProjectile(origin: THREE.Vector3, direction: THREE.Vector3): void {
+	#spawnProjectile(
+		origin: THREE.Vector3,
+		direction: THREE.Vector3,
+		team: "bot" | "player" = "player",
+		damage = 20,
+		color: THREE.ColorRepresentation = "#b8fff1",
+	): void {
 		const mesh = new THREE.Mesh(
 			new THREE.SphereGeometry(0.09, 8, 8),
-			new THREE.MeshBasicMaterial({ color: "#b8fff1" }),
+			new THREE.MeshBasicMaterial({ color }),
 		)
-		const light = new THREE.PointLight("#5fffe2", 3, 5)
+		const light = new THREE.PointLight(color, 3, 5)
 		mesh.add(light)
 		mesh.position.copy(origin)
 		this.#scene.add(mesh)
 		this.#projectiles.push({
+			damage,
 			life: 2.4,
 			mesh,
+			team,
 			velocity: direction.multiplyScalar(55),
 		})
 	}
@@ -568,15 +596,31 @@ export class ArenaGame {
 			if (projectile === undefined) continue
 			projectile.life -= delta
 			projectile.mesh.position.addScaledVector(projectile.velocity, delta)
+			const hitTarget =
+				projectile.team === "player"
+					? this.#drones.damageNear(projectile.mesh.position, projectile.damage)
+					: projectile.mesh.position.distanceTo(this.#player.position) < 0.72
+			if (hitTarget && projectile.team === "bot") {
+				this.#damagePlayer(projectile.damage)
+			}
 			const hitGround =
 				projectile.mesh.position.y <=
 				this.#heightAt(projectile.mesh.position.x, projectile.mesh.position.z) +
 					0.12
-			if (projectile.life <= 0 || hitGround) {
+			if (projectile.life <= 0 || hitGround || hitTarget) {
 				this.#scene.remove(projectile.mesh)
 				this.#projectiles.splice(index, 1)
 			}
 		}
+	}
+
+	#damagePlayer(damage: number): void {
+		this.#health = Math.max(0, this.#health - damage)
+		if (this.#health > 0) return
+		this.#health = 100
+		this.#score = Math.max(0, this.#score - 1)
+		this.#player.position.set(0, this.#heightAt(0, 13) + PLAYER_EYE, 13)
+		this.#player.velocity.set(0, 0, 0)
 	}
 
 	#updateCamera(delta: number): void {
@@ -636,6 +680,7 @@ export class ArenaGame {
 					? "connecting"
 					: "offline",
 			health: this.#health,
+			drones: this.#drones.count,
 			jump: this.#player.jumps,
 			players: this.#remotePlayers.size + 1,
 			score: this.#score,
@@ -653,6 +698,13 @@ export class ArenaGame {
 		const delta = Math.min((now - this.#lastFrame) / 1000, 0.04)
 		this.#lastFrame = now
 		this.#updatePhysics(delta)
+		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)
+		this.#drones.update(
+			delta,
+			this.#player.position,
+			this.#player.velocity,
+			this.#noiseTimer,
+		)
 		this.#updateProjectiles(delta)
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)
