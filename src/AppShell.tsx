@@ -37,13 +37,13 @@ export function AppShell({ socket }: AppShellProps): VNode {
 
 	return (
 		<app-shell className={css.class} data-deployed={deployed}>
-			<canvas ref={canvasRef} tabIndex={-1} aria-label="Wayfarer 3D arena" />
+			<canvas ref={canvasRef} tabIndex={-1} aria-label="FEROX 3D arena" />
 			<game-vignette aria-hidden="true" />
 			<game-hud aria-label="Arena heads-up display">
 				<game-header>
 					<brand-mark>
 						<mark>W//</mark>
-						<strong>WAYFARER</strong>
+						<strong>FEROX</strong>
 						<small>TRIAL GROUND</small>
 					</brand-mark>
 					<match-status>

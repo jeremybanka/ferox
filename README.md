@@ -1,6 +1,6 @@
-# wayfarer.quest
+# FEROX
 
-The single-page application for Wayfarer Quest, built with
+The multiplayer arena game FEROX, built with
 [Vite](https://vite.dev/), [Preact](https://preactjs.com/),
 [atom.io](https://atom.io.fyi/), and
 [Lasertag](https://github.com/jeremybanka/lasertag).

@@ -1,4 +1,4 @@
-# wayfarer.quest
+# FEROX
 
 - This repository contains one Vite application; keep application code in
   `src/` and static assets in `public/`.

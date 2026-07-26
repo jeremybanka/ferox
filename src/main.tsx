@@ -12,14 +12,14 @@ if (appRoot === null) {
 	throw new Error("Expected the app root to exist.")
 }
 
-const storedPilotId = globalThis.localStorage.getItem("wayfarer-pilot-id")
+const storedPilotId = globalThis.localStorage.getItem("ferox-pilot-id")
 const pilotId = storedPilotId ?? crypto.randomUUID()
-globalThis.localStorage.setItem("wayfarer-pilot-id", pilotId)
+globalThis.localStorage.setItem("ferox-pilot-id", pilotId)
 
 const socket = io({
 	autoConnect: false,
 	auth: {
-		token: "wayfarer-local",
+		token: "ferox-local",
 		username: `user::${pilotId}`,
 	},
 })

@@ -24,7 +24,7 @@ const httpServer = createServer((request, response) => {
 		return
 	}
 	response.writeHead(200, { "content-type": "text/plain" })
-	response.end("WAYFARER realtime arena online")
+	response.end("FEROX realtime arena online")
 })
 const io = new Server(httpServer, {
 	cors: { origin: true },
@@ -40,7 +40,7 @@ realtime(
 		if (
 			typeof username === "string" &&
 			username.startsWith("user::") &&
-			token === "wayfarer-local"
+			token === "ferox-local"
 		) {
 			return username as UserKey
 		}
@@ -85,5 +85,5 @@ setInterval(() => {
 }, 50)
 
 httpServer.listen(port, () => {
-	console.log(`WAYFARER realtime server listening on http://localhost:${port}`)
+	console.log(`FEROX realtime server listening on http://localhost:${port}`)
 })
