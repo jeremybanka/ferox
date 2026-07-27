@@ -13,7 +13,7 @@ export type GameHudState = {
 	score: number
 	sliding: boolean
 	speed: number
-	targeting: "acquired" | "escaping" | "idle" | "locked" | "lost"
+	targeting: "acquired" | "escaping" | "free" | "idle" | "locked" | "lost"
 }
 
 export const gameHudStateAtom = atom<GameHudState>({

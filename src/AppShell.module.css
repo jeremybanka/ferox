@@ -184,6 +184,12 @@ app-shell.class {
 					0 0 1.1rem rgb(85 255 174 / 0.19);
 			}
 
+			&[data-state="free"] {
+				border-color: rgb(111 188 255 / 0.3);
+				border-style: dashed;
+				box-shadow: inset 0 0 1.6rem rgb(73 168 255 / 0.055);
+			}
+
 			&[data-state="escaping"] {
 				border-color: rgb(255 206 71 / 0.82);
 				box-shadow:
@@ -196,6 +202,33 @@ app-shell.class {
 				box-shadow:
 					inset 0 0 1.8rem rgb(170 58 53 / 0.16),
 					0 0 1.2rem rgb(170 58 53 / 0.18);
+			}
+
+			> free-aim-label {
+				display: none;
+				justify-items: center;
+				padding: 0.4rem 0.7rem;
+				border: 1px solid rgb(111 188 255 / 0.26);
+				background: rgb(7 14 25 / 0.48);
+				color: rgb(140 205 255 / 0.75);
+				font-family: var(--font-mono);
+
+				> strong {
+					font-size: 0.6rem;
+					letter-spacing: 0.24em;
+				}
+
+				> span {
+					margin-top: 0.2rem;
+					font-size: 0.4rem;
+					letter-spacing: 0.15em;
+				}
+			}
+
+			&[data-state="free"] {
+				> free-aim-label {
+					display: grid;
+				}
 			}
 
 			> target-warning {

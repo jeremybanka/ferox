@@ -70,6 +70,10 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</game-header>
 
 				<smart-target-zone data-state={hud.targeting} aria-hidden="true">
+					<free-aim-label>
+						<strong>FREE AIM</strong>
+						<span>MANUAL BALLISTICS</span>
+					</free-aim-label>
 					<target-warning>
 						<strong>
 							{hud.targeting === "escaping"
@@ -136,7 +140,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<strong>{String(hud.ammo).padStart(2, "0")}</strong>
 						<span>/ 28</span>
 					</ammo-count>
-					<em>{hud.ammo === 0 ? "PRESS R TO RELOAD" : "PLASMA CELLS"}</em>
+					<em>{hud.ammo === 0 ? "PRESS RB / R TO RELOAD" : "PLASMA CELLS"}</em>
 				</weapon-status>
 
 				<game-footer>
@@ -152,8 +156,12 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					</control-hint>
 					<arena-id>SEED // {seed}</arena-id>
 					<control-hint>
-						<kbd>LB</kbd>
-						<span>TARGET LOCK</span>
+						<kbd>LB TAP</kbd>
+						<span>LOCK</span>
+						<kbd>LB HOLD</kbd>
+						<span>FREE AIM</span>
+						<kbd>RB</kbd>
+						<span>RELOAD</span>
 						<kbd>◉</kbd>
 						<span>GAMEPAD READY</span>
 					</control-hint>

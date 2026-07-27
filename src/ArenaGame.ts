@@ -3,6 +3,7 @@ import * as THREE from "three"
 
 import { DroneBotSystem } from "./DroneBotSystem.ts"
 import {
+	FREE_AIM_TAP_THRESHOLD_MS,
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
@@ -35,7 +36,13 @@ type Projectile = {
 	velocity: THREE.Vector3
 }
 
-type TargetingState = "acquired" | "escaping" | "idle" | "locked" | "lost"
+type TargetingState =
+	| "acquired"
+	| "escaping"
+	| "free"
+	| "idle"
+	| "locked"
+	| "lost"
 
 const PLAYER_EYE = 1.72
 const CROUCH_EYE = 1.08
@@ -87,13 +94,16 @@ export class ArenaGame {
 	#ammo = 28
 	#acquiredTargetId: number | null = null
 	#animationFrame = 0
+	#bumperTapTargetId: number | null = null
 	#connected = false
 	#disposed = false
 	#fireCooldown = 0
+	#freeAim = false
 	#health = 100
 	#hudElapsed = 0
 	#jumpQueued = false
 	#lastFrame = performance.now()
+	#leftBumperDuration = 0
 	#leftBumperHeld = false
 	#lockedTargetId: number | null = null
 	#lockToggleQueued = false
@@ -101,10 +111,12 @@ export class ArenaGame {
 	#noiseTimer = 0
 	#reticleX = 0.5
 	#reticleY = 0.5
+	#rightBumperHeld = false
 	#score = 0
 	#shotHeld = false
 	#slide = false
 	#snapshotElapsed = 0
+	#sprinting = false
 	#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
 	#targetLostFlashRemaining = 0
 	#targetingState: TargetingState = "idle"
@@ -172,7 +184,6 @@ export class ArenaGame {
 		this.#keys.add(event.code)
 		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
 		if (event.code === "KeyR" && this.#ammo < 28) this.#ammo = 28
-		if (event.code === "KeyQ" && !event.repeat) this.#lockToggleQueued = true
 	}
 
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
@@ -181,9 +192,10 @@ export class ArenaGame {
 
 	readonly #onMouseMove = (event: MouseEvent): void => {
 		if (document.pointerLockElement !== this.#canvas) return
-		this.#player.yaw -= event.movementX * 0.0018
+		const sensitivity = this.#freeAim ? 0.000_85 : 0.0018
+		this.#player.yaw -= event.movementX * sensitivity
 		this.#player.pitch = THREE.MathUtils.clamp(
-			this.#player.pitch - event.movementY * 0.0018,
+			this.#player.pitch - event.movementY * sensitivity,
 			-1.42,
 			1.42,
 		)
@@ -417,6 +429,7 @@ export class ArenaGame {
 		fire: boolean
 		jump: boolean
 		lock: boolean
+		reload: boolean
 		sprint: boolean
 		x: number
 		y: number
@@ -429,6 +442,7 @@ export class ArenaGame {
 				fire: false,
 				jump: false,
 				lock: false,
+				reload: false,
 				sprint: false,
 				x: 0,
 				y: 0,
@@ -444,12 +458,14 @@ export class ArenaGame {
 		const crouch = gamepad.buttons[1]?.pressed ?? false
 		const fire = (gamepad.buttons[7]?.value ?? 0) > 0.25
 		const lock = gamepad.buttons[4]?.pressed ?? false
+		const reload = gamepad.buttons[5]?.pressed ?? false
 		const sprint = gamepad.buttons[10]?.pressed ?? false
 		return {
 			crouch,
 			fire,
 			jump,
 			lock,
+			reload,
 			sprint,
 			x: deadzone(gamepad.axes[0] ?? 0),
 			y: deadzone(gamepad.axes[1] ?? 0),
@@ -458,11 +474,31 @@ export class ArenaGame {
 
 	#updatePhysics(delta: number): void {
 		const gamepad = this.#pollGamepad()
-		if (gamepad.lock && !this.#leftBumperHeld) this.#lockToggleQueued = true
-		this.#leftBumperHeld = gamepad.lock
-		this.#player.yaw -= this.#lookGamepad.x * delta * 2.7
+		const freeAimPressed = gamepad.lock || this.#keys.has("KeyQ")
+		if (freeAimPressed) {
+			if (!this.#leftBumperHeld) {
+				this.#leftBumperDuration = 0
+				this.#bumperTapTargetId = this.#acquiredTargetId ?? this.#lockedTargetId
+			}
+			this.#leftBumperDuration += delta * 1_000
+			this.#freeAim = true
+		} else {
+			if (
+				this.#leftBumperHeld &&
+				this.#leftBumperDuration < FREE_AIM_TAP_THRESHOLD_MS
+			) {
+				this.#lockToggleQueued = true
+			}
+			this.#leftBumperDuration = 0
+			this.#freeAim = false
+		}
+		this.#leftBumperHeld = freeAimPressed
+		if (gamepad.reload && !this.#rightBumperHeld) this.#ammo = 28
+		this.#rightBumperHeld = gamepad.reload
+		const lookSensitivity = this.#freeAim ? 1.15 : 2.7
+		this.#player.yaw -= this.#lookGamepad.x * delta * lookSensitivity
 		this.#player.pitch = THREE.MathUtils.clamp(
-			this.#player.pitch - this.#lookGamepad.y * delta * 2.25,
+			this.#player.pitch - this.#lookGamepad.y * delta * lookSensitivity * 0.84,
 			-1.42,
 			1.42,
 		)
@@ -494,6 +530,7 @@ export class ArenaGame {
 			this.#keys.has("ShiftLeft") ||
 			this.#keys.has("ShiftRight") ||
 			gamepad.sprint
+		this.#sprinting = grounded && sprint && input.lengthSq() > 0 && !this.#slide
 		if (grounded && input.lengthSq() > 0 && !this.#slide) {
 			const forward = new THREE.Vector3(
 				-Math.sin(this.#player.yaw),
@@ -572,7 +609,13 @@ export class ArenaGame {
 
 	#fire(): void {
 		if (this.#fireCooldown > 0 || this.#ammo === 0) return
-		if (this.#lockedTargetId !== null && this.#acquiredTargetId === null) return
+		if (this.#sprinting) return
+		if (
+			this.#lockedTargetId !== null &&
+			this.#acquiredTargetId === null &&
+			!this.#freeAim
+		)
+			return
 		this.#fireCooldown = 0.13
 		this.#ammo -= 1
 		const origin = this.#camera.getWorldPosition(new THREE.Vector3())
@@ -680,6 +723,14 @@ export class ArenaGame {
 	}
 
 	#updateTargeting(delta: number): void {
+		if (this.#freeAim) {
+			this.#targetingState = "free"
+			this.#acquiredTargetId = null
+			this.#reticleX = 0.5
+			this.#reticleY = 0.5
+			return
+		}
+
 		if (this.#targetLostFlashRemaining > 0) {
 			this.#targetLostFlashRemaining -= delta * 1_000
 			this.#targetingState = "lost"
@@ -695,10 +746,12 @@ export class ArenaGame {
 			if (this.#lockedTargetId !== null) {
 				this.#lockedTargetId = null
 				this.#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
-			} else if (this.#acquiredTargetId !== null) {
-				this.#lockedTargetId = this.#acquiredTargetId
+			} else {
+				const targetId = this.#bumperTapTargetId ?? this.#acquiredTargetId
+				if (targetId !== null) this.#lockedTargetId = targetId
 				this.#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
 			}
+			this.#bumperTapTargetId = null
 		}
 
 		if (this.#lockedTargetId !== null) {
@@ -797,7 +850,9 @@ export class ArenaGame {
 			this.#acquiredTargetId === null
 				? null
 				: this.#drones.getTargetPosition(this.#acquiredTargetId)
-		if (targetPosition !== null) {
+		if (this.#sprinting) {
+			desired.setFromEuler(new THREE.Euler(1.05, 0, 0))
+		} else if (targetPosition !== null) {
 			const localTarget = this.#camera.worldToLocal(targetPosition)
 			const direction = localTarget.sub(this.#weapon.position).normalize()
 			desired.setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction)
