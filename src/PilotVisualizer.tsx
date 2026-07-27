@@ -12,6 +12,7 @@ import { applyDoubleJumpAnimation } from "./pilot/DoubleJumpAnimation.ts"
 import { applyJumpAnimation } from "./pilot/JumpAnimation.ts"
 import { createPilotModel, resetPilotPose } from "./pilot/PilotModel.ts"
 import { applyRunAnimation, type RunDirection } from "./pilot/RunAnimation.ts"
+import { applyWaveAnimation } from "./pilot/WaveAnimation.ts"
 
 type PreviewMode =
 	| RunDirection
@@ -24,6 +25,7 @@ type PreviewMode =
 	| "passing"
 	| "push"
 	| "flight"
+	| "wave"
 
 const MODES: readonly PreviewMode[] = [
 	"forward",
@@ -39,6 +41,7 @@ const MODES: readonly PreviewMode[] = [
 	"passing",
 	"push",
 	"flight",
+	"wave",
 ]
 
 const MODE_DURATION_SECONDS: Readonly<Record<PreviewMode, number>> = {
@@ -55,6 +58,7 @@ const MODE_DURATION_SECONDS: Readonly<Record<PreviewMode, number>> = {
 	passing: 1,
 	push: 1,
 	flight: 1,
+	wave: 2.4,
 }
 
 type SampleInterval = 0.167 | 0.0833
@@ -118,9 +122,55 @@ function applyPreviewPose(
 		applyRunAnimation(rig, 0.125, 1, "forward")
 	} else if (mode === "push") {
 		applyRunAnimation(rig, 0.208, 1, "forward")
+	} else if (mode === "wave") {
+		applyWaveAnimation(rig, progress)
 	} else {
 		applyRunAnimation(rig, 0.33, 1, "forward")
 	}
+}
+
+function applyPreviewVisor(
+	rig: ReturnType<typeof createPilotModel>,
+	mode: PreviewMode,
+	now: number,
+): void {
+	let source: "combat" | "damage" | "emote" | "movement" | null = null
+	let expression:
+		| "aim-left"
+		| "alarm"
+		| "angry"
+		| "focus"
+		| "hurt"
+		| "happy"
+		| null = null
+	if (mode === "contact") {
+		source = "damage"
+		expression = "hurt"
+	} else if (mode === "passing") {
+		source = "movement"
+		expression = "aim-left"
+	} else if (mode === "push") {
+		source = "combat"
+		expression = "angry"
+	} else if (mode === "flight" || mode === "double-jump") {
+		source = "movement"
+		expression = "alarm"
+	} else if (mode === "free-aim") {
+		source = "combat"
+		expression = "focus"
+	} else if (mode === "crouch" || mode === "crouch-run") {
+		source = "movement"
+		expression = "angry"
+	} else if (mode === "wave") {
+		source = "emote"
+		expression = "happy"
+	}
+	for (const candidate of ["combat", "damage", "emote", "movement"] as const) {
+		if (candidate !== source) rig.visorDisplay.clearSignal(candidate)
+	}
+	if (source !== null && expression !== null)
+		rig.visorDisplay.setSignal(source, expression, now)
+	rig.visorDisplay.update(now)
 }
 
 export function PilotVisualizer(): VNode {
@@ -259,6 +309,7 @@ export function PilotVisualizer(): VNode {
 			resetPilotPose(rig)
 			rig.root.rotation.y = controls.yaw
 			applyPreviewPose(rig, controls.mode, timelineRef.current)
+			applyPreviewVisor(rig, controls.mode, now / 1_000)
 			camera.lookAt(0, 2 + rig.root.position.y, 0)
 			renderer.render(scene, camera)
 		}
@@ -324,6 +375,7 @@ export function PilotVisualizer(): VNode {
 				resetPilotPose(rig)
 				rig.root.rotation.y = controls.yaw
 				applyPreviewPose(rig, controls.mode, time)
+				applyPreviewVisor(rig, controls.mode, time)
 				camera.lookAt(0, 2 + rig.root.position.y, 0)
 				renderer.render(scene, camera)
 			}

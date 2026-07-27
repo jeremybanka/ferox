@@ -8,7 +8,9 @@ import type {
 	FireIntent,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
+	VisorExpression,
 } from "./arena-protocol.ts"
+import { isVisorExpression } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
 import {
@@ -41,6 +43,8 @@ type PlayerSnapshot = {
 	rotation: [number, number]
 	sprinting: boolean
 	velocity: [number, number, number]
+	visorExpression: VisorExpression
+	visorStartedAt: number
 }
 
 type SpawnSnapshot = {
@@ -80,6 +84,8 @@ type RemotePilot = {
 	sprinting: boolean
 	target: THREE.Vector3
 	velocity: THREE.Vector3
+	visorExpression: VisorExpression
+	visorStartedAt: number
 	yaw: number
 }
 
@@ -143,6 +149,9 @@ export class ArenaGame {
 	#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
 	#targetLostFlashRemaining = 0
 	#targetingState: TargetingState = "idle"
+	#visorExpression: VisorExpression = "boot"
+	#visorHurtUntil = 0
+	#visorStartedAt = Date.now() / 1_000
 
 	constructor(options: ArenaGameOptions) {
 		this.#canvas = options.canvas
@@ -266,6 +275,8 @@ export class ArenaGame {
 			rotation: [this.#player.yaw, this.#player.pitch],
 			sprinting: false,
 			velocity: [0, 0, 0],
+			visorExpression: this.#visorExpression,
+			visorStartedAt: this.#visorStartedAt,
 		})
 	}
 
@@ -296,6 +307,8 @@ export class ArenaGame {
 					sprinting: false,
 					target: new THREE.Vector3(),
 					velocity: new THREE.Vector3(),
+					visorExpression: "boot",
+					visorStartedAt: Date.now() / 1_000,
 					yaw: 0,
 				}
 				this.#remotePlayers.set(snapshot.id, model)
@@ -316,6 +329,13 @@ export class ArenaGame {
 			model.freeAim = snapshot.freeAim
 			model.jump = snapshot.jump
 			model.sprinting = snapshot.sprinting
+			if (
+				isVisorExpression(snapshot.visorExpression) &&
+				Number.isFinite(snapshot.visorStartedAt)
+			) {
+				model.visorExpression = snapshot.visorExpression
+				model.visorStartedAt = snapshot.visorStartedAt
+			}
 		}
 		for (const [id, model] of this.#remotePlayers) {
 			if (!active.has(id)) {
@@ -328,6 +348,9 @@ export class ArenaGame {
 	readonly #onCombat = (combat: CombatSnapshot): void => {
 		if (!Number.isFinite(combat.health) || !Number.isFinite(combat.score))
 			return
+		if (combat.health < this.#health) {
+			this.#visorHurtUntil = performance.now() / 1_000 + 0.45
+		}
 		this.#health = combat.health
 		this.#score = combat.score
 	}
@@ -968,6 +991,13 @@ export class ArenaGame {
 			if (model.freeAim) {
 				applyFreeAimPose(model.rig, model.pitch, 0, 1)
 			}
+			const visorTime = Date.now() / 1_000
+			model.rig.visorDisplay.setSignal(
+				"combat",
+				model.visorExpression,
+				model.visorStartedAt,
+			)
+			model.rig.visorDisplay.update(visorTime)
 			const poseOffset = model.rig.root.position.clone()
 			model.rig.root.position.copy(model.position).add(poseOffset)
 			model.rig.root.rotation.y += model.yaw
@@ -978,6 +1008,25 @@ export class ArenaGame {
 		this.#snapshotElapsed += delta
 		if (!this.#connected || this.#snapshotElapsed < 0.05) return
 		this.#snapshotElapsed = 0
+		const now = performance.now() / 1_000
+		const horizontalSpeed = Math.hypot(
+			this.#player.velocity.x,
+			this.#player.velocity.z,
+		)
+		const visorExpression: VisorExpression =
+			now < this.#visorHurtUntil
+				? "hurt"
+				: this.#freeAim
+					? "focus"
+					: this.#fireCooldown > 0
+						? "angry"
+						: this.#sprinting || horizontalSpeed > 6
+							? "angry"
+							: "neutral"
+		if (visorExpression !== this.#visorExpression) {
+			this.#visorExpression = visorExpression
+			this.#visorStartedAt = Date.now() / 1_000
+		}
 		this.#socket.emit("arena:move", {
 			crouching: this.#crouching,
 			freeAim: this.#freeAim,
@@ -986,6 +1035,8 @@ export class ArenaGame {
 			rotation: [this.#player.yaw, this.#player.pitch],
 			sprinting: this.#sprinting,
 			velocity: this.#player.velocity.toArray(),
+			visorExpression: this.#visorExpression,
+			visorStartedAt: this.#visorStartedAt,
 		})
 	}
 

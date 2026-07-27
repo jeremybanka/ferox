@@ -4,7 +4,12 @@ import { realtime } from "atom.io/realtime-server"
 import type { UserKey } from "atom.io/realtime"
 import { Server, type Socket as IoSocket } from "socket.io"
 
-import type { CombatSnapshot, FireIntent } from "../src/arena-protocol.ts"
+import {
+	isVisorExpression,
+	type CombatSnapshot,
+	type FireIntent,
+	type VisorExpression,
+} from "../src/arena-protocol.ts"
 import {
 	ARENA_SEED,
 	PLAYER_SPAWN_ORDER,
@@ -21,6 +26,8 @@ type PlayerSnapshot = {
 	rotation: [number, number]
 	sprinting: boolean
 	velocity: [number, number, number]
+	visorExpression: VisorExpression
+	visorStartedAt: number
 }
 
 type MovePayload = Omit<PlayerSnapshot, "id">
@@ -143,6 +150,8 @@ realtime(
 			rotation: [spawnYaw, 0],
 			sprinting: false,
 			velocity: [0, 0, 0],
+			visorExpression: "boot",
+			visorStartedAt: Date.now() / 1_000,
 		})
 		const onReady = (): void => {
 			gameSocket.emit("arena:spawn", spawnPayload)
@@ -161,6 +170,8 @@ realtime(
 				payload.position.length !== 3 ||
 				payload.rotation.length !== 2 ||
 				payload.velocity.length !== 3 ||
+				!isVisorExpression(payload.visorExpression) ||
+				!Number.isFinite(payload.visorStartedAt) ||
 				[...payload.position, ...payload.rotation, ...payload.velocity].some(
 					(value) => !Number.isFinite(value),
 				)

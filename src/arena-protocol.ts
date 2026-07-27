@@ -1,5 +1,25 @@
 export type Vector3Tuple = [number, number, number]
 
+export const VISOR_EXPRESSIONS = [
+	"aim-left",
+	"aim-right",
+	"alarm",
+	"angry",
+	"boot",
+	"defeated",
+	"focus",
+	"happy",
+	"hurt",
+	"neutral",
+	"talk",
+] as const
+
+export type VisorExpression = (typeof VISOR_EXPRESSIONS)[number]
+
+export function isVisorExpression(value: unknown): value is VisorExpression {
+	return VISOR_EXPRESSIONS.some((expression) => expression === value)
+}
+
 export type DronePersonality = "bully" | "coward" | "kamikaze"
 export type DroneMood = "angry" | "berserk" | "haughty" | "idle" | "scared"
 
