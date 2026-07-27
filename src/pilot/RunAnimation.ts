@@ -19,8 +19,20 @@ export function applyRunAnimation(
 
 	rig.leftLeg.rotation.x = stride
 	rig.rightLeg.rotation.x = counterStride * 0.72 * intensity
-	rig.leftFoot.rotation.x = -stride * 0.42 - liftLeft * 0.28
-	rig.rightFoot.rotation.x = -counterStride * 0.3 * intensity - liftRight * 0.28
+	rig.leftKnee.rotation.x = -(
+		0.14 * intensity +
+		liftLeft * 0.92 +
+		Math.max(0, -stride) * 0.35
+	)
+	rig.rightKnee.rotation.x = -(
+		0.14 * intensity +
+		liftRight * 0.92 +
+		Math.max(0, stride) * 0.35
+	)
+	rig.leftFoot.rotation.x =
+		-(rig.leftLeg.rotation.x + rig.leftKnee.rotation.x) - liftLeft * 0.16
+	rig.rightFoot.rotation.x =
+		-(rig.rightLeg.rotation.x + rig.rightKnee.rotation.x) - liftRight * 0.16
 	rig.leftArm.rotation.x = -stride * 0.72
 	rig.rightArm.rotation.x = stride * 0.55
 	rig.leftElbow.rotation.x = 0.34 + Math.abs(stride) * 0.38

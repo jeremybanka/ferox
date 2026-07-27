@@ -170,8 +170,15 @@ export function applyJumpAnimation(rig: PilotRig, progress: number): void {
 	rig.rightLeg.rotation.x = leg * 0.92
 	rig.leftLeg.rotation.z = -leg * 0.07
 	rig.rightLeg.rotation.z = leg * 0.07
-	rig.leftFoot.rotation.x = foot
-	rig.rightFoot.rotation.x = foot * 0.94
+	rig.leftKnee.rotation.x = -Math.max(
+		0.08,
+		Math.abs(leg) * 1.12 + Math.max(0, -foot) * 0.3,
+	)
+	rig.rightKnee.rotation.x = rig.leftKnee.rotation.x * 0.92
+	rig.leftFoot.rotation.x =
+		-(rig.leftLeg.rotation.x + rig.leftKnee.rotation.x) + foot * 0.18
+	rig.rightFoot.rotation.x =
+		-(rig.rightLeg.rotation.x + rig.rightKnee.rotation.x) + foot * 0.16
 
 	const arm = value("arm")
 	const elbow = value("elbow")

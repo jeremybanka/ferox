@@ -120,6 +120,8 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 		case "wide": {
 			rig.leftLeg.rotation.z = -0.28
 			rig.rightLeg.rotation.z = 0.28
+			rig.leftKnee.rotation.x = -0.14
+			rig.rightKnee.rotation.x = -0.14
 			rig.leftFoot.rotation.z = 0.12
 			rig.rightFoot.rotation.z = -0.12
 			break
@@ -127,14 +129,20 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 		case "left-lunge": {
 			rig.leftLeg.rotation.x = -0.72
 			rig.rightLeg.rotation.x = 0.42
-			rig.leftFoot.rotation.x = 0.4
+			rig.leftKnee.rotation.x = -0.42
+			rig.rightKnee.rotation.x = -0.88
+			rig.leftFoot.rotation.x = 1.14
+			rig.rightFoot.rotation.x = 0.46
 			rig.hips.rotation.y = -0.18
 			break
 		}
 		case "right-lunge": {
 			rig.leftLeg.rotation.x = 0.42
 			rig.rightLeg.rotation.x = -0.72
-			rig.rightFoot.rotation.x = 0.4
+			rig.leftKnee.rotation.x = -0.88
+			rig.rightKnee.rotation.x = -0.42
+			rig.leftFoot.rotation.x = 0.46
+			rig.rightFoot.rotation.x = 1.14
 			rig.hips.rotation.y = 0.18
 			break
 		}
@@ -146,15 +154,20 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 			rig.rightLeg.rotation.x = 0.58
 			rig.leftLeg.rotation.z = -0.22
 			rig.rightLeg.rotation.z = 0.22
-			rig.leftFoot.rotation.x = -0.5
-			rig.rightFoot.rotation.x = -0.5
+			rig.leftKnee.rotation.x = -1.18
+			rig.rightKnee.rotation.x = -1.18
+			rig.leftFoot.rotation.x = 0.6
+			rig.rightFoot.rotation.x = 0.6
 			break
 		}
 		case "kneel": {
 			rig.root.position.y = -0.52
 			rig.leftLeg.rotation.x = -0.2
 			rig.rightLeg.rotation.x = 1.14
-			rig.rightFoot.rotation.x = -0.92
+			rig.leftKnee.rotation.x = -0.76
+			rig.rightKnee.rotation.x = -1.52
+			rig.leftFoot.rotation.x = 0.96
+			rig.rightFoot.rotation.x = 0.38
 			rig.hips.rotation.x = 0.18
 			break
 		}
@@ -162,12 +175,16 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 			rig.root.position.y = 0.54
 			rig.leftLeg.rotation.x = -0.74
 			rig.rightLeg.rotation.x = 0.58
-			rig.leftFoot.rotation.x = 0.46
-			rig.rightFoot.rotation.x = -0.36
+			rig.leftKnee.rotation.x = -1.08
+			rig.rightKnee.rotation.x = -1.28
+			rig.leftFoot.rotation.x = 1.82
+			rig.rightFoot.rotation.x = 0.7
 			break
 		}
 		case "tiptoe": {
 			rig.root.position.y = 0.16
+			rig.leftKnee.rotation.x = -0.18
+			rig.rightKnee.rotation.x = -0.18
 			rig.leftFoot.rotation.x = -0.72
 			rig.rightFoot.rotation.x = -0.72
 			rig.leftLeg.rotation.z = -0.08
@@ -268,6 +285,8 @@ export function applyPracticePose(
 	if (pose.bucket === "jank") {
 		rig.leftLeg.rotation.z += Math.sin(index * 1.3) * 0.58
 		rig.rightLeg.rotation.z += Math.cos(index * 1.7) * 0.58
+		rig.leftKnee.rotation.x += Math.sin(index * 1.9) * 0.42
+		rig.rightKnee.rotation.x += Math.cos(index * 1.5) * 0.42
 		rig.leftShoulder.rotation.y += Math.sin(index) * 0.72
 		rig.rightShoulder.rotation.y -= Math.cos(index) * 0.72
 		rig.weapon.rotation.z += Math.sin(index * 2) * 0.48

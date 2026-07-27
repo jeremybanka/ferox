@@ -8,12 +8,14 @@ export type PilotRig = {
 	leftElbow: THREE.Group
 	leftFoot: THREE.Group
 	leftHand: THREE.Group
+	leftKnee: THREE.Group
 	leftLeg: THREE.Group
 	leftShoulder: THREE.Group
 	rightArm: THREE.Group
 	rightElbow: THREE.Group
 	rightFoot: THREE.Group
 	rightHand: THREE.Group
+	rightKnee: THREE.Group
 	rightLeg: THREE.Group
 	rightShoulder: THREE.Group
 	root: THREE.Group
@@ -113,6 +115,7 @@ function makeArm(side: -1 | 1): {
 
 function makeLeg(side: -1 | 1): {
 	foot: THREE.Group
+	knee: THREE.Group
 	leg: THREE.Group
 } {
 	const leg = new THREE.Group()
@@ -145,7 +148,7 @@ function makeLeg(side: -1 | 1): {
 	toe.position.set(0, -0.1, -0.44)
 	foot.add(boot, toe)
 	knee.add(foot)
-	return { foot, leg }
+	return { foot, knee, leg }
 }
 
 function makeWeapon(): THREE.Group {
@@ -256,12 +259,14 @@ export function createPilotModel(): PilotRig {
 		leftElbow: left.elbow,
 		leftFoot: leftLeg.foot,
 		leftHand: left.hand,
+		leftKnee: leftLeg.knee,
 		leftLeg: leftLeg.leg,
 		leftShoulder: left.shoulder,
 		rightArm: right.arm,
 		rightElbow: right.elbow,
 		rightFoot: rightLeg.foot,
 		rightHand: right.hand,
+		rightKnee: rightLeg.knee,
 		rightLeg: rightLeg.leg,
 		rightShoulder: right.shoulder,
 		root,
@@ -287,6 +292,8 @@ export function resetPilotPose(rig: PilotRig): void {
 	rig.rightHand.rotation.set(0, 0, 0)
 	rig.leftLeg.rotation.set(0, 0, 0)
 	rig.rightLeg.rotation.set(0, 0, 0)
+	rig.leftKnee.rotation.set(0, 0, 0)
+	rig.rightKnee.rotation.set(0, 0, 0)
 	rig.leftFoot.rotation.set(0, 0, 0)
 	rig.rightFoot.rotation.set(0, 0, 0)
 	rig.weapon.rotation.set(0, 0, 0)

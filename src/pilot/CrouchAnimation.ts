@@ -19,9 +19,11 @@ function applyGuardedCrouch(rig: PilotRig, weight: number): void {
 	rig.leftLeg.rotation.z = -0.22 * amount
 	rig.rightLeg.rotation.x = 0.5 * amount
 	rig.rightLeg.rotation.z = 0.22 * amount
-	rig.leftFoot.rotation.x = -0.48 * amount
+	rig.leftKnee.rotation.x = -1.12 * amount
+	rig.rightKnee.rotation.x = -1.12 * amount
+	rig.leftFoot.rotation.x = 0.62 * amount
 	rig.leftFoot.rotation.z = 0.1 * amount
-	rig.rightFoot.rotation.x = -0.48 * amount
+	rig.rightFoot.rotation.x = 0.62 * amount
 	rig.rightFoot.rotation.z = -0.1 * amount
 
 	rig.leftShoulder.rotation.x = 0.62 * amount
@@ -100,8 +102,14 @@ export function applyCrouchMoveAnimation(
 	if (strafe === 0) {
 		rig.leftLeg.rotation.x += stride * 0.28 * amount
 		rig.rightLeg.rotation.x -= stride * 0.28 * amount
-		rig.leftFoot.rotation.x -= stride * 0.18 * amount
-		rig.rightFoot.rotation.x += stride * 0.18 * amount
+		rig.leftKnee.rotation.x -= Math.max(0, stride) * 0.22 * amount
+		rig.rightKnee.rotation.x -= Math.max(0, -stride) * 0.22 * amount
+		rig.leftFoot.rotation.x = -(
+			rig.leftLeg.rotation.x + rig.leftKnee.rotation.x
+		)
+		rig.rightFoot.rotation.x = -(
+			rig.rightLeg.rotation.x + rig.rightKnee.rotation.x
+		)
 	} else {
 		const plantedStep = (0.5 + 0.5 * stride * strafe) * amount
 		rig.leftLeg.rotation.z -= strafe * stride * 0.12 * amount

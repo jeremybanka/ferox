@@ -62,9 +62,15 @@ export function applyDoubleJumpAnimation(
 	rig.rightLeg.rotation.x = keyframe(phase, -1.02, -1.22, -0.3)
 	rig.rightLeg.rotation.y = keyframe(phase, -0.12, -0.24, -0.04)
 	rig.rightLeg.rotation.z = keyframe(phase, 0.12, 0.28, 0.26)
-	rig.leftFoot.rotation.x = keyframe(phase, 0.62, 0.38, -0.18)
+	rig.leftKnee.rotation.x = keyframe(phase, -1.12, -1.46, -0.58)
+	rig.rightKnee.rotation.x = keyframe(phase, -1.24, -1.58, -0.62)
+	rig.leftFoot.rotation.x =
+		-(rig.leftLeg.rotation.x + rig.leftKnee.rotation.x) +
+		keyframe(phase, 0.08, -0.12, -0.04)
 	rig.leftFoot.rotation.z = keyframe(phase, 0, -0.12, -0.08)
-	rig.rightFoot.rotation.x = keyframe(phase, 0.58, 0.48, -0.2)
+	rig.rightFoot.rotation.x =
+		-(rig.rightLeg.rotation.x + rig.rightKnee.rotation.x) +
+		keyframe(phase, 0.06, -0.1, -0.04)
 	rig.rightFoot.rotation.z = keyframe(phase, 0, 0.12, 0.08)
 
 	// A short recoil pulse sells the backpack firing without needing extra bones.
