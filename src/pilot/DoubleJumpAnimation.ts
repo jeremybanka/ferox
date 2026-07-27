@@ -1,6 +1,12 @@
 import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
+export const DOUBLE_JUMP_KEYFRAME_MARKERS = [
+	{ label: "tuck", progress: 0 },
+	{ label: "boost", progress: 0.5 },
+	{ label: "stabilize", progress: 1 },
+] as const
+
 function smoothstep(value: number): number {
 	return value * value * (3 - 2 * value)
 }

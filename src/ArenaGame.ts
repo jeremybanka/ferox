@@ -20,19 +20,21 @@ import {
 	TARGET_LOST_FLASH_MS,
 } from "./game-constants.ts"
 import type { GameHudState } from "./game-state.ts"
-import { applyFreeAimPose } from "./pilot/AimPose.ts"
+import { freeAimLayer } from "./pilot/AimPose.ts"
 import {
 	applyCrouchIdleAnimation,
 	applyCrouchMoveAnimation,
 } from "./pilot/CrouchAnimation.ts"
 import { applyDoubleJumpAnimation } from "./pilot/DoubleJumpAnimation.ts"
 import { applyJumpAnimation } from "./pilot/JumpAnimation.ts"
+import { createPilotModel, type PilotRig } from "./pilot/PilotModel.ts"
 import {
-	createPilotModel,
-	resetPilotPose,
-	type PilotRig,
-} from "./pilot/PilotModel.ts"
-import { applyRunAnimation, type RunDirection } from "./pilot/RunAnimation.ts"
+	FULL_BODY_INFLUENCE,
+	PilotAnimationMixer,
+	sampleDraftAnimation,
+	type PilotAnimationLayer,
+} from "./pilot/PilotAnimation.ts"
+import { runAnimationLayer, type RunDirection } from "./pilot/RunAnimation.ts"
 
 type PlayerSnapshot = {
 	crouching: boolean
@@ -75,6 +77,7 @@ type TargetingState =
 	| "lost"
 
 type RemotePilot = {
+	animator: PilotAnimationMixer
 	crouching: boolean
 	freeAim: boolean
 	jump: 0 | 1 | 2
@@ -298,6 +301,7 @@ export class ArenaGame {
 				marker.rotation.y = Math.PI / 4
 				rig.root.add(marker)
 				model = {
+					animator: new PilotAnimationMixer(),
 					crouching: false,
 					freeAim: false,
 					jump: 0,
@@ -946,7 +950,6 @@ export class ArenaGame {
 	#updateRemotePlayers(delta: number): void {
 		for (const model of this.#remotePlayers.values()) {
 			model.position.lerp(model.target, Math.min(1, delta * 12))
-			resetPilotPose(model.rig)
 			const horizontalSpeed = Math.hypot(model.velocity.x, model.velocity.z)
 			const localVelocity = model.velocity
 				.clone()
@@ -958,11 +961,28 @@ export class ArenaGame {
 				direction = localVelocity.z < 0 ? "forward" : "backward"
 			}
 			const animationTime = performance.now() / 1_000
+			const layers: PilotAnimationLayer[] = []
 			if (model.crouching) {
 				if (horizontalSpeed > 0.35) {
-					applyCrouchMoveAnimation(model.rig, animationTime, 1, direction)
+					layers.push({
+						fadeSeconds: 0.12,
+						id: `draft:crouch-move:${direction}`,
+						influence: FULL_BODY_INFLUENCE,
+						mode: "override",
+						pose: sampleDraftAnimation((rig) => {
+							applyCrouchMoveAnimation(rig, animationTime, 1, direction)
+						}),
+					})
 				} else {
-					applyCrouchIdleAnimation(model.rig, animationTime, 1)
+					layers.push({
+						fadeSeconds: 0.14,
+						id: "draft:crouch-idle",
+						influence: FULL_BODY_INFLUENCE,
+						mode: "override",
+						pose: sampleDraftAnimation((rig) => {
+							applyCrouchIdleAnimation(rig, animationTime, 1)
+						}),
+					})
 				}
 			} else if (model.jump === 2) {
 				const progress = THREE.MathUtils.clamp(
@@ -970,27 +990,45 @@ export class ArenaGame {
 					0,
 					1,
 				)
-				applyDoubleJumpAnimation(model.rig, progress)
-				model.rig.root.position.y = 0
+				layers.push({
+					fadeSeconds: 0.08,
+					id: "draft:double-jump",
+					influence: FULL_BODY_INFLUENCE,
+					mode: "override",
+					pose: sampleDraftAnimation((rig) => {
+						applyDoubleJumpAnimation(rig, progress)
+						rig.root.position.y = 0
+					}),
+				})
 			} else if (model.jump === 1) {
 				const progress = THREE.MathUtils.clamp(
 					(10.6 - model.velocity.y) / 23,
 					0,
 					1,
 				)
-				applyJumpAnimation(model.rig, progress)
-				model.rig.root.position.y = 0
+				layers.push({
+					fadeSeconds: 0.08,
+					id: "draft:jump",
+					influence: FULL_BODY_INFLUENCE,
+					mode: "override",
+					pose: sampleDraftAnimation((rig) => {
+						applyJumpAnimation(rig, progress)
+						rig.root.position.y = 0
+					}),
+				})
 			} else if (horizontalSpeed > 0.35) {
-				applyRunAnimation(
-					model.rig,
-					animationTime,
-					THREE.MathUtils.clamp(horizontalSpeed / 8, 0.3, 1),
-					direction,
+				layers.push(
+					runAnimationLayer(
+						animationTime,
+						THREE.MathUtils.clamp(horizontalSpeed / 8, 0.3, 1),
+						direction,
+					),
 				)
 			}
 			if (model.freeAim) {
-				applyFreeAimPose(model.rig, model.pitch, 0, 1)
+				layers.push(freeAimLayer(model.pitch, 0))
 			}
+			model.animator.update(model.rig, layers, delta)
 			const visorTime = Date.now() / 1_000
 			model.rig.visorDisplay.setSignal(
 				"combat",

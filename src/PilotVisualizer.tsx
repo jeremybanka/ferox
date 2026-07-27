@@ -3,31 +3,50 @@ import type { VNode } from "preact"
 import { useEffect, useRef, useState } from "preact/hooks"
 
 import css from "./PilotVisualizer.module.css"
-import { applyFreeAimPose } from "./pilot/AimPose.ts"
+import { freeAimLayer } from "./pilot/AimPose.ts"
 import {
 	applyCrouchIdleAnimation,
 	applyCrouchMoveAnimation,
 } from "./pilot/CrouchAnimation.ts"
-import { applyDoubleJumpAnimation } from "./pilot/DoubleJumpAnimation.ts"
-import { applyJumpAnimation } from "./pilot/JumpAnimation.ts"
-import { createPilotModel, resetPilotPose } from "./pilot/PilotModel.ts"
-import { applyRunAnimation, type RunDirection } from "./pilot/RunAnimation.ts"
-import { applyWaveAnimation } from "./pilot/WaveAnimation.ts"
+import {
+	applyDoubleJumpAnimation,
+	DOUBLE_JUMP_KEYFRAME_MARKERS,
+} from "./pilot/DoubleJumpAnimation.ts"
+import {
+	applyJumpAnimation,
+	JUMP_KEYFRAME_MARKERS,
+} from "./pilot/JumpAnimation.ts"
+import {
+	applyPilotAnimationLayers,
+	FULL_BODY_INFLUENCE,
+	sampleDraftAnimation,
+	type PilotAnimationLayer,
+} from "./pilot/PilotAnimation.ts"
+import { createPilotModel } from "./pilot/PilotModel.ts"
+import {
+	runAnimationLayer,
+	RUN_KEYFRAME_MARKERS,
+	type RunDirection,
+} from "./pilot/RunAnimation.ts"
+import { waveAnimationLayer } from "./pilot/WaveAnimation.ts"
 
-type PreviewMode =
+type BaseAnimation =
 	| RunDirection
 	| "crouch"
 	| "crouch-run"
 	| "double-jump"
-	| "free-aim"
+	| "idle"
 	| "jump"
-	| "contact"
-	| "passing"
-	| "push"
-	| "flight"
-	| "wave"
 
-const MODES: readonly PreviewMode[] = [
+type OverlayAnimation = "free-aim" | "wave"
+
+type AnimationMarker = {
+	label: string
+	progress: number
+}
+
+const BASE_ANIMATIONS: readonly BaseAnimation[] = [
+	"idle",
 	"forward",
 	"left",
 	"backward",
@@ -36,29 +55,20 @@ const MODES: readonly PreviewMode[] = [
 	"double-jump",
 	"crouch",
 	"crouch-run",
-	"free-aim",
-	"contact",
-	"passing",
-	"push",
-	"flight",
-	"wave",
 ]
 
-const MODE_DURATION_SECONDS: Readonly<Record<PreviewMode, number>> = {
+const OVERLAY_ANIMATIONS: readonly OverlayAnimation[] = ["free-aim", "wave"]
+
+const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	backward: 1,
 	crouch: 2.4,
 	"crouch-run": 0.8,
 	"double-jump": 1.6,
 	forward: 1,
-	"free-aim": 1,
+	idle: 1,
 	jump: 1.9,
 	left: 1,
 	right: 1,
-	contact: 1,
-	passing: 1,
-	push: 1,
-	flight: 1,
-	wave: 2.4,
 }
 
 type SampleInterval = 0.167 | 0.0833
@@ -67,12 +77,29 @@ const FILM_FRAME_WIDTH = 192
 const FILM_FRAME_HEIGHT = 120
 
 type PreviewControls = {
+	baseAnimation: BaseAnimation
 	isPlaying: boolean
-	mode: PreviewMode
+	overlays: readonly OverlayAnimation[]
 	sampleInterval: SampleInterval
 	selectedTime: number
 	speed: number
 	yaw: number
+}
+
+function getAnimationMarkers(
+	baseAnimation: BaseAnimation,
+): readonly AnimationMarker[] {
+	if (
+		baseAnimation === "forward" ||
+		baseAnimation === "backward" ||
+		baseAnimation === "left" ||
+		baseAnimation === "right"
+	) {
+		return RUN_KEYFRAME_MARKERS
+	}
+	if (baseAnimation === "jump") return JUMP_KEYFRAME_MARKERS
+	if (baseAnimation === "double-jump") return DOUBLE_JUMP_KEYFRAME_MARKERS
+	return []
 }
 
 function getSampleTimes(
@@ -94,76 +121,94 @@ function formatTime(time: number): string {
 
 function applyPreviewPose(
 	rig: ReturnType<typeof createPilotModel>,
-	mode: PreviewMode,
+	baseAnimation: BaseAnimation,
+	overlays: readonly OverlayAnimation[],
 	time: number,
 ): void {
-	const duration = MODE_DURATION_SECONDS[mode]
+	const duration = BASE_DURATION_SECONDS[baseAnimation]
 	const progress = Math.min(1, Math.max(0, time / duration))
+	const layers: PilotAnimationLayer[] = []
 	if (
-		mode === "forward" ||
-		mode === "backward" ||
-		mode === "left" ||
-		mode === "right"
+		baseAnimation === "forward" ||
+		baseAnimation === "backward" ||
+		baseAnimation === "left" ||
+		baseAnimation === "right"
 	) {
-		applyRunAnimation(rig, (progress * Math.PI * 2) / 11, 0.92, mode)
-	} else if (mode === "jump") {
-		applyJumpAnimation(rig, progress)
-	} else if (mode === "double-jump") {
-		applyDoubleJumpAnimation(rig, progress)
-	} else if (mode === "crouch") {
-		applyCrouchIdleAnimation(rig, (progress * Math.PI * 2) / 2.6, 1)
-	} else if (mode === "crouch-run") {
-		applyCrouchMoveAnimation(rig, (progress * Math.PI * 2) / 7.6, 1, "forward")
-	} else if (mode === "free-aim") {
-		applyFreeAimPose(rig, -0.18, 0.3, 1)
-	} else if (mode === "contact") {
-		applyRunAnimation(rig, 0, 1, "forward")
-	} else if (mode === "passing") {
-		applyRunAnimation(rig, 0.125, 1, "forward")
-	} else if (mode === "push") {
-		applyRunAnimation(rig, 0.208, 1, "forward")
-	} else if (mode === "wave") {
-		applyWaveAnimation(rig, progress)
-	} else {
-		applyRunAnimation(rig, 0.33, 1, "forward")
+		layers.push(
+			runAnimationLayer((progress * Math.PI * 2) / 11, 0.92, baseAnimation),
+		)
+	} else if (baseAnimation === "jump") {
+		layers.push(
+			draftPreviewLayer("jump", (draftRig) => {
+				applyJumpAnimation(draftRig, progress)
+			}),
+		)
+	} else if (baseAnimation === "double-jump") {
+		layers.push(
+			draftPreviewLayer("double-jump", (draftRig) => {
+				applyDoubleJumpAnimation(draftRig, progress)
+			}),
+		)
+	} else if (baseAnimation === "crouch") {
+		layers.push(
+			draftPreviewLayer("crouch", (draftRig) => {
+				applyCrouchIdleAnimation(draftRig, (progress * Math.PI * 2) / 2.6, 1)
+			}),
+		)
+	} else if (baseAnimation === "crouch-run") {
+		layers.push(
+			draftPreviewLayer("crouch-run", (draftRig) => {
+				applyCrouchMoveAnimation(
+					draftRig,
+					(progress * Math.PI * 2) / 7.6,
+					1,
+					"forward",
+				)
+			}),
+		)
+	}
+	if (overlays.includes("free-aim")) {
+		layers.push(freeAimLayer(-0.18, 0.3))
+	}
+	if (overlays.includes("wave")) {
+		layers.push(waveAnimationLayer(progress))
+	}
+	applyPilotAnimationLayers(rig, layers)
+}
+
+function draftPreviewLayer(
+	id: string,
+	mutate: Parameters<typeof sampleDraftAnimation>[0],
+): PilotAnimationLayer {
+	return {
+		fadeSeconds: 0,
+		id: `draft:${id}`,
+		influence: FULL_BODY_INFLUENCE,
+		mode: "override",
+		pose: sampleDraftAnimation(mutate),
 	}
 }
 
 function applyPreviewVisor(
 	rig: ReturnType<typeof createPilotModel>,
-	mode: PreviewMode,
+	baseAnimation: BaseAnimation,
+	overlays: readonly OverlayAnimation[],
 	now: number,
 ): void {
-	let source: "combat" | "damage" | "emote" | "movement" | null = null
-	let expression:
-		| "aim-left"
-		| "alarm"
-		| "angry"
-		| "focus"
-		| "hurt"
-		| "happy"
-		| null = null
-	if (mode === "contact") {
-		source = "damage"
-		expression = "hurt"
-	} else if (mode === "passing") {
-		source = "movement"
-		expression = "aim-left"
-	} else if (mode === "push") {
-		source = "combat"
-		expression = "angry"
-	} else if (mode === "flight" || mode === "double-jump") {
-		source = "movement"
-		expression = "alarm"
-	} else if (mode === "free-aim") {
-		source = "combat"
-		expression = "focus"
-	} else if (mode === "crouch" || mode === "crouch-run") {
-		source = "movement"
-		expression = "angry"
-	} else if (mode === "wave") {
+	let source: "combat" | "emote" | "movement" | null = null
+	let expression: "alarm" | "angry" | "focus" | "happy" | null = null
+	if (overlays.includes("wave")) {
 		source = "emote"
 		expression = "happy"
+	} else if (overlays.includes("free-aim")) {
+		source = "combat"
+		expression = "focus"
+	} else if (baseAnimation === "double-jump") {
+		source = "movement"
+		expression = "alarm"
+	} else if (baseAnimation === "crouch" || baseAnimation === "crouch-run") {
+		source = "movement"
+		expression = "angry"
 	}
 	for (const candidate of ["combat", "damage", "emote", "movement"] as const) {
 		if (candidate !== source) rig.visorDisplay.clearSignal(candidate)
@@ -178,15 +223,17 @@ export function PilotVisualizer(): VNode {
 	const filmCanvasRef = useRef<HTMLCanvasElement>(null)
 	const dragXRef = useRef<number | null>(null)
 	const timelineRef = useRef(0)
-	const [mode, setMode] = useState<PreviewMode>("forward")
+	const [baseAnimation, setBaseAnimation] = useState<BaseAnimation>("forward")
+	const [overlays, setOverlays] = useState<readonly OverlayAnimation[]>([])
 	const [speed, setSpeed] = useState(1)
 	const [yaw, setYaw] = useState(0.42)
 	const [isPlaying, setIsPlaying] = useState(true)
 	const [sampleInterval, setSampleInterval] = useState<SampleInterval>(0.0833)
 	const [selectedTime, setSelectedTime] = useState(0)
 	const controlsRef = useRef<PreviewControls>({
+		baseAnimation,
 		isPlaying,
-		mode,
+		overlays,
 		sampleInterval,
 		selectedTime,
 		speed,
@@ -194,28 +241,35 @@ export function PilotVisualizer(): VNode {
 	})
 
 	controlsRef.current = {
+		baseAnimation,
 		isPlaying,
-		mode,
+		overlays,
 		sampleInterval,
 		selectedTime,
 		speed,
 		yaw,
 	}
-	const duration = MODE_DURATION_SECONDS[mode]
+	const duration = BASE_DURATION_SECONDS[baseAnimation]
+	const keyframeMarkers = getAnimationMarkers(baseAnimation)
 	const sampleTimes = getSampleTimes(duration, sampleInterval)
 
-	const selectMode = (nextMode: PreviewMode): void => {
+	const selectBaseAnimation = (nextAnimation: BaseAnimation): void => {
 		timelineRef.current = 0
 		setSelectedTime(0)
 		setIsPlaying(true)
-		setMode(nextMode)
+		setBaseAnimation(nextAnimation)
+	}
+
+	const toggleOverlay = (overlay: OverlayAnimation): void => {
+		setOverlays((current) =>
+			current.includes(overlay)
+				? current.filter((candidate) => candidate !== overlay)
+				: [...current, overlay],
+		)
 	}
 
 	const selectTime = (time: number): void => {
-		const snapped = Math.min(
-			MODE_DURATION_SECONDS[mode],
-			Math.max(0, Math.round(time * 100) / 100),
-		)
+		const snapped = Math.min(duration, Math.max(0, time))
 		timelineRef.current = snapped
 		setSelectedTime(snapped)
 		setIsPlaying(false)
@@ -295,7 +349,7 @@ export function PilotVisualizer(): VNode {
 			const elapsed = Math.min(0.1, (now - previousTime) / 1_000)
 			previousTime = now
 			const controls = controlsRef.current
-			const activeDuration = MODE_DURATION_SECONDS[controls.mode]
+			const activeDuration = BASE_DURATION_SECONDS[controls.baseAnimation]
 			if (controls.isPlaying) {
 				timelineRef.current =
 					(timelineRef.current + elapsed * controls.speed) % activeDuration
@@ -306,10 +360,19 @@ export function PilotVisualizer(): VNode {
 			} else {
 				timelineRef.current = controls.selectedTime
 			}
-			resetPilotPose(rig)
+			applyPreviewPose(
+				rig,
+				controls.baseAnimation,
+				controls.overlays,
+				timelineRef.current,
+			)
 			rig.root.rotation.y = controls.yaw
-			applyPreviewPose(rig, controls.mode, timelineRef.current)
-			applyPreviewVisor(rig, controls.mode, now / 1_000)
+			applyPreviewVisor(
+				rig,
+				controls.baseAnimation,
+				controls.overlays,
+				now / 1_000,
+			)
 			camera.lookAt(0, 2 + rig.root.position.y, 0)
 			renderer.render(scene, camera)
 		}
@@ -360,10 +423,12 @@ export function PilotVisualizer(): VNode {
 		const renderFilmstrip = (): void => {
 			frame = requestAnimationFrame(renderFilmstrip)
 			const controls = controlsRef.current
-			const signature = `${controls.mode}:${controls.sampleInterval}:${controls.yaw.toFixed(4)}`
+			const signature =
+				`${controls.baseAnimation}:${controls.overlays.join(",")}:` +
+				`${controls.sampleInterval}:${controls.yaw.toFixed(4)}`
 			if (signature === previousSignature) return
 			previousSignature = signature
-			const activeDuration = MODE_DURATION_SECONDS[controls.mode]
+			const activeDuration = BASE_DURATION_SECONDS[controls.baseAnimation]
 			const times = getSampleTimes(activeDuration, controls.sampleInterval)
 			const totalHeight = times.length * FILM_FRAME_HEIGHT
 			renderer.setSize(FILM_FRAME_WIDTH, totalHeight, false)
@@ -372,10 +437,9 @@ export function PilotVisualizer(): VNode {
 				const y = totalHeight - (index + 1) * FILM_FRAME_HEIGHT
 				renderer.setViewport(0, y, FILM_FRAME_WIDTH, FILM_FRAME_HEIGHT)
 				renderer.setScissor(0, y, FILM_FRAME_WIDTH, FILM_FRAME_HEIGHT)
-				resetPilotPose(rig)
+				applyPreviewPose(rig, controls.baseAnimation, controls.overlays, time)
 				rig.root.rotation.y = controls.yaw
-				applyPreviewPose(rig, controls.mode, time)
-				applyPreviewVisor(rig, controls.mode, time)
+				applyPreviewVisor(rig, controls.baseAnimation, controls.overlays, time)
 				camera.lookAt(0, 2 + rig.root.position.y, 0)
 				renderer.render(scene, camera)
 			}
@@ -415,20 +479,41 @@ export function PilotVisualizer(): VNode {
 				<h1>MK-I PILOT</h1>
 				<span>DRAG TO ROTATE / SCRUB TO FREEZE</span>
 			</model-header>
-			<nav aria-label="Pilot animation">
-				{MODES.map((option) => (
-					<button
-						key={option}
-						type="button"
-						data-active={mode === option}
-						onClick={() => {
-							selectMode(option)
-						}}
-					>
-						{option}
-					</button>
-				))}
-			</nav>
+			<animation-stack>
+				<fieldset>
+					<legend>BASE // EXCLUSIVE</legend>
+					{BASE_ANIMATIONS.map((animation) => (
+						<button
+							key={animation}
+							type="button"
+							aria-pressed={baseAnimation === animation}
+							data-active={baseAnimation === animation}
+							onClick={() => {
+								selectBaseAnimation(animation)
+							}}
+						>
+							{animation}
+						</button>
+					))}
+				</fieldset>
+				<fieldset>
+					<legend>OVERLAYS // STACKABLE</legend>
+					{OVERLAY_ANIMATIONS.map((overlay) => (
+						<button
+							key={overlay}
+							type="button"
+							aria-pressed={overlays.includes(overlay)}
+							data-active={overlays.includes(overlay)}
+							onClick={() => {
+								toggleOverlay(overlay)
+							}}
+						>
+							{overlays.includes(overlay) ? "+ " : "  "}
+							{overlay}
+						</button>
+					))}
+				</fieldset>
+			</animation-stack>
 			<animation-console>
 				<control-bank>
 					<button
@@ -474,6 +559,36 @@ export function PilotVisualizer(): VNode {
 						<output>{Math.round(THREE.MathUtils.radToDeg(yaw))}°</output>
 					</label>
 				</control-bank>
+				<keyframe-control>
+					<strong>KEYFRAMES</strong>
+					{keyframeMarkers.length === 0 ? (
+						<span>NO AUTHORED KEYS</span>
+					) : (
+						<fieldset>
+							<legend>{baseAnimation} animation keyframes</legend>
+							{keyframeMarkers.map((marker, index) => {
+								const keyframeTime = marker.progress * duration
+								return (
+									<button
+										key={`${marker.label}:${marker.progress}`}
+										type="button"
+										aria-label={`Jump to ${marker.label} keyframe`}
+										data-active={
+											!isPlaying &&
+											Math.abs(selectedTime - keyframeTime) < 0.001
+										}
+										onClick={() => {
+											selectTime(keyframeTime)
+										}}
+									>
+										<small>{String(index + 1).padStart(2, "0")}</small>
+										{marker.label}
+									</button>
+								)
+							})}
+						</fieldset>
+					)}
+				</keyframe-control>
 				<timeline-control>
 					<button
 						type="button"
@@ -491,7 +606,7 @@ export function PilotVisualizer(): VNode {
 							type="range"
 							min="0"
 							max={duration}
-							step="0.05"
+							step="0.001"
 							value={Math.min(selectedTime, duration)}
 							onInput={(event) => {
 								selectTime(Number(event.currentTarget.value))
@@ -543,7 +658,7 @@ export function PilotVisualizer(): VNode {
 					<filmstrip-rail>
 						<canvas
 							ref={filmCanvasRef}
-							aria-label={`${mode} animation sampled every ${sampleInterval.toFixed(2)} seconds`}
+							aria-label={`${baseAnimation} animation with ${overlays.length} overlays sampled every ${sampleInterval.toFixed(2)} seconds`}
 							width={FILM_FRAME_WIDTH}
 							height={sampleTimes.length * FILM_FRAME_HEIGHT}
 						/>
@@ -569,8 +684,12 @@ export function PilotVisualizer(): VNode {
 				</filmstrip-viewport>
 			</filmstrip-panel>
 			<aside>
-				<strong>{mode.toUpperCase()}</strong>
-				<span>FULL-BODY RIG</span>
+				<strong>{baseAnimation.toUpperCase()}</strong>
+				<span>
+					{overlays.length === 0
+						? "BASE POSE"
+						: `+ ${overlays.join(" + ").toUpperCase()}`}
+				</span>
 			</aside>
 		</pilot-visualizer>
 	)

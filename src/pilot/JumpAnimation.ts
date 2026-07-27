@@ -130,6 +130,21 @@ const jumpPoses: ReadonlyArray<readonly [number, JumpPose]> = [
 	],
 ]
 
+const JUMP_KEYFRAME_LABELS = [
+	"ready",
+	"compress",
+	"launch",
+	"apex",
+	"descent",
+	"landing",
+	"recover",
+] as const
+
+export const JUMP_KEYFRAME_MARKERS = jumpPoses.map(([progress], index) => ({
+	label: JUMP_KEYFRAME_LABELS[index] ?? `pose ${index + 1}`,
+	progress,
+}))
+
 function blend(from: number, to: number, amount: number): number {
 	return from + (to - from) * amount
 }
