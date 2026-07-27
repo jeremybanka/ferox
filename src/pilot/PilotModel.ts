@@ -26,6 +26,11 @@ export type PilotRig = {
 	weaponMount: THREE.Group
 }
 
+const weaponMaterial = new THREE.MeshStandardMaterial({
+	color: "#667777",
+	metalness: 0.75,
+	roughness: 0.36,
+})
 const armorMaterial = new THREE.MeshStandardMaterial({
 	color: "#d9d2c2",
 	metalness: 0.58,
@@ -86,8 +91,8 @@ function makeArm(side: -1 | 1): {
 	const pauldron = box(0.46, 0.34, 0.58, armorMaterial)
 	pauldron.position.set(side * 0.08, 0.04, 0)
 	pauldron.rotation.z = side * -0.12
-	const stripe = box(0.12, 0.35, 0.6, accentMaterial)
-	stripe.position.set(side * 0.13, 0.04, -0.015)
+	const stripe = box(0.12, 0.36, 0.7, accentMaterial)
+	stripe.position.set(side * -0.2, 0.04, 0.05)
 	shoulder.add(shoulderJoint, pauldron, stripe)
 
 	const arm = new THREE.Group()
@@ -112,7 +117,7 @@ function makeArm(side: -1 | 1): {
 
 	const hand = new THREE.Group()
 	hand.position.y = -0.69
-	const glove = box(0.31, 0.26, 0.34, undersuitMaterial)
+	const glove = box(0.31, 0.26, 0.34, armorMaterial)
 	glove.position.y = -0.1
 	hand.add(glove)
 	if (side === 1) {
@@ -144,7 +149,7 @@ function makeLeg(side: -1 | 1): {
 	const knee = new THREE.Group()
 	knee.position.y = -0.95
 	knee.add(joint(0.24))
-	const kneePlate = box(0.42, 0.3, 0.24, accentMaterial)
+	const kneePlate = box(0.42, 0.3, 0.24, armorMaterial)
 	kneePlate.position.set(0, -0.02, -0.27)
 	knee.add(kneePlate)
 	const shin = box(0.46, 0.72, 0.52, armorMaterial)
@@ -172,27 +177,21 @@ function makeWeapon(): THREE.Group {
 	const weapon = new THREE.Group()
 	weapon.name = "blaster trigger attachment"
 	const triggerPoint = new THREE.Vector3(0, -0.1, 0.04)
-	const body = box(0.25, 0.26, 0.88, armorDarkMaterial)
-	const shroud = box(0.31, 0.18, 0.48, accentMaterial)
+	const body = box(0.25, 0.26, 0.88, weaponMaterial)
+	const shroud = box(0.31, 0.18, 0.48, weaponMaterial)
 	shroud.position.set(0, 0.06, -0.17)
 	const barrel = new THREE.Mesh(
 		new THREE.CylinderGeometry(0.075, 0.095, 0.55, 8),
-		armorMaterial,
+		weaponMaterial,
 	)
 	barrel.rotation.x = Math.PI / 2
 	barrel.position.z = -0.66
-	const emitter = new THREE.Mesh(
-		new THREE.CylinderGeometry(0.09, 0.09, 0.05, 10),
-		visorMaterial,
-	)
-	emitter.rotation.x = Math.PI / 2
-	emitter.position.z = -0.95
-	const grip = box(0.15, 0.38, 0.2, undersuitMaterial)
+	const grip = box(0.15, 0.38, 0.2, weaponMaterial)
 	grip.position.set(0, -0.25, 0.12)
 	grip.rotation.x = -0.22
-	const trigger = box(0.045, 0.1, 0.05, undersuitMaterial)
+	const trigger = box(0.045, 0.1, 0.05, weaponMaterial)
 	trigger.position.copy(triggerPoint)
-	weapon.add(body, shroud, barrel, emitter, grip, trigger)
+	weapon.add(body, shroud, barrel, grip, trigger) // , emitter
 	for (const part of weapon.children) {
 		part.position.sub(triggerPoint)
 	}
@@ -230,8 +229,9 @@ export function createPilotModel(): PilotRig {
 	const backpack = new THREE.Group()
 	backpack.position.set(0, 0.86, 0.48)
 	const pack = box(0.8, 0.82, 0.34, armorDarkMaterial)
-	const leftCell = box(0.21, 0.62, 0.4, accentMaterial)
+	const leftCell = box(0.4, 0.62, 0.4, armorMaterial)
 	leftCell.position.x = -0.38
+	leftCell.position.y = 0.2
 	const rightCell = leftCell.clone()
 	rightCell.position.x = 0.38
 	backpack.add(pack, leftCell, rightCell)
@@ -273,6 +273,7 @@ export function createPilotModel(): PilotRig {
 	const weaponMount = new THREE.Group()
 	weaponMount.name = "right index-finger weapon socket"
 	weaponMount.position.set(0, -0.08, -0.16)
+	weaponMount.rotation.x = -Math.PI / 2
 	weaponMount.add(weapon)
 	// Trigger and index-finger sockets coincide. Aim and recoil are wrist motion.
 	right.hand.add(weaponMount)
@@ -337,7 +338,7 @@ export function resetPilotPose(rig: PilotRig): void {
 	rig.leftToe.rotation.set(0, 0, 0)
 	rig.rightToe.rotation.set(0, 0, 0)
 	rig.weaponMount.position.set(0, -0.08, -0.16)
-	rig.weaponMount.rotation.set(0, 0, 0)
+	rig.weaponMount.rotation.set(-Math.PI / 2, 0, 0)
 	rig.weapon.position.set(0, 0, 0)
 	rig.weapon.rotation.set(0, 0, 0)
 }
