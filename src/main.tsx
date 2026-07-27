@@ -5,6 +5,8 @@ import { render } from "preact"
 import { io } from "socket.io-client"
 
 import { AppShell } from "./AppShell.tsx"
+import { PilotVisualizer } from "./PilotVisualizer.tsx"
+import { PoseContactSheet } from "./PoseContactSheet.tsx"
 
 const appRoot = document.getElementById("app")
 
@@ -24,9 +26,19 @@ const socket = io({
 	},
 })
 
+const route = new URLSearchParams(globalThis.location.search)
+const showPilotVisualizer = route.has("pilot")
+const showPoseContactSheet = route.has("poses")
+
 render(
-	<RealtimeProvider socket={socket}>
-		<AppShell socket={socket} />
-	</RealtimeProvider>,
+	showPoseContactSheet ? (
+		<PoseContactSheet />
+	) : showPilotVisualizer ? (
+		<PilotVisualizer />
+	) : (
+		<RealtimeProvider socket={socket}>
+			<AppShell socket={socket} />
+		</RealtimeProvider>
+	),
 	appRoot,
 )

@@ -5,9 +5,14 @@ import type { UserKey } from "atom.io/realtime"
 import { Server, type Socket as IoSocket } from "socket.io"
 
 type PlayerSnapshot = {
+	crouching: boolean
+	freeAim: boolean
 	id: string
+	jump: 0 | 1 | 2
 	position: [number, number, number]
 	rotation: [number, number]
+	sprinting: boolean
+	velocity: [number, number, number]
 }
 
 type MovePayload = Omit<PlayerSnapshot, "id">
@@ -50,9 +55,14 @@ realtime(
 		const gameSocket = socket as unknown as IoSocket
 		const socketId = gameSocket.id
 		players.set(socketId, {
+			crouching: false,
+			freeAim: false,
 			id: socketId,
+			jump: 0,
 			position: [0, 8, 13],
 			rotation: [Math.PI, 0],
+			sprinting: false,
+			velocity: [0, 0, 0],
 		})
 		io.emit("arena:players", [...players.values()])
 

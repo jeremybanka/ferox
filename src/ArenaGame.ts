@@ -9,11 +9,29 @@ import {
 	TARGET_LOST_FLASH_MS,
 } from "./game-constants.ts"
 import type { GameHudState } from "./game-state.ts"
+import { applyFreeAimPose } from "./pilot/AimPose.ts"
+import {
+	applyCrouchIdleAnimation,
+	applyCrouchMoveAnimation,
+} from "./pilot/CrouchAnimation.ts"
+import { applyDoubleJumpAnimation } from "./pilot/DoubleJumpAnimation.ts"
+import { applyJumpAnimation } from "./pilot/JumpAnimation.ts"
+import {
+	createPilotModel,
+	resetPilotPose,
+	type PilotRig,
+} from "./pilot/PilotModel.ts"
+import { applyRunAnimation, type RunDirection } from "./pilot/RunAnimation.ts"
 
 type PlayerSnapshot = {
+	crouching: boolean
+	freeAim: boolean
 	id: string
+	jump: 0 | 1 | 2
 	position: [number, number, number]
 	rotation: [number, number]
+	sprinting: boolean
+	velocity: [number, number, number]
 }
 
 type BlastSnapshot = {
@@ -43,6 +61,19 @@ type TargetingState =
 	| "idle"
 	| "locked"
 	| "lost"
+
+type RemotePilot = {
+	crouching: boolean
+	freeAim: boolean
+	jump: 0 | 1 | 2
+	pitch: number
+	position: THREE.Vector3
+	rig: PilotRig
+	sprinting: boolean
+	target: THREE.Vector3
+	velocity: THREE.Vector3
+	yaw: number
+}
 
 const PLAYER_EYE = 1.72
 const CROUCH_EYE = 1.08
@@ -85,7 +116,7 @@ export class ArenaGame {
 		jumps: 0 as 0 | 1 | 2,
 	}
 	readonly #projectiles: Projectile[] = []
-	readonly #remotePlayers = new Map<string, THREE.Group>()
+	readonly #remotePlayers = new Map<string, RemotePilot>()
 	readonly #renderer: THREE.WebGLRenderer
 	readonly #scene = new THREE.Scene()
 	readonly #seed: number
@@ -96,6 +127,7 @@ export class ArenaGame {
 	#animationFrame = 0
 	#bumperTapTargetId: number | null = null
 	#connected = false
+	#crouching = false
 	#disposed = false
 	#fireCooldown = 0
 	#freeAim = false
@@ -232,16 +264,40 @@ export class ArenaGame {
 			active.add(snapshot.id)
 			let model = this.#remotePlayers.get(snapshot.id)
 			if (model === undefined) {
-				model = this.#makeRival()
+				const rig = createPilotModel()
+				rig.root.scale.setScalar(0.54)
+				model = {
+					crouching: false,
+					freeAim: false,
+					jump: 0,
+					pitch: 0,
+					position: new THREE.Vector3(),
+					rig,
+					sprinting: false,
+					target: new THREE.Vector3(),
+					velocity: new THREE.Vector3(),
+					yaw: 0,
+				}
 				this.#remotePlayers.set(snapshot.id, model)
-				this.#scene.add(model)
+				this.#scene.add(rig.root)
 			}
-			model.userData["target"] = new THREE.Vector3(...snapshot.position)
-			model.userData["yaw"] = snapshot.rotation[0]
+			model.target
+				.set(...snapshot.position)
+				.addScaledVector(
+					new THREE.Vector3(0, 1, 0),
+					snapshot.crouching ? -CROUCH_EYE : -PLAYER_EYE,
+				)
+			model.velocity.set(...snapshot.velocity)
+			model.yaw = snapshot.rotation[0]
+			model.pitch = snapshot.rotation[1]
+			model.crouching = snapshot.crouching
+			model.freeAim = snapshot.freeAim
+			model.jump = snapshot.jump
+			model.sprinting = snapshot.sprinting
 		}
 		for (const [id, model] of this.#remotePlayers) {
 			if (!active.has(id)) {
-				this.#scene.remove(model)
+				this.#scene.remove(model.rig.root)
 				this.#remotePlayers.delete(id)
 			}
 		}
@@ -402,28 +458,6 @@ export class ArenaGame {
 		this.#scene.add(this.#camera)
 	}
 
-	#makeRival(): THREE.Group {
-		const group = new THREE.Group()
-		const armor = new THREE.MeshStandardMaterial({
-			color: "#e76d42",
-			emissive: "#6f211a",
-			emissiveIntensity: 0.7,
-			roughness: 0.42,
-		})
-		const body = new THREE.Mesh(
-			new THREE.CapsuleGeometry(0.42, 0.82, 5, 10),
-			armor,
-		)
-		body.position.y = 1
-		const visor = new THREE.Mesh(
-			new THREE.BoxGeometry(0.62, 0.16, 0.1),
-			new THREE.MeshBasicMaterial({ color: "#9affed" }),
-		)
-		visor.position.set(0, 1.42, -0.35)
-		group.add(body, visor)
-		return group
-	}
-
 	#pollGamepad(): {
 		crouch: boolean
 		fire: boolean
@@ -504,6 +538,7 @@ export class ArenaGame {
 		)
 		const crouch =
 			this.#keys.has("ControlLeft") || this.#keys.has("KeyC") || gamepad.crouch
+		this.#crouching = crouch
 		const eye = crouch ? CROUCH_EYE : PLAYER_EYE
 		const ground =
 			this.#heightAt(this.#player.position.x, this.#player.position.z) + eye
@@ -864,11 +899,55 @@ export class ArenaGame {
 
 	#updateRemotePlayers(delta: number): void {
 		for (const model of this.#remotePlayers.values()) {
-			const target = model.userData["target"]
-			if (target instanceof THREE.Vector3)
-				model.position.lerp(target, Math.min(1, delta * 12))
-			const yaw = model.userData["yaw"]
-			if (typeof yaw === "number") model.rotation.y = yaw
+			model.position.lerp(model.target, Math.min(1, delta * 12))
+			resetPilotPose(model.rig)
+			const horizontalSpeed = Math.hypot(model.velocity.x, model.velocity.z)
+			const localVelocity = model.velocity
+				.clone()
+				.applyAxisAngle(new THREE.Vector3(0, 1, 0), -model.yaw)
+			let direction: RunDirection
+			if (Math.abs(localVelocity.x) > Math.abs(localVelocity.z)) {
+				direction = localVelocity.x > 0 ? "right" : "left"
+			} else {
+				direction = localVelocity.z < 0 ? "forward" : "backward"
+			}
+			const animationTime = performance.now() / 1_000
+			if (model.crouching) {
+				if (horizontalSpeed > 0.35) {
+					applyCrouchMoveAnimation(model.rig, animationTime, 1, direction)
+				} else {
+					applyCrouchIdleAnimation(model.rig, animationTime, 1)
+				}
+			} else if (model.jump === 2) {
+				const progress = THREE.MathUtils.clamp(
+					(9.4 - model.velocity.y) / 22,
+					0,
+					1,
+				)
+				applyDoubleJumpAnimation(model.rig, progress)
+				model.rig.root.position.y = 0
+			} else if (model.jump === 1) {
+				const progress = THREE.MathUtils.clamp(
+					(10.6 - model.velocity.y) / 23,
+					0,
+					1,
+				)
+				applyJumpAnimation(model.rig, progress)
+				model.rig.root.position.y = 0
+			} else if (horizontalSpeed > 0.35) {
+				applyRunAnimation(
+					model.rig,
+					animationTime,
+					THREE.MathUtils.clamp(horizontalSpeed / 8, 0.3, 1),
+					direction,
+				)
+			}
+			if (model.freeAim) {
+				applyFreeAimPose(model.rig, model.pitch, 0, 1)
+			}
+			const poseOffset = model.rig.root.position.clone()
+			model.rig.root.position.copy(model.position).add(poseOffset)
+			model.rig.root.rotation.y += model.yaw
 		}
 	}
 
@@ -877,8 +956,13 @@ export class ArenaGame {
 		if (!this.#connected || this.#snapshotElapsed < 0.05) return
 		this.#snapshotElapsed = 0
 		this.#socket.emit("arena:move", {
+			crouching: this.#crouching,
+			freeAim: this.#freeAim,
+			jump: this.#player.jumps,
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
+			sprinting: this.#sprinting,
+			velocity: this.#player.velocity.toArray(),
 		})
 	}
 
