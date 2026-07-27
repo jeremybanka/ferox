@@ -1,5 +1,5 @@
 import { useI, useO } from "atom.io/react"
-import { useEffect, useRef, useState } from "preact/hooks"
+import { useCallback, useEffect, useRef, useState } from "preact/hooks"
 import type { VNode } from "preact"
 import type { Socket } from "socket.io-client"
 
@@ -17,6 +17,7 @@ type AppShellProps = {
 
 export function AppShell({ socket }: AppShellProps): VNode {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
+	const deployedRef = useRef(false)
 	const gameRef = useRef<ArenaGame | null>(null)
 	const [deployed, setDeployed] = useState(false)
 	const hud = useO(gameHudStateAtom)
@@ -34,10 +35,34 @@ export function AppShell({ socket }: AppShellProps): VNode {
 		}
 	}, [seed, setHud, socket])
 
-	const deploy = (): void => {
+	const deploy = useCallback((): void => {
+		if (deployedRef.current) return
+		deployedRef.current = true
 		setDeployed(true)
 		gameRef.current?.start()
-	}
+	}, [])
+
+	useEffect(() => {
+		if (deployed || typeof navigator.getGamepads !== "function") return
+
+		let animationFrame = 0
+		const pollForDeploy = (): void => {
+			const requested = Array.from(navigator.getGamepads()).some(
+				(gamepad) =>
+					gamepad !== null &&
+					(gamepad.buttons[0]?.pressed === true ||
+						gamepad.buttons[9]?.pressed === true),
+			)
+			if (requested) {
+				deploy()
+				return
+			}
+			animationFrame = requestAnimationFrame(pollForDeploy)
+		}
+
+		animationFrame = requestAnimationFrame(pollForDeploy)
+		return () => cancelAnimationFrame(animationFrame)
+	}, [deploy, deployed])
 
 	return (
 		<app-shell className={css.class} data-deployed={deployed}>
@@ -189,7 +214,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 							<span>DEPLOY TO ARENA</span>
 							<i aria-hidden="true">→</i>
 						</button>
-						<small>Mouse + keyboard or gamepad</small>
+						<small>Click or press A / Start on gamepad</small>
 					</deploy-panel>
 					<terrain-readout>
 						<i />
