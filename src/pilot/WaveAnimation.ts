@@ -21,15 +21,17 @@ export function applyWaveAnimation(rig: PilotRig, progress: number): void {
 	rig.leftShoulder.rotation.y = 0.1 * weight
 	rig.leftShoulder.rotation.z = -1.5 * weight
 	rig.leftArm.rotation.y = -0.18 * weight
-	rig.leftElbow.rotation.x = 1.18 * weight
-	rig.leftHand.rotation.x = -0.18 * weight
-	rig.leftHand.rotation.z = (-0.52 - wave * 0.42) * weight
+	rig.leftElbow.rotation.x = 1 + 0.5 * wave * weight
+	// rig.leftHand.rotation.x = -0.18 * weight
+	// rig.leftHand.rotation.z = (-0.52 - wave * 0.42) * weight
 
 	// casual bend knees
-	rig.leftLeg.rotation.x = 0.1 * weight
-	rig.leftLeg.rotation.y = 0.1 * weight
+	rig.leftLeg.rotation.x = 0.3 * weight
+	rig.leftLeg.rotation.y = 0.3 * weight
 	rig.rightLeg.rotation.x = 0.1 * weight
-	rig.rightLeg.rotation.y = -0.1 * weight
+	rig.rightLeg.rotation.y = -0.1 * (0.05 * wave) * weight
+	rig.leftKnee.rotation.x = -0.3 * weight
+	rig.rightKnee.rotation.x = -0.3 * weight
 
 	rig.rightShoulder.rotation.z = 0.12 * weight
 	rig.rightElbow.rotation.x = 0.28 * weight
