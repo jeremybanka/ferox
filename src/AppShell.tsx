@@ -69,12 +69,38 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					</score-board>
 				</game-header>
 
-				<cross-hair aria-hidden="true">
+				<smart-target-zone data-state={hud.targeting} aria-hidden="true">
+					<target-warning>
+						<strong>
+							{hud.targeting === "escaping"
+								? String(hud.lockCountdown).padStart(4, "0")
+								: "0000"}
+							<small>ms</small>
+						</strong>
+						<span>
+							{hud.targeting === "lost"
+								? "❌ TARGET LOST"
+								: "⚠ TARGET ESCAPING"}
+						</span>
+					</target-warning>
+				</smart-target-zone>
+
+				<cross-hair
+					data-state={hud.targeting}
+					style={{
+						"--reticle-x": `${hud.reticleX * 100}%`,
+						"--reticle-y": `${hud.reticleY * 100}%`,
+					}}
+					aria-hidden="true"
+				>
 					<i />
 					<i />
 					<i />
 					<i />
 					<b />
+					<target-lock-box>
+						<small>✅ TARGET LOCKED</small>
+					</target-lock-box>
 				</cross-hair>
 
 				<speed-readout data-active={hud.speed > 2}>
@@ -126,6 +152,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					</control-hint>
 					<arena-id>SEED // {seed}</arena-id>
 					<control-hint>
+						<kbd>LB</kbd>
+						<span>TARGET LOCK</span>
 						<kbd>◉</kbd>
 						<span>GAMEPAD READY</span>
 					</control-hint>

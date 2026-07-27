@@ -2,3 +2,7 @@ export const DRONE_POPULATION_CAP = 6
 export const DRONE_VISION_DISTANCE = 28
 export const DRONE_VISION_HALF_ANGLE = Math.PI / 5
 export const DRONE_AUDITORY_RADIUS = 14
+
+export const SMART_TARGET_RADIUS_SCREEN = 0.22
+export const TARGET_ESCAPE_DURATION_MS = 1_000
+export const TARGET_LOST_FLASH_MS = 260

@@ -2,6 +2,11 @@ import type { Socket } from "socket.io-client"
 import * as THREE from "three"
 
 import { DroneBotSystem } from "./DroneBotSystem.ts"
+import {
+	SMART_TARGET_RADIUS_SCREEN,
+	TARGET_ESCAPE_DURATION_MS,
+	TARGET_LOST_FLASH_MS,
+} from "./game-constants.ts"
 import type { GameHudState } from "./game-state.ts"
 
 type PlayerSnapshot = {
@@ -29,6 +34,8 @@ type Projectile = {
 	team: "bot" | "player"
 	velocity: THREE.Vector3
 }
+
+type TargetingState = "acquired" | "escaping" | "idle" | "locked" | "lost"
 
 const PLAYER_EYE = 1.72
 const CROUCH_EYE = 1.08
@@ -78,6 +85,7 @@ export class ArenaGame {
 	readonly #socket: Socket
 	readonly #weapon = new THREE.Group()
 	#ammo = 28
+	#acquiredTargetId: number | null = null
 	#animationFrame = 0
 	#connected = false
 	#disposed = false
@@ -86,12 +94,20 @@ export class ArenaGame {
 	#hudElapsed = 0
 	#jumpQueued = false
 	#lastFrame = performance.now()
+	#leftBumperHeld = false
+	#lockedTargetId: number | null = null
+	#lockToggleQueued = false
 	#lookGamepad = new THREE.Vector2()
 	#noiseTimer = 0
+	#reticleX = 0.5
+	#reticleY = 0.5
 	#score = 0
 	#shotHeld = false
 	#slide = false
 	#snapshotElapsed = 0
+	#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
+	#targetLostFlashRemaining = 0
+	#targetingState: TargetingState = "idle"
 
 	constructor(options: ArenaGameOptions) {
 		this.#canvas = options.canvas
@@ -156,6 +172,7 @@ export class ArenaGame {
 		this.#keys.add(event.code)
 		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
 		if (event.code === "KeyR" && this.#ammo < 28) this.#ammo = 28
+		if (event.code === "KeyQ" && !event.repeat) this.#lockToggleQueued = true
 	}
 
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
@@ -399,6 +416,7 @@ export class ArenaGame {
 		crouch: boolean
 		fire: boolean
 		jump: boolean
+		lock: boolean
 		sprint: boolean
 		x: number
 		y: number
@@ -410,6 +428,7 @@ export class ArenaGame {
 				crouch: false,
 				fire: false,
 				jump: false,
+				lock: false,
 				sprint: false,
 				x: 0,
 				y: 0,
@@ -424,11 +443,13 @@ export class ArenaGame {
 		const jump = gamepad.buttons[0]?.pressed ?? false
 		const crouch = gamepad.buttons[1]?.pressed ?? false
 		const fire = (gamepad.buttons[7]?.value ?? 0) > 0.25
+		const lock = gamepad.buttons[4]?.pressed ?? false
 		const sprint = gamepad.buttons[10]?.pressed ?? false
 		return {
 			crouch,
 			fire,
 			jump,
+			lock,
 			sprint,
 			x: deadzone(gamepad.axes[0] ?? 0),
 			y: deadzone(gamepad.axes[1] ?? 0),
@@ -437,6 +458,8 @@ export class ArenaGame {
 
 	#updatePhysics(delta: number): void {
 		const gamepad = this.#pollGamepad()
+		if (gamepad.lock && !this.#leftBumperHeld) this.#lockToggleQueued = true
+		this.#leftBumperHeld = gamepad.lock
 		this.#player.yaw -= this.#lookGamepad.x * delta * 2.7
 		this.#player.pitch = THREE.MathUtils.clamp(
 			this.#player.pitch - this.#lookGamepad.y * delta * 2.25,
@@ -549,14 +572,21 @@ export class ArenaGame {
 
 	#fire(): void {
 		if (this.#fireCooldown > 0 || this.#ammo === 0) return
+		if (this.#lockedTargetId !== null && this.#acquiredTargetId === null) return
 		this.#fireCooldown = 0.13
 		this.#ammo -= 1
-		const direction = new THREE.Vector3(0, 0, -1)
-			.applyQuaternion(this.#camera.quaternion)
-			.normalize()
-		const origin = this.#camera
-			.getWorldPosition(new THREE.Vector3())
-			.addScaledVector(direction, 0.8)
+		const origin = this.#camera.getWorldPosition(new THREE.Vector3())
+		const acquiredPosition =
+			this.#acquiredTargetId === null
+				? null
+				: this.#drones.getTargetPosition(this.#acquiredTargetId)
+		const direction =
+			acquiredPosition === null
+				? new THREE.Vector3(0, 0, -1)
+						.applyQuaternion(this.#camera.quaternion)
+						.normalize()
+				: acquiredPosition.sub(origin).normalize()
+		origin.addScaledVector(direction, 0.8)
 		this.#spawnProjectile(origin, direction, "player", 20, "#b8fff1")
 		this.#noiseTimer = 0.85
 		this.#weapon.position.z += 0.12
@@ -646,6 +676,135 @@ export class ArenaGame {
 			delta * 4,
 		)
 		this.#camera.updateProjectionMatrix()
+		this.#camera.updateMatrixWorld()
+	}
+
+	#updateTargeting(delta: number): void {
+		if (this.#targetLostFlashRemaining > 0) {
+			this.#targetLostFlashRemaining -= delta * 1_000
+			this.#targetingState = "lost"
+			this.#acquiredTargetId = null
+			this.#reticleX = 0.5
+			this.#reticleY = 0.5
+			if (this.#targetLostFlashRemaining <= 0) this.#targetingState = "idle"
+			return
+		}
+
+		if (this.#lockToggleQueued) {
+			this.#lockToggleQueued = false
+			if (this.#lockedTargetId !== null) {
+				this.#lockedTargetId = null
+				this.#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
+			} else if (this.#acquiredTargetId !== null) {
+				this.#lockedTargetId = this.#acquiredTargetId
+				this.#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
+			}
+		}
+
+		if (this.#lockedTargetId !== null) {
+			const lockedPosition = this.#drones.getTargetPosition(
+				this.#lockedTargetId,
+			)
+			if (lockedPosition === null) {
+				this.#loseTarget()
+				return
+			}
+			const projected = this.#projectTarget(lockedPosition)
+			if (projected !== null && projected.inside) {
+				this.#acquiredTargetId = this.#lockedTargetId
+				this.#targetingState = "locked"
+				this.#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
+				this.#reticleX = projected.x
+				this.#reticleY = projected.y
+				return
+			}
+			this.#acquiredTargetId = null
+			this.#targetingState = "escaping"
+			this.#targetEscapeRemaining = Math.max(
+				0,
+				this.#targetEscapeRemaining - delta * 1_000,
+			)
+			this.#reticleX = 0.5
+			this.#reticleY = 0.5
+			if (this.#targetEscapeRemaining <= 0) this.#loseTarget()
+			return
+		}
+
+		let best:
+			| {
+					distance: number
+					id: number
+					x: number
+					y: number
+			  }
+			| undefined
+		for (const candidate of this.#drones.getTargetCandidates()) {
+			const projected = this.#projectTarget(candidate.position)
+			if (projected === null || !projected.inside) continue
+			if (best === undefined || projected.distance < best.distance) {
+				best = {
+					distance: projected.distance,
+					id: candidate.id,
+					x: projected.x,
+					y: projected.y,
+				}
+			}
+		}
+		this.#acquiredTargetId = best?.id ?? null
+		this.#targetingState = best === undefined ? "idle" : "acquired"
+		this.#reticleX = best?.x ?? 0.5
+		this.#reticleY = best?.y ?? 0.5
+	}
+
+	#projectTarget(position: THREE.Vector3): {
+		distance: number
+		inside: boolean
+		x: number
+		y: number
+	} | null {
+		const cameraSpace = this.#camera.worldToLocal(position.clone())
+		if (cameraSpace.z >= 0) return null
+		const projected = position.clone().project(this.#camera)
+		const width = Math.max(this.#canvas.clientWidth, 1)
+		const height = Math.max(this.#canvas.clientHeight, 1)
+		const x = projected.x * 0.5 + 0.5
+		const y = projected.y * -0.5 + 0.5
+		const dx = (x - 0.5) * width
+		const dy = (y - 0.5) * height
+		const distance = Math.hypot(dx, dy)
+		return {
+			distance,
+			inside:
+				projected.z >= -1 &&
+				projected.z <= 1 &&
+				distance <= Math.min(width, height) * SMART_TARGET_RADIUS_SCREEN,
+			x,
+			y,
+		}
+	}
+
+	#loseTarget(): void {
+		this.#lockedTargetId = null
+		this.#acquiredTargetId = null
+		this.#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
+		this.#targetLostFlashRemaining = TARGET_LOST_FLASH_MS
+		this.#targetingState = "lost"
+	}
+
+	#updateWeaponPosture(delta: number): void {
+		const desired = new THREE.Quaternion()
+		const targetPosition =
+			this.#acquiredTargetId === null
+				? null
+				: this.#drones.getTargetPosition(this.#acquiredTargetId)
+		if (targetPosition !== null) {
+			const localTarget = this.#camera.worldToLocal(targetPosition)
+			const direction = localTarget.sub(this.#weapon.position).normalize()
+			desired.setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction)
+		} else if (this.#targetingState === "escaping") {
+			desired.setFromEuler(new THREE.Euler(1.05, 0, 0))
+		}
+		this.#weapon.quaternion.slerp(desired, Math.min(1, delta * 9))
 	}
 
 	#updateRemotePlayers(delta: number): void {
@@ -682,12 +841,16 @@ export class ArenaGame {
 			health: this.#health,
 			drones: this.#drones.count,
 			jump: this.#player.jumps,
+			lockCountdown: Math.ceil(this.#targetEscapeRemaining),
 			players: this.#remotePlayers.size + 1,
+			reticleX: this.#reticleX,
+			reticleY: this.#reticleY,
 			score: this.#score,
 			sliding: this.#slide,
 			speed: Math.round(
 				Math.hypot(this.#player.velocity.x, this.#player.velocity.z) * 3.6,
 			),
+			targeting: this.#targetingState,
 		})
 	}
 
@@ -708,6 +871,8 @@ export class ArenaGame {
 		this.#updateProjectiles(delta)
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)
+		this.#updateTargeting(delta)
+		this.#updateWeaponPosture(delta)
 		this.#sendSnapshot(delta)
 		this.#emitHud(delta)
 		this.#renderer.render(this.#scene, this.#camera)

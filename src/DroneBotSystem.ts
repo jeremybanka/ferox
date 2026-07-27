@@ -89,6 +89,18 @@ export class DroneBotSystem {
 		return this.#bots.length
 	}
 
+	getTargetCandidates(): { id: number; position: THREE.Vector3 }[] {
+		return this.#bots.map((bot) => ({
+			id: bot.id,
+			position: bot.group.position.clone(),
+		}))
+	}
+
+	getTargetPosition(id: number): THREE.Vector3 | null {
+		const target = this.#bots.find((bot) => bot.id === id)
+		return target?.group.position.clone() ?? null
+	}
+
 	dispose(): void {
 		for (const bot of this.#bots) this.#scene.remove(bot.group)
 		for (const effect of this.#effects) this.#scene.remove(effect.mesh)
