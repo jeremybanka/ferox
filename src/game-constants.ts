@@ -1,3 +1,5 @@
+export const ARENA_SEED = 7_431_905
+
 export const DRONE_POPULATION_CAP = 6
 export const DRONE_VISION_DISTANCE = 28
 export const DRONE_VISION_HALF_ANGLE = Math.PI / 5

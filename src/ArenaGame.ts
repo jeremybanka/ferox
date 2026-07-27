@@ -1,6 +1,15 @@
 import type { Socket } from "socket.io-client"
 import * as THREE from "three"
 
+import type {
+	ArenaSnapshot,
+	CombatSnapshot,
+	DroneDestroyedSnapshot,
+	FireIntent,
+	ProjectileEndedSnapshot,
+	ProjectileSnapshot,
+} from "./arena-protocol.ts"
+import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
 import {
 	FREE_AIM_TAP_THRESHOLD_MS,
@@ -34,11 +43,6 @@ type PlayerSnapshot = {
 	velocity: [number, number, number]
 }
 
-type BlastSnapshot = {
-	direction: [number, number, number]
-	origin: [number, number, number]
-}
-
 type SpawnSnapshot = {
 	position: [number, number]
 	yaw: number
@@ -52,10 +56,9 @@ type ArenaGameOptions = {
 }
 
 type Projectile = {
-	damage: number
+	id: number
 	life: number
 	mesh: THREE.Mesh
-	team: "bot" | "player"
 	velocity: THREE.Vector3
 }
 
@@ -88,29 +91,6 @@ const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
 	color: "#79f5e2",
 	toneMapped: false,
 })
-
-function seededValue(seed: number, x: number, z: number): number {
-	const value = Math.sin(x * 127.1 + z * 311.7 + seed * 0.000_013) * 43_758.5453
-	return value - Math.floor(value)
-}
-
-function smoothNoise(seed: number, x: number, z: number): number {
-	const x0 = Math.floor(x)
-	const z0 = Math.floor(z)
-	const tx = x - x0
-	const tz = z - z0
-	const sx = tx * tx * (3 - 2 * tx)
-	const sz = tz * tz * (3 - 2 * tz)
-	const a = seededValue(seed, x0, z0)
-	const b = seededValue(seed, x0 + 1, z0)
-	const c = seededValue(seed, x0, z0 + 1)
-	const d = seededValue(seed, x0 + 1, z0 + 1)
-	return THREE.MathUtils.lerp(
-		THREE.MathUtils.lerp(a, b, sx),
-		THREE.MathUtils.lerp(c, d, sx),
-		sz,
-	)
-}
 
 export class ArenaGame {
 	readonly #canvas: HTMLCanvasElement
@@ -155,12 +135,10 @@ export class ArenaGame {
 	#reticleY = 0.5
 	#rightBumperHeld = false
 	#score = 0
+	#shotSequence = 0
 	#shotHeld = false
 	#slide = false
 	#snapshotElapsed = 0
-	#spawnX = 0
-	#spawnYaw = Math.PI
-	#spawnZ = 13
 	#sprinting = false
 	#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
 	#targetLostFlashRemaining = 0
@@ -185,17 +163,7 @@ export class ArenaGame {
 		this.#buildWorld()
 		this.#buildWeapon()
 		this.#drones = new DroneBotSystem({
-			heightAt: (x, z) => this.#heightAt(x, z),
-			onBotDestroyed: () => {
-				this.#score += 1
-			},
-			onPlayerDamage: (damage) => {
-				this.#damagePlayer(damage)
-			},
 			scene: this.#scene,
-			shoot: (origin, direction, damage, color) => {
-				this.#spawnProjectile(origin, direction, "bot", damage, color)
-			},
 		})
 		this.#bindEvents()
 		this.#player.position.y = this.#heightAt(0, 13) + PLAYER_EYE
@@ -221,7 +189,11 @@ export class ArenaGame {
 		this.#socket.off("disconnect", this.#onDisconnect)
 		this.#socket.off("arena:players", this.#onPlayers)
 		this.#socket.off("arena:spawn", this.#onSpawn)
-		this.#socket.off("arena:blast", this.#onRemoteBlast)
+		this.#socket.off("arena:combat", this.#onCombat)
+		this.#socket.off("arena:drone-destroyed", this.#onDroneDestroyed)
+		this.#socket.off("arena:projectile", this.#onProjectile)
+		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
+		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
 		this.#renderer.dispose()
 	}
@@ -270,14 +242,16 @@ export class ArenaGame {
 
 	readonly #onDisconnect = (): void => {
 		this.#connected = false
+		this.#drones.reset()
+		for (const projectile of this.#projectiles) {
+			this.#scene.remove(projectile.mesh)
+		}
+		this.#projectiles.length = 0
 	}
 
 	readonly #onSpawn = (spawn: SpawnSnapshot): void => {
 		const [x, z] = spawn.position
 		if (![x, z, spawn.yaw].every(Number.isFinite)) return
-		this.#spawnX = x
-		this.#spawnZ = z
-		this.#spawnYaw = spawn.yaw
 		this.#player.position.set(x, this.#heightAt(x, z) + PLAYER_EYE, z)
 		this.#player.velocity.set(0, 0, 0)
 		this.#player.yaw = spawn.yaw
@@ -351,11 +325,38 @@ export class ArenaGame {
 		}
 	}
 
-	readonly #onRemoteBlast = (blast: BlastSnapshot): void => {
+	readonly #onCombat = (combat: CombatSnapshot): void => {
+		if (!Number.isFinite(combat.health) || !Number.isFinite(combat.score))
+			return
+		this.#health = combat.health
+		this.#score = combat.score
+	}
+
+	readonly #onDroneDestroyed = (destroyed: DroneDestroyedSnapshot): void => {
+		this.#drones.showDestroyed(destroyed)
+	}
+
+	readonly #onProjectile = (projectile: ProjectileSnapshot): void => {
 		this.#spawnProjectile(
-			new THREE.Vector3(...blast.origin),
-			new THREE.Vector3(...blast.direction),
+			projectile.id,
+			new THREE.Vector3(...projectile.origin),
+			new THREE.Vector3(...projectile.direction),
+			projectile.color,
 		)
+	}
+
+	readonly #onProjectileEnded = (ended: ProjectileEndedSnapshot): void => {
+		const index = this.#projectiles.findIndex(
+			(projectile) => projectile.id === ended.id,
+		)
+		if (index < 0) return
+		const projectile = this.#projectiles[index]
+		if (projectile !== undefined) this.#scene.remove(projectile.mesh)
+		this.#projectiles.splice(index, 1)
+	}
+
+	readonly #onSnapshot = (snapshot: ArenaSnapshot): void => {
+		this.#drones.applySnapshot(snapshot)
 	}
 
 	#bindEvents(): void {
@@ -368,26 +369,16 @@ export class ArenaGame {
 		this.#socket.on("disconnect", this.#onDisconnect)
 		this.#socket.on("arena:players", this.#onPlayers)
 		this.#socket.on("arena:spawn", this.#onSpawn)
-		this.#socket.on("arena:blast", this.#onRemoteBlast)
+		this.#socket.on("arena:combat", this.#onCombat)
+		this.#socket.on("arena:drone-destroyed", this.#onDroneDestroyed)
+		this.#socket.on("arena:projectile", this.#onProjectile)
+		this.#socket.on("arena:projectile-ended", this.#onProjectileEnded)
+		this.#socket.on("arena:snapshot", this.#onSnapshot)
 		this.#resize()
 	}
 
 	#heightAt(x: number, z: number): number {
-		const radial = Math.sqrt(x * x + z * z)
-		const rim = Math.max(0, (radial - 42) / 11)
-		let height = -1.4
-		let amplitude = 7.2
-		let frequency = 0.026
-		for (let octave = 0; octave < 4; octave += 1) {
-			height +=
-				(smoothNoise(this.#seed + octave * 19, x * frequency, z * frequency) -
-					0.5) *
-				amplitude
-			amplitude *= 0.5
-			frequency *= 2.08
-		}
-		height += Math.sin(x * 0.08) * Math.cos(z * 0.065) * 1.7
-		return height + rim * rim * 8
+		return arenaHeightAt(this.#seed, x, z)
 	}
 
 	#buildWorld(): void {
@@ -412,7 +403,7 @@ export class ArenaGame {
 			const color = low
 				.clone()
 				.lerp(high, THREE.MathUtils.clamp((y + 6) / 20, 0, 1))
-			const variation = seededValue(this.#seed, x, z) * 0.08
+			const variation = arenaSeededValue(this.#seed, x, z) * 0.08
 			colors[index * 3] = color.r + variation
 			colors[index * 3 + 1] = color.g + variation
 			colors[index * 3 + 2] = color.b + variation
@@ -448,13 +439,13 @@ export class ArenaGame {
 			roughness: 0.22,
 		})
 		for (let index = 0; index < 18; index += 1) {
-			const angle = seededValue(this.#seed, index, 2) * Math.PI * 2
-			const radius = 13 + seededValue(this.#seed, index, 7) * 38
+			const angle = arenaSeededValue(this.#seed, index, 2) * Math.PI * 2
+			const radius = 13 + arenaSeededValue(this.#seed, index, 7) * 38
 			const x = Math.cos(angle) * radius
 			const z = Math.sin(angle) * radius
 			const crystal = new THREE.Mesh(crystalGeometry, crystalMaterial)
 			crystal.position.set(x, this.#heightAt(x, z) + 0.8, z)
-			crystal.scale.y = 1.5 + seededValue(this.#seed, index, 4) * 2.8
+			crystal.scale.y = 1.5 + arenaSeededValue(this.#seed, index, 4) * 2.8
 			crystal.rotation.y = angle
 			this.#scene.add(crystal)
 		}
@@ -714,20 +705,20 @@ export class ArenaGame {
 						.normalize()
 				: acquiredPosition.sub(origin).normalize()
 		origin.addScaledVector(direction, 0.8)
-		this.#spawnProjectile(origin, direction, "player", 20, "#b8fff1")
 		this.#noiseTimer = 0.85
 		this.#weapon.position.z += 0.12
-		this.#socket.emit("arena:blast", {
+		this.#shotSequence += 1
+		this.#socket.emit("arena:fire", {
+			clientShotId: this.#shotSequence,
 			direction: direction.toArray(),
 			origin: origin.toArray(),
-		} satisfies BlastSnapshot)
+		} satisfies FireIntent)
 	}
 
 	#spawnProjectile(
+		id: number,
 		origin: THREE.Vector3,
 		direction: THREE.Vector3,
-		team: "bot" | "player" = "player",
-		damage = 20,
 		color: THREE.ColorRepresentation = "#b8fff1",
 	): void {
 		const mesh = new THREE.Mesh(
@@ -739,10 +730,9 @@ export class ArenaGame {
 		mesh.position.copy(origin)
 		this.#scene.add(mesh)
 		this.#projectiles.push({
-			damage,
+			id,
 			life: 2.4,
 			mesh,
-			team,
 			velocity: direction.multiplyScalar(55),
 		})
 	}
@@ -753,38 +743,15 @@ export class ArenaGame {
 			if (projectile === undefined) continue
 			projectile.life -= delta
 			projectile.mesh.position.addScaledVector(projectile.velocity, delta)
-			const hitTarget =
-				projectile.team === "player"
-					? this.#drones.damageNear(projectile.mesh.position, projectile.damage)
-					: projectile.mesh.position.distanceTo(this.#player.position) < 0.72
-			if (hitTarget && projectile.team === "bot") {
-				this.#damagePlayer(projectile.damage)
-			}
 			const hitGround =
 				projectile.mesh.position.y <=
 				this.#heightAt(projectile.mesh.position.x, projectile.mesh.position.z) +
 					0.12
-			if (projectile.life <= 0 || hitGround || hitTarget) {
+			if (projectile.life <= 0 || hitGround) {
 				this.#scene.remove(projectile.mesh)
 				this.#projectiles.splice(index, 1)
 			}
 		}
-	}
-
-	#damagePlayer(damage: number): void {
-		this.#health = Math.max(0, this.#health - damage)
-		if (this.#health > 0) return
-		this.#health = 100
-		this.#score = Math.max(0, this.#score - 1)
-		this.#player.position.set(
-			this.#spawnX,
-			this.#heightAt(this.#spawnX, this.#spawnZ) + PLAYER_EYE,
-			this.#spawnZ,
-		)
-		this.#player.velocity.set(0, 0, 0)
-		this.#player.yaw = this.#spawnYaw
-		this.#player.pitch = -0.04
-		this.#player.jumps = 0
 	}
 
 	#updateCamera(delta: number): void {
@@ -1057,12 +1024,7 @@ export class ArenaGame {
 		this.#lastFrame = now
 		this.#updatePhysics(delta)
 		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)
-		this.#drones.update(
-			delta,
-			this.#player.position,
-			this.#player.velocity,
-			this.#noiseTimer,
-		)
+		this.#drones.update(delta)
 		this.#updateProjectiles(delta)
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)

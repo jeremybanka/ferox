@@ -4,10 +4,13 @@ import { realtime } from "atom.io/realtime-server"
 import type { UserKey } from "atom.io/realtime"
 import { Server, type Socket as IoSocket } from "socket.io"
 
+import type { CombatSnapshot, FireIntent } from "../src/arena-protocol.ts"
 import {
+	ARENA_SEED,
 	PLAYER_SPAWN_ORDER,
 	PLAYER_SPAWN_POINTS,
 } from "../src/game-constants.ts"
+import { ArenaSimulation } from "./ArenaSimulation.ts"
 
 type PlayerSnapshot = {
 	crouching: boolean
@@ -21,10 +24,6 @@ type PlayerSnapshot = {
 }
 
 type MovePayload = Omit<PlayerSnapshot, "id">
-type BlastPayload = {
-	direction: [number, number, number]
-	origin: [number, number, number]
-}
 type SpawnPayload = {
 	position: [number, number]
 	yaw: number
@@ -46,6 +45,61 @@ const io = new Server(httpServer, {
 })
 const players = new Map<string, PlayerSnapshot>()
 const playerSpawnSlots = new Map<string, number>()
+const playerHealth = new Map<string, number>()
+const playerScores = new Map<string, number>()
+const lastPlayerFire = new Map<string, number>()
+
+const combatSnapshot = (playerId: string): CombatSnapshot => ({
+	health: playerHealth.get(playerId) ?? 100,
+	score: playerScores.get(playerId) ?? 0,
+})
+
+const simulation = new ArenaSimulation({
+	emitDroneDestroyed: (snapshot) => {
+		io.emit("arena:drone-destroyed", snapshot)
+	},
+	emitProjectile: (snapshot) => {
+		io.emit("arena:projectile", snapshot)
+	},
+	emitProjectileEnded: (snapshot) => {
+		io.emit("arena:projectile-ended", snapshot)
+	},
+	getPlayers: () =>
+		[...players.values()].map((player) => ({
+			id: player.id,
+			position: player.position,
+			velocity: player.velocity,
+		})),
+	onDroneKilled: (playerId) => {
+		playerScores.set(playerId, (playerScores.get(playerId) ?? 0) + 1)
+		io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
+	},
+	onPlayerDamage: (playerId, damage) => {
+		const nextHealth = Math.max(0, (playerHealth.get(playerId) ?? 100) - damage)
+		if (nextHealth > 0) {
+			playerHealth.set(playerId, nextHealth)
+			io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
+			return
+		}
+		playerHealth.set(playerId, 100)
+		playerScores.set(
+			playerId,
+			Math.max(0, (playerScores.get(playerId) ?? 0) - 1),
+		)
+		const spawnIndex = playerSpawnSlots.get(playerId)
+		const spawn =
+			spawnIndex === undefined ? undefined : PLAYER_SPAWN_POINTS[spawnIndex]
+		if (spawn !== undefined) {
+			const [spawnX, spawnZ, spawnYaw] = spawn
+			io.to(playerId).emit("arena:spawn", {
+				position: [spawnX, spawnZ],
+				yaw: spawnYaw,
+			} satisfies SpawnPayload)
+		}
+		io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
+	},
+	seed: ARENA_SEED,
+})
 
 realtime(
 	io,
@@ -78,6 +132,8 @@ realtime(
 			yaw: spawnYaw,
 		} satisfies SpawnPayload
 		playerSpawnSlots.set(socketId, spawnIndex)
+		playerHealth.set(socketId, 100)
+		playerScores.set(socketId, 0)
 		players.set(socketId, {
 			crouching: false,
 			freeAim: false,
@@ -90,6 +146,8 @@ realtime(
 		})
 		const onReady = (): void => {
 			gameSocket.emit("arena:spawn", spawnPayload)
+			gameSocket.emit("arena:combat", combatSnapshot(socketId))
+			gameSocket.emit("arena:snapshot", simulation.snapshot())
 		}
 		gameSocket.on("arena:ready", onReady)
 		onReady()
@@ -99,30 +157,51 @@ realtime(
 			if (
 				!Array.isArray(payload.position) ||
 				!Array.isArray(payload.rotation) ||
-				payload.position.some((value) => !Number.isFinite(value))
+				!Array.isArray(payload.velocity) ||
+				payload.position.length !== 3 ||
+				payload.rotation.length !== 2 ||
+				payload.velocity.length !== 3 ||
+				[...payload.position, ...payload.rotation, ...payload.velocity].some(
+					(value) => !Number.isFinite(value),
+				)
 			)
 				return
-			players.set(socketId, { id: socketId, ...payload })
+			players.set(socketId, { ...payload, id: socketId })
 		}
-		const onBlast = (payload: BlastPayload): void => {
-			gameSocket.broadcast.emit("arena:blast", payload)
+		const onFire = (payload: FireIntent): void => {
+			const now = performance.now()
+			const previous = lastPlayerFire.get(socketId) ?? Number.NEGATIVE_INFINITY
+			if (now - previous < 110) return
+			if (simulation.fire(socketId, payload)) lastPlayerFire.set(socketId, now)
 		}
 		gameSocket.on("arena:move", onMove)
-		gameSocket.on("arena:blast", onBlast)
+		gameSocket.on("arena:fire", onFire)
 
 		return () => {
 			players.delete(socketId)
 			playerSpawnSlots.delete(socketId)
+			playerHealth.delete(socketId)
+			playerScores.delete(socketId)
+			lastPlayerFire.delete(socketId)
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)
 			gameSocket.off("arena:move", onMove)
-			gameSocket.off("arena:blast", onBlast)
+			gameSocket.off("arena:fire", onFire)
 		}
 	},
 )
 
+let lastSimulationTick = performance.now()
+setInterval(() => {
+	const now = performance.now()
+	const delta = Math.min((now - lastSimulationTick) / 1_000, 0.1)
+	lastSimulationTick = now
+	simulation.update(delta)
+}, 1_000 / 30)
+
 setInterval(() => {
 	io.emit("arena:players", [...players.values()])
+	io.emit("arena:snapshot", simulation.snapshot())
 }, 50)
 
 httpServer.listen(port, () => {

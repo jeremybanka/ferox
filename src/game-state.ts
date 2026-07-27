@@ -1,5 +1,7 @@
 import { atom } from "atom.io"
 
+import { ARENA_SEED } from "./game-constants.ts"
+
 export type GameHudState = {
 	ammo: number
 	connection: "connecting" | "offline" | "online"
@@ -37,5 +39,5 @@ export const gameHudStateAtom = atom<GameHudState>({
 
 export const arenaSeedAtom = atom<number>({
 	key: "arenaSeed",
-	default: 7_431_905,
+	default: ARENA_SEED,
 })
