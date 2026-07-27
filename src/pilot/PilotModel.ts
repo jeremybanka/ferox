@@ -106,7 +106,7 @@ function makeArm(side: -1 | 1): {
 	const forearm = box(0.38, 0.58, 0.44, armorMaterial)
 	forearm.position.y = -0.34
 	const forearmInset = box(0.22, 0.46, 0.47, armorDarkMaterial)
-	forearmInset.position.set(0, -0.34, -0.02)
+	forearmInset.position.set(0, -0.14, -0.05)
 	elbow.add(forearm, forearmInset)
 	arm.add(elbow)
 
@@ -135,11 +135,11 @@ function makeLeg(side: -1 | 1): {
 	leg.add(joint(0.29))
 	const thigh = box(0.48, 0.83, 0.55, armorDarkMaterial)
 	thigh.position.y = -0.49
-	const thighPlate = box(0.52, 0.57, 0.59, armorMaterial)
-	thighPlate.position.set(0, -0.39, -0.02)
-	const innerThighChannel = box(0.09, 0.68, 0.61, undersuitMaterial)
-	innerThighChannel.position.set(side * -0.25, -0.46, -0.02)
-	leg.add(thigh, thighPlate, innerThighChannel)
+	const thighPlate = box(0.52, 0.65, 0.59, armorMaterial)
+	thighPlate.position.set(side * 0.05, -0.35, 0)
+	// const innerThighChannel = box(0.09, 0.68, 0.61, undersuitMaterial)
+	// innerThighChannel.position.set(side * -0.25, -0.46, -0.02)
+	leg.add(thigh, thighPlate) //, innerThighChannel)
 
 	const knee = new THREE.Group()
 	knee.position.y = -0.95
@@ -205,7 +205,7 @@ export function createPilotModel(): PilotRig {
 
 	const hips = new THREE.Group()
 	hips.position.y = 1.72
-	const pelvis = box(0.86, 0.45, 0.56, armorDarkMaterial)
+	const pelvis = box(0.32, 0.45, 0.56, armorDarkMaterial)
 	const belt = box(0.98, 0.18, 0.62, accentMaterial)
 	belt.position.y = 0.18
 	hips.add(pelvis, belt)
@@ -249,14 +249,14 @@ export function createPilotModel(): PilotRig {
 		armorMaterial,
 	)
 	helmet.scale.set(1.02, 0.96, 1.08)
-	const helmetCrown = box(0.54, 0.13, 0.66, accentMaterial)
-	helmetCrown.position.set(0, 0.44, 0.02)
+	const helmetCrown = box(0.74, 0.56, 0.85, armorMaterial)
+	helmetCrown.position.set(0, 0.16, 0.1)
 	const jaw = box(0.58, 0.22, 0.5, armorDarkMaterial)
 	jaw.position.set(0, -0.26, -0.08)
-	const visor = box(0.68, 0.24, 0.12, visorMaterial)
+	const visor = box(0.68, 0.34, 0.12, visorMaterial)
 	visor.position.set(0, 0.06, -0.46)
 	visor.rotation.x = -0.08
-	const visorBrow = box(0.75, 0.1, 0.18, armorDarkMaterial)
+	const visorBrow = box(0.75, 0.1, 0.28, armorDarkMaterial)
 	visorBrow.position.set(0, 0.22, -0.43)
 	head.add(helmet, helmetCrown, jaw, visor, visorBrow)
 	neck.add(head)
@@ -312,7 +312,7 @@ export function createPilotModel(): PilotRig {
 }
 
 export function resetPilotPose(rig: PilotRig): void {
-	rig.root.position.y = 0
+	rig.root.position.set(0, 0, 0)
 	rig.root.rotation.set(0, 0, 0)
 	rig.body.position.set(0, 0, 0)
 	rig.body.rotation.set(0, 0, 0)
