@@ -54,12 +54,12 @@ pilot-visualizer.class {
 	> nav {
 		position: absolute;
 		bottom: 9.4rem;
-		left: calc(50% - 5.5rem);
+		left: calc(50% - 7.5rem);
 		display: flex;
 		flex-wrap: wrap;
 		justify-content: center;
 		gap: 0.5rem;
-		width: min(43rem, calc(100% - 26rem));
+		width: min(43rem, calc(100% - 30rem));
 		translate: -50%;
 
 		> button {
@@ -85,10 +85,10 @@ pilot-visualizer.class {
 	> animation-console {
 		position: absolute;
 		bottom: 1.2rem;
-		left: calc(50% - 5.5rem);
+		left: calc(50% - 7.5rem);
 		display: grid;
 		gap: 0.65rem;
-		width: min(58rem, calc(100% - 26rem));
+		width: min(58rem, calc(100% - 30rem));
 		padding: 0.75rem;
 		border: 1px solid rgb(109 235 215 / 0.2);
 		background: rgb(8 16 25 / 0.88);
@@ -193,7 +193,7 @@ pilot-visualizer.class {
 		bottom: 1.2rem;
 		display: grid;
 		grid-template-rows: auto minmax(0, 1fr);
-		width: 10.6rem;
+		width: 14.6rem;
 		border: 1px solid rgb(109 235 215 / 0.24);
 		background: rgb(8 16 25 / 0.92);
 		box-shadow: -1rem 0 3rem rgb(0 0 0 / 0.24);
@@ -267,7 +267,7 @@ pilot-visualizer.class {
 			> filmstrip-rail {
 				position: relative;
 				display: block;
-				width: 9.5rem;
+				width: 13.5rem;
 				min-height: 100%;
 				margin: 0 auto;
 				background:
@@ -299,7 +299,7 @@ pilot-visualizer.class {
 
 				> canvas {
 					display: block;
-					width: 8rem;
+					width: 12rem;
 					height: auto;
 					margin-inline: 0.75rem;
 				}
@@ -308,7 +308,7 @@ pilot-visualizer.class {
 					position: absolute;
 					inset: 0 0.75rem;
 					display: grid;
-					grid-auto-rows: 5.0526rem;
+					grid-auto-rows: 7.5rem;
 					margin: 0;
 					padding: 0;
 					list-style: none;
@@ -358,7 +358,7 @@ pilot-visualizer.class {
 
 	> aside {
 		position: absolute;
-		right: 13rem;
+		right: 17rem;
 		bottom: 9.6rem;
 		display: grid;
 		justify-items: end;

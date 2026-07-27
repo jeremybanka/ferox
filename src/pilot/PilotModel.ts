@@ -95,7 +95,9 @@ function makeArm(side: -1 | 1): {
 	upperArm.position.y = -0.38
 	const upperPlate = box(0.39, 0.44, 0.43, armorMaterial)
 	upperPlate.position.set(0, -0.27, -0.015)
-	arm.add(upperArm, upperPlate)
+	const silhouetteEdge = box(0.08, 0.56, 0.44, armorMaterial)
+	silhouetteEdge.position.set(side * 0.2, -0.38, -0.01)
+	arm.add(upperArm, upperPlate, silhouetteEdge)
 	shoulder.add(arm)
 
 	const elbow = new THREE.Group()
@@ -113,6 +115,11 @@ function makeArm(side: -1 | 1): {
 	const glove = box(0.31, 0.26, 0.34, undersuitMaterial)
 	glove.position.y = -0.1
 	hand.add(glove)
+	if (side === 1) {
+		const indexPlate = box(0.1, 0.1, 0.24, accentMaterial)
+		indexPlate.position.set(0, -0.08, -0.16)
+		hand.add(indexPlate)
+	}
 	elbow.add(hand)
 	return { arm, elbow, hand, shoulder }
 }
@@ -130,7 +137,9 @@ function makeLeg(side: -1 | 1): {
 	thigh.position.y = -0.49
 	const thighPlate = box(0.52, 0.57, 0.59, armorMaterial)
 	thighPlate.position.set(0, -0.39, -0.02)
-	leg.add(thigh, thighPlate)
+	const innerThighChannel = box(0.09, 0.68, 0.61, undersuitMaterial)
+	innerThighChannel.position.set(side * -0.25, -0.46, -0.02)
+	leg.add(thigh, thighPlate, innerThighChannel)
 
 	const knee = new THREE.Group()
 	knee.position.y = -0.95

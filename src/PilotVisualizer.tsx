@@ -47,8 +47,8 @@ const MODE_DURATION_SECONDS: Readonly<Record<PreviewMode, number>> = {
 
 type SampleInterval = 0.05 | 0.1
 
-const FILM_FRAME_WIDTH = 152
-const FILM_FRAME_HEIGHT = 96
+const FILM_FRAME_WIDTH = 192
+const FILM_FRAME_HEIGHT = 120
 
 type PreviewControls = {
 	isPlaying: boolean
