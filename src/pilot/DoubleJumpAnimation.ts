@@ -35,13 +35,16 @@ export function applyDoubleJumpAnimation(
 	rig.hips.rotation.y = keyframe(phase, -0.08, -0.42, -0.06)
 	rig.hips.rotation.z = keyframe(phase, 0.04, -0.08, 0)
 
-	rig.body.position.y = keyframe(phase, 2.38, 2.64, 2.5)
+	rig.body.position.y = keyframe(phase, 0, 0.04, 0.02)
 	rig.body.rotation.x = keyframe(phase, 0.25, -0.06, 0.12)
 	rig.body.rotation.y = keyframe(phase, 0.06, 0.34, 0.08)
 	rig.body.rotation.z = keyframe(phase, -0.04, 0.1, 0)
-	rig.head.rotation.x = keyframe(phase, -0.08, 0.12, -0.08)
-	rig.head.rotation.y = keyframe(phase, 0, -0.14, 0)
-	rig.head.rotation.z = keyframe(phase, 0.03, -0.08, 0)
+	rig.neck.rotation.x = keyframe(phase, -0.03, 0.05, -0.03)
+	rig.neck.rotation.y = keyframe(phase, 0, -0.06, 0)
+	rig.neck.rotation.z = keyframe(phase, 0.01, -0.03, 0)
+	rig.head.rotation.x = keyframe(phase, -0.05, 0.07, -0.05)
+	rig.head.rotation.y = keyframe(phase, 0, -0.08, 0)
+	rig.head.rotation.z = keyframe(phase, 0.02, -0.05, 0)
 
 	rig.leftShoulder.rotation.x = keyframe(phase, -0.34, -0.76, -0.18)
 	rig.leftShoulder.rotation.z = keyframe(phase, -0.2, -0.58, -0.82)
@@ -72,10 +75,14 @@ export function applyDoubleJumpAnimation(
 		-(rig.rightLeg.rotation.x + rig.rightKnee.rotation.x) +
 		keyframe(phase, 0.06, -0.1, -0.04)
 	rig.rightFoot.rotation.z = keyframe(phase, 0, 0.12, 0.08)
+	rig.leftToe.rotation.x = keyframe(phase, 0.12, 0.34, 0.06)
+	rig.rightToe.rotation.x = keyframe(phase, 0.1, 0.38, 0.06)
 
 	// A short recoil pulse sells the backpack firing without needing extra bones.
 	rig.body.position.z = -boost * 0.08
 	rig.hips.position.z = boost * 0.045
+	rig.leftHand.rotation.x = keyframe(phase, -0.08, 0.18, 0)
+	rig.rightHand.rotation.x = keyframe(phase, -0.06, 0.14, 0)
 	rig.weapon.rotation.x = -(
 		rig.rightShoulder.rotation.x +
 		rig.rightArm.rotation.x +

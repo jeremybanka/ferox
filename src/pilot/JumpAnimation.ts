@@ -157,12 +157,13 @@ export function applyJumpAnimation(rig: PilotRig, progress: number): void {
 		blend(from[key], to[key], amount)
 
 	rig.root.position.y = value("rootY")
-	rig.body.position.y = value("bodyY")
+	rig.body.position.y = value("bodyY") - value("hipsY") - 0.8
 	rig.hips.position.y = value("hipsY")
 
 	rig.body.rotation.x = value("bodyPitch")
 	rig.hips.rotation.x = value("hipsPitch")
-	rig.head.rotation.x = value("headPitch")
+	rig.neck.rotation.x = value("headPitch") * 0.4
+	rig.head.rotation.x = value("headPitch") * 0.6
 
 	const leg = value("leg")
 	const foot = value("foot")
@@ -179,6 +180,8 @@ export function applyJumpAnimation(rig: PilotRig, progress: number): void {
 		-(rig.leftLeg.rotation.x + rig.leftKnee.rotation.x) + foot * 0.18
 	rig.rightFoot.rotation.x =
 		-(rig.rightLeg.rotation.x + rig.rightKnee.rotation.x) + foot * 0.16
+	rig.leftToe.rotation.x = Math.max(0, -foot) * 0.28
+	rig.rightToe.rotation.x = Math.max(0, -foot) * 0.26
 
 	const arm = value("arm")
 	const elbow = value("elbow")
@@ -187,6 +190,8 @@ export function applyJumpAnimation(rig: PilotRig, progress: number): void {
 	rig.rightArm.rotation.x = arm * 0.72
 	rig.leftElbow.rotation.x = -elbow
 	rig.rightElbow.rotation.x = -elbow * 0.82
+	rig.leftHand.rotation.x = arm * 0.14
+	rig.rightHand.rotation.x = arm * 0.1
 	rig.leftShoulder.rotation.z = -shoulderRoll
 	rig.rightShoulder.rotation.z = shoulderRoll
 	rig.weapon.rotation.x = -(

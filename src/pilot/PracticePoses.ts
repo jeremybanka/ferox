@@ -133,6 +133,7 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 			rig.rightKnee.rotation.x = -0.88
 			rig.leftFoot.rotation.x = 1.14
 			rig.rightFoot.rotation.x = 0.46
+			rig.rightToe.rotation.x = 0.18
 			rig.hips.rotation.y = -0.18
 			break
 		}
@@ -143,13 +144,14 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 			rig.rightKnee.rotation.x = -0.42
 			rig.leftFoot.rotation.x = 0.46
 			rig.rightFoot.rotation.x = 1.14
+			rig.leftToe.rotation.x = 0.18
 			rig.hips.rotation.y = 0.18
 			break
 		}
 		case "crouch": {
 			rig.root.position.y = -0.38
 			rig.hips.position.y = 1.48
-			rig.body.position.y = 2.28
+			rig.body.position.y = 0
 			rig.leftLeg.rotation.x = 0.58
 			rig.rightLeg.rotation.x = 0.58
 			rig.leftLeg.rotation.z = -0.22
@@ -158,6 +160,8 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 			rig.rightKnee.rotation.x = -1.18
 			rig.leftFoot.rotation.x = 0.6
 			rig.rightFoot.rotation.x = 0.6
+			rig.leftToe.rotation.x = 0.12
+			rig.rightToe.rotation.x = 0.12
 			break
 		}
 		case "kneel": {
@@ -168,6 +172,8 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 			rig.rightKnee.rotation.x = -1.52
 			rig.leftFoot.rotation.x = 0.96
 			rig.rightFoot.rotation.x = 0.38
+			rig.leftToe.rotation.x = 0.16
+			rig.rightToe.rotation.x = 0.28
 			rig.hips.rotation.x = 0.18
 			break
 		}
@@ -179,6 +185,8 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 			rig.rightKnee.rotation.x = -1.28
 			rig.leftFoot.rotation.x = 1.82
 			rig.rightFoot.rotation.x = 0.7
+			rig.leftToe.rotation.x = 0.32
+			rig.rightToe.rotation.x = 0.26
 			break
 		}
 		case "tiptoe": {
@@ -187,6 +195,8 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 			rig.rightKnee.rotation.x = -0.18
 			rig.leftFoot.rotation.x = -0.72
 			rig.rightFoot.rotation.x = -0.72
+			rig.leftToe.rotation.x = 0.72
+			rig.rightToe.rotation.x = 0.72
 			rig.leftLeg.rotation.z = -0.08
 			rig.rightLeg.rotation.z = 0.08
 			break
@@ -208,6 +218,8 @@ function applyArms(rig: PilotRig, arms: ArmPose): void {
 			rig.rightShoulder.rotation.x = 0.7
 			rig.leftElbow.rotation.x = 0.86
 			rig.rightElbow.rotation.x = 0.98
+			rig.leftHand.rotation.x = 0.12
+			rig.rightHand.rotation.x = 0.12
 			break
 		}
 		case "crossed": {
@@ -217,6 +229,8 @@ function applyArms(rig: PilotRig, arms: ArmPose): void {
 			rig.rightShoulder.rotation.z = -0.48
 			rig.leftElbow.rotation.x = 1.22
 			rig.rightElbow.rotation.x = 1.22
+			rig.leftHand.rotation.z = -0.32
+			rig.rightHand.rotation.z = 0.32
 			break
 		}
 		case "high": {
@@ -226,6 +240,8 @@ function applyArms(rig: PilotRig, arms: ArmPose): void {
 			rig.rightShoulder.rotation.z = 1.18
 			rig.leftElbow.rotation.x = 0.52
 			rig.rightElbow.rotation.x = 0.72
+			rig.leftHand.rotation.x = 0.24
+			rig.rightHand.rotation.x = 0.2
 			break
 		}
 		case "point": {
@@ -233,6 +249,8 @@ function applyArms(rig: PilotRig, arms: ArmPose): void {
 			rig.leftElbow.rotation.x = 0.08
 			rig.rightShoulder.rotation.x = 0.48
 			rig.rightElbow.rotation.x = 0.82
+			rig.leftHand.rotation.x = -0.1
+			rig.rightHand.rotation.x = 0.14
 			break
 		}
 		case "spread": {
@@ -240,6 +258,8 @@ function applyArms(rig: PilotRig, arms: ArmPose): void {
 			rig.rightShoulder.rotation.z = 1.28
 			rig.leftElbow.rotation.x = 0.22
 			rig.rightElbow.rotation.x = 0.22
+			rig.leftHand.rotation.z = -0.18
+			rig.rightHand.rotation.z = 0.18
 			break
 		}
 		case "twist": {
@@ -249,6 +269,8 @@ function applyArms(rig: PilotRig, arms: ArmPose): void {
 			rig.rightShoulder.rotation.z = -0.48
 			rig.leftElbow.rotation.x = 1.36
 			rig.rightElbow.rotation.x = 0.36
+			rig.leftHand.rotation.x = 0.22
+			rig.rightHand.rotation.z = -0.2
 			break
 		}
 		case "loose": {
@@ -256,6 +278,8 @@ function applyArms(rig: PilotRig, arms: ArmPose): void {
 			rig.rightShoulder.rotation.z = -0.42
 			rig.leftElbow.rotation.z = -0.52
 			rig.rightElbow.rotation.z = 0.62
+			rig.leftHand.rotation.z = -0.24
+			rig.rightHand.rotation.z = 0.28
 			break
 		}
 	}
@@ -270,16 +294,19 @@ export function applyPracticePose(
 	applyArms(rig, pose.arms)
 
 	const variation = Math.sin(index * 2.17) * 0.05
-	rig.body.rotation.x += pose.lean
+	rig.body.rotation.x -= pose.lean
 	rig.body.rotation.y += pose.twist
 	rig.body.rotation.z += variation
 	rig.hips.rotation.y -= pose.twist * 0.44
-	rig.head.rotation.x += pose.head
-	rig.head.rotation.y -= pose.twist * 0.28
+	rig.neck.rotation.x += pose.head * 0.4
+	rig.neck.rotation.y -= pose.twist * 0.1
+	rig.head.rotation.x += pose.head * 0.6
+	rig.head.rotation.y -= pose.twist * 0.18
 
 	if (pose.bucket === "goofy") {
 		rig.head.rotation.z += Math.sin(index) * 0.24
 		rig.leftFoot.rotation.y += Math.cos(index) * 0.3
+		rig.leftToe.rotation.x += Math.max(0, Math.sin(index)) * 0.36
 	}
 
 	if (pose.bucket === "jank") {

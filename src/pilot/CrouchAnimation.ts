@@ -10,10 +10,11 @@ function applyGuardedCrouch(rig: PilotRig, weight: number): void {
 
 	rig.root.position.y = -0.34 * amount
 	rig.hips.position.y = 1.72 - 0.2 * amount
-	rig.hips.rotation.x = 0.18 * amount
-	rig.body.position.y = 2.52 - 0.26 * amount
-	rig.body.rotation.x = 0.16 * amount
-	rig.head.rotation.x = -0.12 * amount
+	rig.hips.rotation.x = -0.08 * amount
+	rig.body.position.y = -0.06 * amount
+	rig.body.rotation.x = -0.12 * amount
+	rig.neck.rotation.x = -0.05 * amount
+	rig.head.rotation.x = -0.07 * amount
 
 	rig.leftLeg.rotation.x = 0.5 * amount
 	rig.leftLeg.rotation.z = -0.22 * amount
@@ -25,6 +26,8 @@ function applyGuardedCrouch(rig: PilotRig, weight: number): void {
 	rig.leftFoot.rotation.z = 0.1 * amount
 	rig.rightFoot.rotation.x = 0.62 * amount
 	rig.rightFoot.rotation.z = -0.1 * amount
+	rig.leftToe.rotation.x = 0.12 * amount
+	rig.rightToe.rotation.x = 0.12 * amount
 
 	rig.leftShoulder.rotation.x = 0.62 * amount
 	rig.leftShoulder.rotation.z = -0.18 * amount
@@ -62,7 +65,8 @@ export function applyCrouchIdleAnimation(
 	rig.hips.rotation.y = scan * 0.035 * amount
 	rig.body.position.y += breathing * 0.014 * amount
 	rig.body.rotation.y = scan * 0.025 * amount
-	rig.head.rotation.y = scan * 0.1 * amount
+	rig.neck.rotation.y = scan * 0.04 * amount
+	rig.head.rotation.y = scan * 0.06 * amount
 	rig.leftElbow.rotation.x += breathing * 0.025 * amount
 	rig.rightElbow.rotation.x -= breathing * 0.02 * amount
 	rig.weapon.rotation.y = scan * 0.018 * amount
@@ -95,9 +99,10 @@ export function applyCrouchMoveAnimation(
 	rig.hips.rotation.y = stride * 0.12 * amount
 	rig.hips.rotation.z = -strafe * 0.08 * amount
 	rig.body.position.y += step * 0.025 * amount
-	rig.body.rotation.x += forward * 0.08 * amount
+	rig.body.rotation.x -= forward * 0.08 * amount
 	rig.body.rotation.z = -strafe * 0.13 * amount
-	rig.head.rotation.z = strafe * 0.08 * amount
+	rig.neck.rotation.z = strafe * 0.03 * amount
+	rig.head.rotation.z = strafe * 0.05 * amount
 
 	if (strafe === 0) {
 		rig.leftLeg.rotation.x += stride * 0.28 * amount
@@ -110,6 +115,8 @@ export function applyCrouchMoveAnimation(
 		rig.rightFoot.rotation.x = -(
 			rig.rightLeg.rotation.x + rig.rightKnee.rotation.x
 		)
+		rig.leftToe.rotation.x += Math.max(0, -stride) * 0.24 * amount
+		rig.rightToe.rotation.x += Math.max(0, stride) * 0.24 * amount
 	} else {
 		const plantedStep = (0.5 + 0.5 * stride * strafe) * amount
 		rig.leftLeg.rotation.z -= strafe * stride * 0.12 * amount

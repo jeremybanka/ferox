@@ -33,16 +33,19 @@ export function applyRunAnimation(
 		-(rig.leftLeg.rotation.x + rig.leftKnee.rotation.x) - liftLeft * 0.16
 	rig.rightFoot.rotation.x =
 		-(rig.rightLeg.rotation.x + rig.rightKnee.rotation.x) - liftRight * 0.16
+	rig.leftToe.rotation.x = liftLeft * 0.34
+	rig.rightToe.rotation.x = liftRight * 0.34
 	rig.leftArm.rotation.x = -stride * 0.72
 	rig.rightArm.rotation.x = stride * 0.55
 	rig.leftElbow.rotation.x = 0.34 + Math.abs(stride) * 0.38
 	rig.rightElbow.rotation.x = 0.42 + Math.abs(stride) * 0.24
 	rig.hips.position.y = 1.72 + Math.abs(Math.sin(time * 11)) * 0.075 * intensity
 	rig.hips.rotation.y = Math.sin(time * 11) * 0.08 * intensity
-	rig.body.position.y = 2.52 + Math.abs(Math.sin(time * 11)) * 0.055 * intensity
-	rig.body.rotation.x = forward * 0.13 * intensity
+	rig.body.position.y = -Math.abs(Math.sin(time * 11)) * 0.02 * intensity
+	rig.body.rotation.x = -forward * 0.13 * intensity
 	rig.body.rotation.z = -strafe * 0.14 * intensity
-	rig.head.rotation.z = strafe * 0.08 * intensity
+	rig.neck.rotation.z = strafe * 0.035 * intensity
+	rig.head.rotation.z = strafe * 0.045 * intensity
 	rig.root.rotation.z = -strafe * 0.05 * intensity
 
 	if (strafe !== 0) {

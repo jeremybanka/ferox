@@ -11,6 +11,8 @@ export type PilotRig = {
 	leftKnee: THREE.Group
 	leftLeg: THREE.Group
 	leftShoulder: THREE.Group
+	leftToe: THREE.Group
+	neck: THREE.Group
 	rightArm: THREE.Group
 	rightElbow: THREE.Group
 	rightFoot: THREE.Group
@@ -18,6 +20,7 @@ export type PilotRig = {
 	rightKnee: THREE.Group
 	rightLeg: THREE.Group
 	rightShoulder: THREE.Group
+	rightToe: THREE.Group
 	root: THREE.Group
 	weapon: THREE.Group
 }
@@ -77,7 +80,7 @@ function makeArm(side: -1 | 1): {
 	shoulder: THREE.Group
 } {
 	const shoulder = new THREE.Group()
-	shoulder.position.set(side * 0.78, 2.92, 0)
+	shoulder.position.set(side * 0.78, 1.2, 0)
 	const shoulderJoint = joint(0.27)
 	const pauldron = box(0.46, 0.34, 0.58, armorMaterial)
 	pauldron.position.set(side * 0.08, 0.04, 0)
@@ -117,9 +120,10 @@ function makeLeg(side: -1 | 1): {
 	foot: THREE.Group
 	knee: THREE.Group
 	leg: THREE.Group
+	toe: THREE.Group
 } {
 	const leg = new THREE.Group()
-	leg.position.set(side * 0.37, 1.72, 0)
+	leg.position.set(side * 0.37, 0, 0)
 	leg.add(joint(0.29))
 	const thigh = box(0.48, 0.83, 0.55, armorDarkMaterial)
 	thigh.position.y = -0.49
@@ -144,11 +148,14 @@ function makeLeg(side: -1 | 1): {
 	foot.position.y = -0.86
 	const boot = box(0.5, 0.28, 0.73, armorDarkMaterial)
 	boot.position.set(0, -0.06, -0.11)
-	const toe = box(0.52, 0.2, 0.32, armorMaterial)
-	toe.position.set(0, -0.1, -0.44)
+	const toe = new THREE.Group()
+	toe.position.set(0, -0.1, -0.28)
+	const toePlate = box(0.52, 0.2, 0.32, armorMaterial)
+	toePlate.position.z = -0.16
+	toe.add(toePlate)
 	foot.add(boot, toe)
 	knee.add(foot)
-	return { foot, knee, leg }
+	return { foot, knee, leg, toe }
 }
 
 function makeWeapon(): THREE.Group {
@@ -188,7 +195,8 @@ export function createPilotModel(): PilotRig {
 	root.add(hips)
 
 	const body = new THREE.Group()
-	body.position.y = 2.52
+	const chestShell = new THREE.Group()
+	chestShell.position.y = 0.8
 	const core = box(0.9, 1.05, 0.58, undersuitMaterial)
 	const chest = box(1.2, 0.72, 0.72, armorMaterial)
 	chest.position.set(0, 0.14, -0.03)
@@ -198,23 +206,27 @@ export function createPilotModel(): PilotRig {
 	sternum.position.set(0, 0.11, -0.02)
 	const abdomen = box(0.74, 0.32, 0.5, armorDarkMaterial)
 	abdomen.position.y = -0.5
-	body.add(core, chest, chestInset, sternum, abdomen)
-	root.add(body)
+	chestShell.add(core, chest, chestInset, sternum, abdomen)
+	body.add(chestShell)
+	hips.add(body)
 
 	const backpack = new THREE.Group()
-	backpack.position.set(0, 2.58, 0.48)
+	backpack.position.set(0, 0.86, 0.48)
 	const pack = box(0.8, 0.82, 0.34, armorDarkMaterial)
 	const leftCell = box(0.21, 0.62, 0.4, accentMaterial)
 	leftCell.position.x = -0.38
 	const rightCell = leftCell.clone()
 	rightCell.position.x = 0.38
 	backpack.add(pack, leftCell, rightCell)
-	root.add(backpack)
+	body.add(backpack)
 
+	const neck = new THREE.Group()
+	neck.position.y = 1.45
+	const neckJoint = joint(0.24)
+	neck.add(neckJoint)
+	body.add(neck)
 	const head = new THREE.Group()
-	head.position.y = 3.46
-	const neck = joint(0.24)
-	neck.position.y = -0.4
+	head.position.y = 0.29
 	const helmet = new THREE.Mesh(
 		new THREE.DodecahedronGeometry(0.48, 0),
 		armorMaterial,
@@ -229,16 +241,16 @@ export function createPilotModel(): PilotRig {
 	visor.rotation.x = -0.08
 	const visorBrow = box(0.75, 0.1, 0.18, armorDarkMaterial)
 	visorBrow.position.set(0, 0.22, -0.43)
-	head.add(neck, helmet, helmetCrown, jaw, visor, visorBrow)
-	root.add(head)
+	head.add(helmet, helmetCrown, jaw, visor, visorBrow)
+	neck.add(head)
 
 	const left = makeArm(-1)
 	const right = makeArm(1)
-	root.add(left.shoulder, right.shoulder)
+	body.add(left.shoulder, right.shoulder)
 
 	const leftLeg = makeLeg(-1)
 	const rightLeg = makeLeg(1)
-	root.add(leftLeg.leg, rightLeg.leg)
+	hips.add(leftLeg.leg, rightLeg.leg)
 
 	const weapon = makeWeapon()
 	weapon.position.set(0, -0.2, -0.36)
@@ -262,6 +274,8 @@ export function createPilotModel(): PilotRig {
 		leftKnee: leftLeg.knee,
 		leftLeg: leftLeg.leg,
 		leftShoulder: left.shoulder,
+		leftToe: leftLeg.toe,
+		neck,
 		rightArm: right.arm,
 		rightElbow: right.elbow,
 		rightFoot: rightLeg.foot,
@@ -269,6 +283,7 @@ export function createPilotModel(): PilotRig {
 		rightKnee: rightLeg.knee,
 		rightLeg: rightLeg.leg,
 		rightShoulder: right.shoulder,
+		rightToe: rightLeg.toe,
 		root,
 		weapon,
 	}
@@ -277,11 +292,12 @@ export function createPilotModel(): PilotRig {
 export function resetPilotPose(rig: PilotRig): void {
 	rig.root.position.y = 0
 	rig.root.rotation.set(0, 0, 0)
-	rig.body.position.set(0, 2.52, 0)
+	rig.body.position.set(0, 0, 0)
 	rig.body.rotation.set(0, 0, 0)
 	rig.hips.position.set(0, 1.72, 0)
 	rig.hips.rotation.set(0, 0, 0)
 	rig.head.rotation.set(0, 0, 0)
+	rig.neck.rotation.set(0, 0, 0)
 	rig.leftShoulder.rotation.set(0, 0, 0)
 	rig.rightShoulder.rotation.set(0, 0, 0)
 	rig.leftArm.rotation.set(0, 0, 0)
@@ -296,5 +312,7 @@ export function resetPilotPose(rig: PilotRig): void {
 	rig.rightKnee.rotation.set(0, 0, 0)
 	rig.leftFoot.rotation.set(0, 0, 0)
 	rig.rightFoot.rotation.set(0, 0, 0)
+	rig.leftToe.rotation.set(0, 0, 0)
+	rig.rightToe.rotation.set(0, 0, 0)
 	rig.weapon.rotation.set(0, 0, 0)
 }
