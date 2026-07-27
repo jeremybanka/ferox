@@ -20,7 +20,6 @@ import {
 	TARGET_LOST_FLASH_MS,
 } from "./game-constants.ts"
 import type { GameHudState } from "./game-state.ts"
-import { freeAimLayer } from "./pilot/AimPose.ts"
 import {
 	applyCrouchIdleAnimation,
 	applyCrouchMoveAnimation,
@@ -39,6 +38,7 @@ import {
 	type PilotAnimationLayer,
 } from "./pilot/PilotAnimation.ts"
 import { runAnimationLayer, type RunDirection } from "./pilot/RunAnimation.ts"
+import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 
 type PlayerSnapshot = {
 	aimDirection: [number, number, number]
@@ -52,6 +52,7 @@ type PlayerSnapshot = {
 	velocity: [number, number, number]
 	visorExpression: VisorExpression
 	visorStartedAt: number
+	weaponsFree: boolean
 }
 
 type SpawnSnapshot = {
@@ -95,12 +96,14 @@ type RemotePilot = {
 	velocity: THREE.Vector3
 	visorExpression: VisorExpression
 	visorStartedAt: number
+	weaponsFree: boolean
 	yaw: number
 }
 
 const PLAYER_EYE = 1.72
 const CROUCH_EYE = 1.08
 const ARENA_SIZE = 118
+const WEAPONS_FREE_COOLDOWN_SECONDS = 2
 const REMOTE_MARKER_GEOMETRY = new THREE.OctahedronGeometry(0.2, 0)
 const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
 	color: "#79f5e2",
@@ -161,6 +164,7 @@ export class ArenaGame {
 	#visorExpression: VisorExpression = "boot"
 	#visorHurtUntil = 0
 	#visorStartedAt = Date.now() / 1_000
+	#weaponsFreeUntil = 0
 
 	constructor(options: ArenaGameOptions) {
 		this.#canvas = options.canvas
@@ -289,6 +293,7 @@ export class ArenaGame {
 			velocity: [0, 0, 0],
 			visorExpression: this.#visorExpression,
 			visorStartedAt: this.#visorStartedAt,
+			weaponsFree: false,
 		})
 	}
 
@@ -323,6 +328,7 @@ export class ArenaGame {
 					velocity: new THREE.Vector3(),
 					visorExpression: "boot",
 					visorStartedAt: Date.now() / 1_000,
+					weaponsFree: false,
 					yaw: 0,
 				}
 				this.#remotePlayers.set(snapshot.id, model)
@@ -350,6 +356,7 @@ export class ArenaGame {
 			model.freeAim = snapshot.freeAim
 			model.jump = snapshot.jump
 			model.sprinting = snapshot.sprinting
+			model.weaponsFree = snapshot.weaponsFree === true
 			if (
 				isVisorExpression(snapshot.visorExpression) &&
 				Number.isFinite(snapshot.visorStartedAt)
@@ -736,6 +743,8 @@ export class ArenaGame {
 		)
 			return
 		this.#fireCooldown = 0.13
+		this.#weaponsFreeUntil =
+			performance.now() / 1_000 + WEAPONS_FREE_COOLDOWN_SECONDS
 		this.#ammo -= 1
 		const origin = this.#camera.getWorldPosition(new THREE.Vector3())
 		const direction = this.#getAimDirection(origin)
@@ -1045,9 +1054,6 @@ export class ArenaGame {
 					),
 				)
 			}
-			if (model.freeAim) {
-				layers.push(freeAimLayer(model.pitch, 0))
-			}
 			const lookDirection = { pitch: model.pitch, yaw: 0 }
 			const localAimDirection = model.aimDirection
 				.clone()
@@ -1056,14 +1062,14 @@ export class ArenaGame {
 				pitch: Math.asin(THREE.MathUtils.clamp(localAimDirection.y, -1, 1)),
 				yaw: Math.atan2(-localAimDirection.x, -localAimDirection.z),
 			}
-			const constraints = [lookTowardConstraint(lookDirection, 0.92)]
-			if (!model.sprinting) {
-				constraints.push(
-					pointBlasterConstraint(
-						pointingDirection,
-						model.freeAim ? 0.94 : 0.72,
-					),
+			if (model.weaponsFree) {
+				layers.push(
+					weaponsFreeLayer(pointingDirection.pitch, pointingDirection.yaw),
 				)
+			}
+			const constraints = [lookTowardConstraint(lookDirection, 0.92)]
+			if (model.weaponsFree && !model.sprinting) {
+				constraints.push(pointBlasterConstraint(pointingDirection, 1))
 			}
 			model.animator.update(model.rig, layers, delta, constraints)
 			const visorTime = Date.now() / 1_000
@@ -1113,6 +1119,7 @@ export class ArenaGame {
 			velocity: this.#player.velocity.toArray(),
 			visorExpression: this.#visorExpression,
 			visorStartedAt: this.#visorStartedAt,
+			weaponsFree: now < this.#weaponsFreeUntil,
 		})
 	}
 

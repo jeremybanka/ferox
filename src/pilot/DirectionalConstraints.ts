@@ -8,6 +8,18 @@ export type PilotPointDirection = {
 	yaw: number
 }
 
+export type BlasterAlignment = {
+	closestPoint: THREE.Vector3
+	headOrigin: THREE.Vector3
+	hit: boolean
+	missDistance: number
+	muzzleOrigin: THREE.Vector3
+	rayEnd: THREE.Vector3
+	target: THREE.Vector3
+}
+
+const FORWARD = new THREE.Vector3(0, 0, -1)
+
 function blendAngle(from: number, to: number, weight: number): number {
 	const distance =
 		THREE.MathUtils.euclideanModulo(to - from + Math.PI, Math.PI * 2) - Math.PI
@@ -150,5 +162,68 @@ export function pointBlasterConstraint(
 			-0.12 - local.yaw * 0.34,
 			weight,
 		)
+
+		for (let iteration = 0; iteration < 3; iteration += 1) {
+			rig.root.updateMatrixWorld(true)
+			const headOrigin = rig.head.getWorldPosition(new THREE.Vector3())
+			const headDirection = FORWARD.clone().applyQuaternion(
+				rig.head.getWorldQuaternion(new THREE.Quaternion()),
+			)
+			const target = headOrigin.addScaledVector(headDirection, 10)
+			const muzzleOrigin = rig.muzzle.getWorldPosition(new THREE.Vector3())
+			const desiredDirection = target.sub(muzzleOrigin).normalize()
+			const desiredMuzzleWorld = new THREE.Quaternion().setFromUnitVectors(
+				FORWARD,
+				desiredDirection,
+			)
+			const parentWorld = rig.rightElbow.getWorldQuaternion(
+				new THREE.Quaternion(),
+			)
+			const attachment = rig.weaponMount.quaternion
+				.clone()
+				.multiply(rig.weapon.quaternion)
+				.multiply(rig.muzzle.quaternion)
+			const desiredHandLocal = parentWorld
+				.invert()
+				.multiply(desiredMuzzleWorld)
+				.multiply(attachment.invert())
+			rig.rightHand.quaternion.slerp(desiredHandLocal, weight)
+		}
+	}
+}
+
+export function measureBlasterAlignment(
+	rig: PilotRig,
+	targetDistance = 10,
+	targetRadius = 0.3,
+): BlasterAlignment {
+	rig.root.updateMatrixWorld(true)
+	const headOrigin = rig.head.getWorldPosition(new THREE.Vector3())
+	const headDirection = FORWARD.clone()
+		.applyQuaternion(rig.head.getWorldQuaternion(new THREE.Quaternion()))
+		.normalize()
+	const target = headOrigin
+		.clone()
+		.addScaledVector(headDirection, targetDistance)
+	const muzzleOrigin = rig.muzzle.getWorldPosition(new THREE.Vector3())
+	const muzzleDirection = FORWARD.clone()
+		.applyQuaternion(rig.muzzle.getWorldQuaternion(new THREE.Quaternion()))
+		.normalize()
+	const targetOffset = target.clone().sub(muzzleOrigin)
+	const distanceAlongRay = Math.max(0, targetOffset.dot(muzzleDirection))
+	const closestPoint = muzzleOrigin
+		.clone()
+		.addScaledVector(muzzleDirection, distanceAlongRay)
+	const missDistance = closestPoint.distanceTo(target)
+	return {
+		closestPoint,
+		headOrigin,
+		hit: distanceAlongRay > 0 && missDistance <= targetRadius,
+		missDistance,
+		muzzleOrigin,
+		rayEnd: muzzleOrigin
+			.clone()
+			.addScaledVector(muzzleDirection, targetDistance + 2),
+		target,
 	}
 }

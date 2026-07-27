@@ -269,7 +269,7 @@ pilot-visualizer.class {
 
 		> direction-control {
 			display: grid;
-			grid-template-columns: auto 1fr 1fr;
+			grid-template-columns: auto 1fr 1fr auto;
 			align-items: center;
 			gap: 0.65rem;
 
@@ -298,6 +298,47 @@ pilot-visualizer.class {
 					min-width: 2.4rem;
 					color: #e9fffa;
 					text-align: right;
+				}
+			}
+
+			> output {
+				display: grid;
+				min-width: 7.4rem;
+				padding: 0.35rem 0.55rem;
+				border: 1px solid #ff5b4d;
+				background: rgb(255 91 77 / 0.08);
+
+				> strong {
+					color: #ff8a80;
+					font-size: 0.5rem;
+					letter-spacing: 0.1em;
+				}
+
+				> span {
+					margin-top: 0.12rem;
+					color: #809399;
+					font-size: 0.42rem;
+					letter-spacing: 0.08em;
+				}
+
+				> small {
+					margin-top: 0.16rem;
+					color: #ff8a80;
+					font-size: 0.38rem;
+					letter-spacing: 0.05em;
+
+					&[data-pass="true"] {
+						color: #8affc2;
+					}
+				}
+
+				&[data-hit="true"] {
+					border-color: #56f3a5;
+					background: rgb(86 243 165 / 0.08);
+
+					> strong {
+						color: #8affc2;
+					}
 				}
 			}
 		}

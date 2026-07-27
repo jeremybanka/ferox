@@ -117,7 +117,7 @@ export const RUN_INFLUENCE = {
 	root: 1,
 } as const satisfies PoseInfluence
 
-export const AIM_INFLUENCE = {
+export const WEAPONS_FREE_INFLUENCE = {
 	body: 0.56,
 	head: 1,
 	leftArm: 0.78,

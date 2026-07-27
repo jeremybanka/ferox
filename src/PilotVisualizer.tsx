@@ -3,7 +3,6 @@ import type { VNode } from "preact"
 import { useEffect, useRef, useState } from "preact/hooks"
 
 import css from "./PilotVisualizer.module.css"
-import { freeAimLayer } from "./pilot/AimPose.ts"
 import {
 	applyCrouchIdleAnimation,
 	applyCrouchMoveAnimation,
@@ -14,6 +13,7 @@ import {
 } from "./pilot/DoubleJumpAnimation.ts"
 import {
 	lookTowardConstraint,
+	measureBlasterAlignment,
 	pointBlasterConstraint,
 	waveTowardConstraint,
 	type PilotPointDirection,
@@ -35,6 +35,7 @@ import {
 	type RunDirection,
 } from "./pilot/RunAnimation.ts"
 import { waveAnimationLayer } from "./pilot/WaveAnimation.ts"
+import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 
 type BaseAnimation =
 	| RunDirection
@@ -44,7 +45,7 @@ type BaseAnimation =
 	| "idle"
 	| "jump"
 
-type OverlayAnimation = "free-aim" | "wave"
+type OverlayAnimation = "wave" | "weapons-free"
 
 type AnimationMarker = {
 	label: string
@@ -63,7 +64,7 @@ const BASE_ANIMATIONS: readonly BaseAnimation[] = [
 	"crouch-run",
 ]
 
-const OVERLAY_ANIMATIONS: readonly OverlayAnimation[] = ["free-aim", "wave"]
+const OVERLAY_ANIMATIONS: readonly OverlayAnimation[] = ["weapons-free", "wave"]
 
 const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	backward: 1,
@@ -92,6 +93,17 @@ type PreviewControls = {
 	targetPitch: number
 	targetYaw: number
 	yaw: number
+}
+
+type AlignmentStatus = {
+	hit: boolean
+	missDistance: number
+}
+
+type AlignmentSweepStatus = {
+	maxMissDistance: number
+	passed: boolean
+	samples: number
 }
 
 function getAnimationMarkers(
@@ -176,8 +188,8 @@ function applyPreviewPose(
 			}),
 		)
 	}
-	if (overlays.includes("free-aim")) {
-		layers.push(freeAimLayer(direction.pitch, direction.yaw))
+	if (overlays.includes("weapons-free")) {
+		layers.push(weaponsFreeLayer(direction.pitch, direction.yaw))
 	}
 	if (overlays.includes("wave")) {
 		layers.push(waveAnimationLayer(progress))
@@ -186,8 +198,8 @@ function applyPreviewPose(
 	if (overlays.includes("wave")) {
 		constraints.push(waveTowardConstraint(direction, 0.9))
 	}
-	if (overlays.includes("free-aim")) {
-		constraints.push(pointBlasterConstraint(direction, 0.88))
+	if (overlays.includes("weapons-free")) {
+		constraints.push(pointBlasterConstraint(direction, 1))
 	}
 	applyPilotAnimationLayers(rig, layers, constraints)
 }
@@ -216,7 +228,7 @@ function applyPreviewVisor(
 	if (overlays.includes("wave")) {
 		source = "emote"
 		expression = "happy"
-	} else if (overlays.includes("free-aim")) {
+	} else if (overlays.includes("weapons-free")) {
 		source = "combat"
 		expression = "focus"
 	} else if (baseAnimation === "double-jump") {
@@ -245,6 +257,9 @@ export function PilotVisualizer(): VNode {
 	const [yaw, setYaw] = useState(0.42)
 	const [targetPitch, setTargetPitch] = useState(0)
 	const [targetYaw, setTargetYaw] = useState(0)
+	const [alignment, setAlignment] = useState<AlignmentStatus | null>(null)
+	const [alignmentSweep, setAlignmentSweep] =
+		useState<AlignmentSweepStatus | null>(null)
 	const [isPlaying, setIsPlaying] = useState(true)
 	const [sampleInterval, setSampleInterval] = useState<SampleInterval>(0.0833)
 	const [selectedTime, setSelectedTime] = useState(0)
@@ -355,10 +370,59 @@ export function PilotVisualizer(): VNode {
 		const grid = new THREE.GridHelper(14, 28, "#4fe1ca", "#293f48")
 		grid.position.y = -0.14
 		scene.add(grid)
+		const targetMaterial = new THREE.MeshBasicMaterial({
+			color: "#ff5b4d",
+			side: THREE.DoubleSide,
+			toneMapped: false,
+		})
+		const targetMarker = new THREE.Mesh(
+			new THREE.RingGeometry(0.22, 0.34, 24),
+			targetMaterial,
+		)
+		targetMarker.visible = false
+		const hitscanGeometry = new THREE.BufferGeometry()
+		hitscanGeometry.setAttribute(
+			"position",
+			new THREE.BufferAttribute(new Float32Array(6), 3),
+		)
+		const hitscanMaterial = new THREE.LineBasicMaterial({
+			color: "#ff5b4d",
+			toneMapped: false,
+		})
+		const hitscan = new THREE.Line(hitscanGeometry, hitscanMaterial)
+		hitscan.visible = false
+		scene.add(targetMarker, hitscan)
+
+		let sweepSamples = 0
+		let maxSweepMiss = 0
+		let sweepPassed = true
+		for (const marker of RUN_KEYFRAME_MARKERS) {
+			for (let pitch = -45; pitch <= 40; pitch += 5) {
+				for (let yaw = -50; yaw <= 50; yaw += 5) {
+					applyPreviewPose(rig, "forward", ["weapons-free"], marker.progress, {
+						pitch: THREE.MathUtils.degToRad(pitch),
+						yaw: THREE.MathUtils.degToRad(yaw),
+					})
+					const measured = measureBlasterAlignment(rig)
+					sweepSamples += 1
+					maxSweepMiss = Math.max(maxSweepMiss, measured.missDistance)
+					sweepPassed &&= measured.hit
+				}
+			}
+		}
+		setAlignmentSweep({
+			maxMissDistance: maxSweepMiss,
+			passed: sweepPassed,
+			samples: sweepSamples,
+		})
 
 		let frame = 0
 		let previousTime = performance.now()
 		let lastTimelineUpdate = 0
+		let lastAlignmentUpdate = 0
+		const cameraViewCenter = new THREE.Vector3()
+		const cameraViewDirection = new THREE.Vector3()
+		const cameraViewSide = new THREE.Vector3()
 		const resize = (): void => {
 			const width = canvas.clientWidth
 			const height = canvas.clientHeight
@@ -393,13 +457,69 @@ export function PilotVisualizer(): VNode {
 				},
 			)
 			rig.root.rotation.y = controls.yaw
+			const showAlignment = controls.overlays.includes("weapons-free")
+			targetMarker.visible = showAlignment
+			hitscan.visible = showAlignment
+			if (showAlignment) {
+				const measured = measureBlasterAlignment(rig)
+				const color = measured.hit ? "#56f3a5" : "#ff5b4d"
+				targetMaterial.color.set(color)
+				hitscanMaterial.color.set(color)
+				targetMarker.position.copy(measured.target)
+				targetMarker.quaternion.copy(
+					rig.head.getWorldQuaternion(new THREE.Quaternion()),
+				)
+				const positions = hitscanGeometry.getAttribute("position")
+				positions.setXYZ(
+					0,
+					measured.muzzleOrigin.x,
+					measured.muzzleOrigin.y,
+					measured.muzzleOrigin.z,
+				)
+				positions.setXYZ(
+					1,
+					measured.rayEnd.x,
+					measured.rayEnd.y,
+					measured.rayEnd.z,
+				)
+				positions.needsUpdate = true
+				cameraViewCenter
+					.copy(measured.muzzleOrigin)
+					.add(measured.target)
+					.multiplyScalar(0.5)
+				cameraViewDirection
+					.copy(measured.target)
+					.sub(measured.muzzleOrigin)
+					.normalize()
+				cameraViewSide
+					.set(-cameraViewDirection.z, 0, cameraViewDirection.x)
+					.normalize()
+				camera.position
+					.copy(cameraViewCenter)
+					.addScaledVector(cameraViewSide, 13)
+				camera.position.y += 4
+				camera.lookAt(cameraViewCenter)
+				if (now - lastAlignmentUpdate >= 75) {
+					lastAlignmentUpdate = now
+					setAlignment({
+						hit: measured.hit,
+						missDistance: measured.missDistance,
+					})
+				}
+			} else if (now - lastAlignmentUpdate >= 75) {
+				lastAlignmentUpdate = now
+				setAlignment(null)
+			}
+			if (!showAlignment) {
+				camera.position.set(6.2, 4.15, -8.75)
+				camera.lookAt(0, 2 + rig.root.position.y, 0)
+			}
 			applyPreviewVisor(
 				rig,
 				controls.baseAnimation,
 				controls.overlays,
 				now / 1_000,
 			)
-			camera.lookAt(0, 2 + rig.root.position.y, 0)
 			renderer.render(scene, camera)
 		}
 		window.addEventListener("resize", resize)
@@ -408,6 +528,10 @@ export function PilotVisualizer(): VNode {
 		return () => {
 			cancelAnimationFrame(frame)
 			window.removeEventListener("resize", resize)
+			hitscanGeometry.dispose()
+			hitscanMaterial.dispose()
+			targetMarker.geometry.dispose()
+			targetMaterial.dispose()
 			renderer.dispose()
 		}
 	}, [])
@@ -627,6 +751,29 @@ export function PilotVisualizer(): VNode {
 							{Math.round(THREE.MathUtils.radToDeg(targetPitch))}°
 						</output>
 					</label>
+					<output aria-live="polite" data-hit={alignment?.hit ?? false}>
+						<strong>
+							{alignment === null
+								? "STANDBY"
+								: alignment.hit
+									? "INTERSECT"
+									: "MISS"}
+						</strong>
+						<span>
+							{alignment === null
+								? "ENABLE WEAPONS-FREE"
+								: `${(alignment.missDistance * 100).toFixed(1)} cm`}
+						</span>
+						<small data-pass={alignmentSweep?.passed ?? false}>
+							{alignmentSweep === null
+								? "RANGE SWEEP…"
+								: `${alignmentSweep.passed ? "RANGE PASS" : "RANGE FAIL"} · ${
+										alignmentSweep.samples
+									} · ${(alignmentSweep.maxMissDistance * 100).toFixed(
+										2,
+									)} cm max`}
+						</small>
+					</output>
 				</direction-control>
 				<keyframe-control>
 					<strong>KEYFRAMES</strong>

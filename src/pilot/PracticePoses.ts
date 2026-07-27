@@ -1,4 +1,3 @@
-import { applyFreeAimPose } from "./AimPose.ts"
 import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
@@ -211,7 +210,6 @@ function applyStance(rig: PilotRig, stance: StancePose): void {
 function applyArms(rig: PilotRig, arms: ArmPose): void {
 	switch (arms) {
 		case "aim": {
-			// applyFreeAimPose(rig, -0.08, 0.04, 1)
 			break
 		}
 		case "guard": {

@@ -29,6 +29,7 @@ type PlayerSnapshot = {
 	velocity: [number, number, number]
 	visorExpression: VisorExpression
 	visorStartedAt: number
+	weaponsFree: boolean
 }
 
 type MovePayload = Omit<PlayerSnapshot, "id">
@@ -154,6 +155,7 @@ realtime(
 			velocity: [0, 0, 0],
 			visorExpression: "boot",
 			visorStartedAt: Date.now() / 1_000,
+			weaponsFree: false,
 		})
 		const onReady = (): void => {
 			gameSocket.emit("arena:spawn", spawnPayload)
@@ -170,6 +172,7 @@ realtime(
 				!Array.isArray(payload.position) ||
 				!Array.isArray(payload.rotation) ||
 				!Array.isArray(payload.velocity) ||
+				typeof payload.weaponsFree !== "boolean" ||
 				payload.aimDirection.length !== 3 ||
 				payload.position.length !== 3 ||
 				payload.rotation.length !== 2 ||
