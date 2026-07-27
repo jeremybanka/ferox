@@ -20,6 +20,10 @@ type PreviewMode =
 	| "double-jump"
 	| "free-aim"
 	| "jump"
+	| "contact"
+	| "passing"
+	| "push"
+	| "flight"
 
 const MODES: readonly PreviewMode[] = [
 	"forward",
@@ -31,6 +35,10 @@ const MODES: readonly PreviewMode[] = [
 	"crouch",
 	"crouch-run",
 	"free-aim",
+	"contact",
+	"passing",
+	"push",
+	"flight",
 ]
 
 const MODE_DURATION_SECONDS: Readonly<Record<PreviewMode, number>> = {
@@ -43,9 +51,13 @@ const MODE_DURATION_SECONDS: Readonly<Record<PreviewMode, number>> = {
 	jump: 1.9,
 	left: 1,
 	right: 1,
+	contact: 1,
+	passing: 1,
+	push: 1,
+	flight: 1,
 }
 
-type SampleInterval = 0.05 | 0.1
+type SampleInterval = 0.167 | 0.0833
 
 const FILM_FRAME_WIDTH = 192
 const FILM_FRAME_HEIGHT = 120
@@ -98,8 +110,16 @@ function applyPreviewPose(
 		applyCrouchIdleAnimation(rig, (progress * Math.PI * 2) / 2.6, 1)
 	} else if (mode === "crouch-run") {
 		applyCrouchMoveAnimation(rig, (progress * Math.PI * 2) / 7.6, 1, "forward")
-	} else {
+	} else if (mode === "free-aim") {
 		applyFreeAimPose(rig, -0.18, 0.3, 1)
+	} else if (mode === "contact") {
+		applyRunAnimation(rig, 0, 1, "forward")
+	} else if (mode === "passing") {
+		applyRunAnimation(rig, 0.125, 1, "forward")
+	} else if (mode === "push") {
+		applyRunAnimation(rig, 0.208, 1, "forward")
+	} else {
+		applyRunAnimation(rig, 0.33, 1, "forward")
 	}
 }
 
@@ -112,7 +132,7 @@ export function PilotVisualizer(): VNode {
 	const [speed, setSpeed] = useState(1)
 	const [yaw, setYaw] = useState(0.42)
 	const [isPlaying, setIsPlaying] = useState(true)
-	const [sampleInterval, setSampleInterval] = useState<SampleInterval>(0.1)
+	const [sampleInterval, setSampleInterval] = useState<SampleInterval>(0.0833)
 	const [selectedTime, setSelectedTime] = useState(0)
 	const controlsRef = useRef<PreviewControls>({
 		isPlaying,
@@ -452,7 +472,7 @@ export function PilotVisualizer(): VNode {
 					</section>
 					<fieldset>
 						<legend>Frame interval</legend>
-						{([0.1, 0.05] as const).map((interval) => (
+						{([0.167, 0.0833] as const).map((interval) => (
 							<button
 								key={interval}
 								type="button"

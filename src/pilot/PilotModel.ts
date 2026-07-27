@@ -161,7 +161,7 @@ function makeLeg(side: -1 | 1): {
 
 	const foot = new THREE.Group()
 	foot.position.y = -0.86
-	const boot = box(0.5, 0.28, 0.73, armorDarkMaterial)
+	const boot = box(0.5, 0.28, 0.73, armorMaterial)
 	boot.position.set(0, -0.06, -0.11)
 	const toe = new THREE.Group()
 	toe.position.set(0, -0.1, -0.28)

@@ -8,6 +8,7 @@ export type RunDirection = "backward" | "forward" | "left" | "right"
 type ArmPose = {
 	elbow: number
 	swing: number
+	// shoulder: number
 }
 
 type LegPose = {
@@ -29,14 +30,9 @@ type RunPose = {
 	rightLeg: LegPose
 }
 
-function leg(
-	hip: number,
-	knee: number,
-	worldFootAngle: number,
-	toe: number,
-): LegPose {
+function leg(hip: number, knee: number, foot: number, toe: number): LegPose {
 	return {
-		foot: worldFootAngle - hip - knee,
+		foot,
 		hip,
 		knee,
 		toe,
@@ -49,22 +45,10 @@ const contactPose: RunPose = {
 	hipsRoll: -0.035,
 	hipsY: 0.02,
 	hipsYaw: 0.11,
-	leftArm: { elbow: 0.62, swing: -0.42 },
-	leftLeg: leg(0.62, -0.58, 0, 0),
-	rightArm: { elbow: 0.48, swing: 0.14 },
-	rightLeg: leg(-0.5, -0.54, -0.34, 0.28),
-}
-
-const compressionPose: RunPose = {
-	bodyY: -0.035,
-	bodyYaw: -0.045,
-	hipsRoll: -0.055,
-	hipsY: -0.08,
-	hipsYaw: 0.055,
-	leftArm: { elbow: 0.7, swing: -0.28 },
-	leftLeg: leg(0.38, -1.05, 0, 0.05),
-	rightArm: { elbow: 0.52, swing: 0.09 },
-	rightLeg: leg(-0.28, -1.02, -0.18, 0.34),
+	leftArm: { elbow: 1.62, swing: -0.6 },
+	leftLeg: leg(1.2, -0, 0, 0),
+	rightArm: { elbow: 1.7, swing: 0.04 },
+	rightLeg: leg(0, -1.2, 0, 0),
 }
 
 const passingPose: RunPose = {
@@ -73,10 +57,22 @@ const passingPose: RunPose = {
 	hipsRoll: -0.025,
 	hipsY: 0.015,
 	hipsYaw: -0.025,
-	leftArm: { elbow: 0.78, swing: 0.04 },
-	leftLeg: leg(-0.18, -0.4, 0, 0.03),
-	rightArm: { elbow: 0.5, swing: -0.025 },
-	rightLeg: leg(0.2, -1.2, 0.1, 0.4),
+	leftArm: { elbow: 1.78, swing: -0.5 },
+	leftLeg: leg(1.1, -0.4, 0.05, 0.03),
+	rightArm: { elbow: 1.65, swing: -0.025 },
+	rightLeg: leg(0.4, -1.7, 0.1, 0.4),
+}
+
+const pushPose: RunPose = {
+	bodyY: -0.035,
+	bodyYaw: -0.045,
+	hipsRoll: -0.055,
+	hipsY: -0.08,
+	hipsYaw: 0.055,
+	leftArm: { elbow: 1.7, swing: -0.1 },
+	leftLeg: leg(0, -0.1, 0, 0.7),
+	rightArm: { elbow: 1.7, swing: 0.09 },
+	rightLeg: leg(1.3, -1.5, -0.18, 0.34),
 }
 
 const flightPose: RunPose = {
@@ -85,10 +81,10 @@ const flightPose: RunPose = {
 	hipsRoll: 0.035,
 	hipsY: 0.3,
 	hipsYaw: -0.1,
-	leftArm: { elbow: 0.68, swing: 0.38 },
-	leftLeg: leg(-0.56, -0.66, -0.24, 0.3),
-	rightArm: { elbow: 0.46, swing: -0.13 },
-	rightLeg: leg(0.5, -0.7, 0.12, 0.18),
+	leftArm: { elbow: 1.2, swing: 0.4 },
+	leftLeg: leg(-0.56, -0.2, -0.24, 0.3),
+	rightArm: { elbow: 1.65, swing: -0.13 },
+	rightLeg: leg(1.3, -1, 0.12, 0.18),
 }
 
 function mirrorPose(pose: RunPose): RunPose {
@@ -106,13 +102,13 @@ function mirrorPose(pose: RunPose): RunPose {
 
 const RUN_KEYFRAMES: ReadonlyArray<readonly [number, RunPose]> = [
 	[0, contactPose],
-	[0.125, compressionPose],
-	[0.25, passingPose],
-	[0.375, flightPose],
+	[0.125, passingPose],
+	[0.208, pushPose],
+	[0.33, flightPose],
 	[0.5, mirrorPose(contactPose)],
-	[0.625, mirrorPose(compressionPose)],
-	[0.75, mirrorPose(passingPose)],
-	[0.875, mirrorPose(flightPose)],
+	[0.625, mirrorPose(passingPose)],
+	[0.708, mirrorPose(pushPose)],
+	[0.83, mirrorPose(flightPose)],
 	[1, contactPose],
 ]
 
@@ -204,16 +200,21 @@ export function applyRunAnimation(
 	rig.hips.position.y = 1.72 + pose.hipsY * intensity
 	rig.hips.rotation.y = pose.hipsYaw * intensity
 	rig.hips.rotation.z = (pose.hipsRoll - strafe * 0.08) * intensity
+	rig.hips.rotation.x = -0.55 * intensity
 	rig.body.position.y = pose.bodyY * intensity
-	rig.body.rotation.x = -forward * 0.15 * intensity
+	rig.body.rotation.x = -forward * 0.1 * intensity
 	rig.body.rotation.y = pose.bodyYaw * intensity
 	rig.body.rotation.z = -strafe * 0.13 * intensity
 
 	// The shoulders arrive a fraction behind the pelvis, while the head
 	// stabilizes toward travel direction instead of following the pendulum.
-	rig.leftShoulder.rotation.y = -pose.bodyYaw * 0.38 * intensity
-	rig.rightShoulder.rotation.y = -pose.bodyYaw * 0.3 * intensity
+	rig.leftShoulder.rotation.y = -0.6 * intensity
+	rig.leftShoulder.rotation.z = -0.6 * intensity
+	rig.rightShoulder.rotation.y = 0.6 * intensity
+	rig.rightShoulder.rotation.z = 0.2 * intensity
+	// rig.rightShoulder.rotation.x = -pose.bodyYaw * 0.3 * intensity
 	rig.neck.rotation.y = -pose.bodyYaw * 0.24 * intensity
+	rig.neck.rotation.x = 0.55 * intensity
 	rig.head.rotation.y = -pose.bodyYaw * 0.34 * intensity
 	rig.neck.rotation.z = strafe * 0.03 * intensity
 	rig.head.rotation.z = strafe * 0.04 * intensity
