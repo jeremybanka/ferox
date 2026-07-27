@@ -5,7 +5,10 @@ import type { Socket } from "socket.io-client"
 
 import { ArenaGame } from "./ArenaGame.ts"
 import css from "./AppShell.module.css"
-import { DRONE_POPULATION_CAP } from "./game-constants.ts"
+import {
+	DRONE_POPULATION_CAP,
+	PLAYER_POPULATION_CAP,
+} from "./game-constants.ts"
 import { arenaSeedAtom, gameHudStateAtom } from "./game-state.ts"
 
 type AppShellProps = {
@@ -55,7 +58,9 @@ export function AppShell({ socket }: AppShellProps): VNode {
 								: hud.connection.toUpperCase()}
 						</span>
 						<i aria-hidden="true">•</i>
-						<span>{hud.players}/12 PILOTS</span>
+						<span>
+							{hud.players}/{PLAYER_POPULATION_CAP} PILOTS
+						</span>
 						<i aria-hidden="true">•</i>
 						<span>
 							{hud.drones}/{DRONE_POPULATION_CAP} DRONES

@@ -39,6 +39,11 @@ type BlastSnapshot = {
 	origin: [number, number, number]
 }
 
+type SpawnSnapshot = {
+	position: [number, number]
+	yaw: number
+}
+
 type ArenaGameOptions = {
 	canvas: HTMLCanvasElement
 	onHud: (state: GameHudState) => void
@@ -78,6 +83,11 @@ type RemotePilot = {
 const PLAYER_EYE = 1.72
 const CROUCH_EYE = 1.08
 const ARENA_SIZE = 118
+const REMOTE_MARKER_GEOMETRY = new THREE.OctahedronGeometry(0.2, 0)
+const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
+	color: "#79f5e2",
+	toneMapped: false,
+})
 
 function seededValue(seed: number, x: number, z: number): number {
 	const value = Math.sin(x * 127.1 + z * 311.7 + seed * 0.000_013) * 43_758.5453
@@ -148,6 +158,9 @@ export class ArenaGame {
 	#shotHeld = false
 	#slide = false
 	#snapshotElapsed = 0
+	#spawnX = 0
+	#spawnYaw = Math.PI
+	#spawnZ = 13
 	#sprinting = false
 	#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
 	#targetLostFlashRemaining = 0
@@ -207,6 +220,7 @@ export class ArenaGame {
 		this.#socket.off("connect", this.#onConnect)
 		this.#socket.off("disconnect", this.#onDisconnect)
 		this.#socket.off("arena:players", this.#onPlayers)
+		this.#socket.off("arena:spawn", this.#onSpawn)
 		this.#socket.off("arena:blast", this.#onRemoteBlast)
 		this.#drones.dispose()
 		this.#renderer.dispose()
@@ -251,10 +265,34 @@ export class ArenaGame {
 
 	readonly #onConnect = (): void => {
 		this.#connected = true
+		this.#socket.emit("arena:ready")
 	}
 
 	readonly #onDisconnect = (): void => {
 		this.#connected = false
+	}
+
+	readonly #onSpawn = (spawn: SpawnSnapshot): void => {
+		const [x, z] = spawn.position
+		if (![x, z, spawn.yaw].every(Number.isFinite)) return
+		this.#spawnX = x
+		this.#spawnZ = z
+		this.#spawnYaw = spawn.yaw
+		this.#player.position.set(x, this.#heightAt(x, z) + PLAYER_EYE, z)
+		this.#player.velocity.set(0, 0, 0)
+		this.#player.yaw = spawn.yaw
+		this.#player.pitch = -0.04
+		this.#camera.position.copy(this.#player.position)
+		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
+		this.#socket.emit("arena:move", {
+			crouching: false,
+			freeAim: false,
+			jump: 0,
+			position: this.#player.position.toArray(),
+			rotation: [this.#player.yaw, this.#player.pitch],
+			sprinting: false,
+			velocity: [0, 0, 0],
+		})
 	}
 
 	readonly #onPlayers = (players: PlayerSnapshot[]): void => {
@@ -263,9 +301,17 @@ export class ArenaGame {
 			if (snapshot.id === this.#socket.id) continue
 			active.add(snapshot.id)
 			let model = this.#remotePlayers.get(snapshot.id)
+			let isNew = false
 			if (model === undefined) {
 				const rig = createPilotModel()
 				rig.root.scale.setScalar(0.54)
+				const marker = new THREE.Mesh(
+					REMOTE_MARKER_GEOMETRY,
+					REMOTE_MARKER_MATERIAL,
+				)
+				marker.position.y = 4.45
+				marker.rotation.y = Math.PI / 4
+				rig.root.add(marker)
 				model = {
 					crouching: false,
 					freeAim: false,
@@ -280,6 +326,7 @@ export class ArenaGame {
 				}
 				this.#remotePlayers.set(snapshot.id, model)
 				this.#scene.add(rig.root)
+				isNew = true
 			}
 			model.target
 				.set(...snapshot.position)
@@ -287,6 +334,7 @@ export class ArenaGame {
 					new THREE.Vector3(0, 1, 0),
 					snapshot.crouching ? -CROUCH_EYE : -PLAYER_EYE,
 				)
+			if (isNew) model.position.copy(model.target)
 			model.velocity.set(...snapshot.velocity)
 			model.yaw = snapshot.rotation[0]
 			model.pitch = snapshot.rotation[1]
@@ -319,6 +367,7 @@ export class ArenaGame {
 		this.#socket.on("connect", this.#onConnect)
 		this.#socket.on("disconnect", this.#onDisconnect)
 		this.#socket.on("arena:players", this.#onPlayers)
+		this.#socket.on("arena:spawn", this.#onSpawn)
 		this.#socket.on("arena:blast", this.#onRemoteBlast)
 		this.#resize()
 	}
@@ -727,8 +776,15 @@ export class ArenaGame {
 		if (this.#health > 0) return
 		this.#health = 100
 		this.#score = Math.max(0, this.#score - 1)
-		this.#player.position.set(0, this.#heightAt(0, 13) + PLAYER_EYE, 13)
+		this.#player.position.set(
+			this.#spawnX,
+			this.#heightAt(this.#spawnX, this.#spawnZ) + PLAYER_EYE,
+			this.#spawnZ,
+		)
 		this.#player.velocity.set(0, 0, 0)
+		this.#player.yaw = this.#spawnYaw
+		this.#player.pitch = -0.04
+		this.#player.jumps = 0
 	}
 
 	#updateCamera(delta: number): void {

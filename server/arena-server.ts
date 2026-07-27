@@ -4,6 +4,11 @@ import { realtime } from "atom.io/realtime-server"
 import type { UserKey } from "atom.io/realtime"
 import { Server, type Socket as IoSocket } from "socket.io"
 
+import {
+	PLAYER_SPAWN_ORDER,
+	PLAYER_SPAWN_POINTS,
+} from "../src/game-constants.ts"
+
 type PlayerSnapshot = {
 	crouching: boolean
 	freeAim: boolean
@@ -19,6 +24,10 @@ type MovePayload = Omit<PlayerSnapshot, "id">
 type BlastPayload = {
 	direction: [number, number, number]
 	origin: [number, number, number]
+}
+type SpawnPayload = {
+	position: [number, number]
+	yaw: number
 }
 
 const port = Number(process.env["PORT"] ?? 4_317)
@@ -36,6 +45,7 @@ const io = new Server(httpServer, {
 	serveClient: false,
 })
 const players = new Map<string, PlayerSnapshot>()
+const playerSpawnSlots = new Map<string, number>()
 
 realtime(
 	io,
@@ -54,16 +64,35 @@ realtime(
 	({ socket }) => {
 		const gameSocket = socket as unknown as IoSocket
 		const socketId = gameSocket.id
+		const occupiedSlots = new Set(playerSpawnSlots.values())
+		const availableSlot = PLAYER_SPAWN_ORDER.find(
+			(index) => !occupiedSlots.has(index),
+		)
+		const spawnIndex =
+			availableSlot === undefined
+				? players.size % PLAYER_SPAWN_POINTS.length
+				: availableSlot
+		const [spawnX, spawnZ, spawnYaw] = PLAYER_SPAWN_POINTS[spawnIndex]!
+		const spawnPayload = {
+			position: [spawnX, spawnZ],
+			yaw: spawnYaw,
+		} satisfies SpawnPayload
+		playerSpawnSlots.set(socketId, spawnIndex)
 		players.set(socketId, {
 			crouching: false,
 			freeAim: false,
 			id: socketId,
 			jump: 0,
-			position: [0, 8, 13],
-			rotation: [Math.PI, 0],
+			position: [spawnX, 8, spawnZ],
+			rotation: [spawnYaw, 0],
 			sprinting: false,
 			velocity: [0, 0, 0],
 		})
+		const onReady = (): void => {
+			gameSocket.emit("arena:spawn", spawnPayload)
+		}
+		gameSocket.on("arena:ready", onReady)
+		onReady()
 		io.emit("arena:players", [...players.values()])
 
 		const onMove = (payload: MovePayload): void => {
@@ -83,7 +112,9 @@ realtime(
 
 		return () => {
 			players.delete(socketId)
+			playerSpawnSlots.delete(socketId)
 			io.emit("arena:players", [...players.values()])
+			gameSocket.off("arena:ready", onReady)
 			gameSocket.off("arena:move", onMove)
 			gameSocket.off("arena:blast", onBlast)
 		}
