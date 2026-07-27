@@ -1,3 +1,4 @@
+import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
 function smoothstep(value: number): number {
@@ -82,10 +83,5 @@ export function applyDoubleJumpAnimation(
 	rig.body.position.z = -boost * 0.08
 	rig.hips.position.z = boost * 0.045
 	rig.leftHand.rotation.x = keyframe(phase, -0.08, 0.18, 0)
-	rig.rightHand.rotation.x = keyframe(phase, -0.06, 0.14, 0)
-	rig.weapon.rotation.x = -(
-		rig.rightShoulder.rotation.x +
-		rig.rightArm.rotation.x +
-		rig.rightElbow.rotation.x
-	)
+	alignBlasterHand(rig, keyframe(phase, -0.06, 0.14, 0))
 }

@@ -23,6 +23,7 @@ export type PilotRig = {
 	rightToe: THREE.Group
 	root: THREE.Group
 	weapon: THREE.Group
+	weaponMount: THREE.Group
 }
 
 const armorMaterial = new THREE.MeshStandardMaterial({
@@ -160,6 +161,8 @@ function makeLeg(side: -1 | 1): {
 
 function makeWeapon(): THREE.Group {
 	const weapon = new THREE.Group()
+	weapon.name = "blaster trigger attachment"
+	const triggerPoint = new THREE.Vector3(0, -0.1, 0.04)
 	const body = box(0.25, 0.26, 0.88, armorDarkMaterial)
 	const shroud = box(0.31, 0.18, 0.48, accentMaterial)
 	shroud.position.set(0, 0.06, -0.17)
@@ -178,7 +181,12 @@ function makeWeapon(): THREE.Group {
 	const grip = box(0.15, 0.38, 0.2, undersuitMaterial)
 	grip.position.set(0, -0.25, 0.12)
 	grip.rotation.x = -0.22
-	weapon.add(body, shroud, barrel, emitter, grip)
+	const trigger = box(0.045, 0.1, 0.05, undersuitMaterial)
+	trigger.position.copy(triggerPoint)
+	weapon.add(body, shroud, barrel, emitter, grip, trigger)
+	for (const part of weapon.children) {
+		part.position.sub(triggerPoint)
+	}
 	return weapon
 }
 
@@ -253,8 +261,12 @@ export function createPilotModel(): PilotRig {
 	hips.add(leftLeg.leg, rightLeg.leg)
 
 	const weapon = makeWeapon()
-	weapon.position.set(0, -0.2, -0.36)
-	right.hand.add(weapon)
+	const weaponMount = new THREE.Group()
+	weaponMount.name = "right index-finger weapon socket"
+	weaponMount.position.set(0, -0.08, -0.16)
+	weaponMount.add(weapon)
+	// Trigger and index-finger sockets coincide. Aim and recoil are wrist motion.
+	right.hand.add(weaponMount)
 
 	root.traverse((child) => {
 		if (child instanceof THREE.Mesh) {
@@ -286,6 +298,7 @@ export function createPilotModel(): PilotRig {
 		rightToe: rightLeg.toe,
 		root,
 		weapon,
+		weaponMount,
 	}
 }
 
@@ -314,5 +327,8 @@ export function resetPilotPose(rig: PilotRig): void {
 	rig.rightFoot.rotation.set(0, 0, 0)
 	rig.leftToe.rotation.set(0, 0, 0)
 	rig.rightToe.rotation.set(0, 0, 0)
+	rig.weaponMount.position.set(0, -0.08, -0.16)
+	rig.weaponMount.rotation.set(0, 0, 0)
+	rig.weapon.position.set(0, 0, 0)
 	rig.weapon.rotation.set(0, 0, 0)
 }

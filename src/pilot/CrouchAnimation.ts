@@ -1,3 +1,4 @@
+import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
 import type { RunDirection } from "./RunAnimation.ts"
 
@@ -43,12 +44,7 @@ function applyGuardedCrouch(rig: PilotRig, weight: number): void {
 	rig.rightArm.rotation.z = 0.2 * amount
 	rig.rightElbow.rotation.x = 1.18 * amount
 	rig.rightElbow.rotation.z = 0.08 * amount
-	rig.rightHand.rotation.x = 0.16 * amount
-	rig.weapon.rotation.x = -(
-		rig.rightShoulder.rotation.x +
-		rig.rightArm.rotation.x +
-		rig.rightElbow.rotation.x
-	)
+	alignBlasterHand(rig, 0.16 * amount)
 }
 
 export function applyCrouchIdleAnimation(
@@ -69,12 +65,7 @@ export function applyCrouchIdleAnimation(
 	rig.head.rotation.y = scan * 0.06 * amount
 	rig.leftElbow.rotation.x += breathing * 0.025 * amount
 	rig.rightElbow.rotation.x -= breathing * 0.02 * amount
-	rig.weapon.rotation.y = scan * 0.018 * amount
-	rig.weapon.rotation.x = -(
-		rig.rightShoulder.rotation.x +
-		rig.rightArm.rotation.x +
-		rig.rightElbow.rotation.x
-	)
+	alignBlasterHand(rig, 0.16 * amount, scan * 0.018 * amount)
 }
 
 export function applyCrouchMoveAnimation(
@@ -131,10 +122,5 @@ export function applyCrouchMoveAnimation(
 	rig.rightShoulder.rotation.y = stride * 0.04 * amount
 	rig.leftElbow.rotation.x += step * 0.06 * amount
 	rig.rightElbow.rotation.x += step * 0.04 * amount
-	rig.weapon.rotation.y = -strafe * 0.04 * amount
-	rig.weapon.rotation.x = -(
-		rig.rightShoulder.rotation.x +
-		rig.rightArm.rotation.x +
-		rig.rightElbow.rotation.x
-	)
+	alignBlasterHand(rig, 0.16 * amount, -strafe * 0.04 * amount)
 }

@@ -1,5 +1,6 @@
 import * as THREE from "three"
 
+import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
 export function applyFreeAimPose(
@@ -18,14 +19,15 @@ export function applyFreeAimPose(
 	rig.rightShoulder.rotation.y = -0.22 * blend
 	rig.rightArm.rotation.x = 0.16 * blend
 	rig.rightElbow.rotation.x = 0.48 * blend
-	rig.rightHand.rotation.x = 0.08 * blend
-	rig.rightHand.rotation.y = -0.12 * blend
 	rig.leftShoulder.rotation.x = 0.82 * blend
 	rig.leftShoulder.rotation.y = 0.58 * blend
 	rig.leftArm.rotation.x = 0.14 * blend
 	rig.leftElbow.rotation.x = 0.68 * blend
 	rig.leftHand.rotation.x = -0.12 * blend
 	rig.leftHand.rotation.z = -0.28 * blend
-	rig.weapon.rotation.x = (-1.58 + pitch * 0.72) * blend
-	rig.weapon.rotation.y = -yaw * 0.34 * blend
+	alignBlasterHand(
+		rig,
+		(0.08 + pitch * 0.72) * blend,
+		(-0.12 - yaw * 0.34) * blend,
+	)
 }

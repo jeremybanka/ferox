@@ -1,3 +1,4 @@
+import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
 export type RunDirection = "backward" | "forward" | "left" | "right"
@@ -55,9 +56,5 @@ export function applyRunAnimation(
 		rig.rightShoulder.rotation.z = strafe * 0.08 * intensity
 	}
 
-	rig.weapon.rotation.x = -(
-		rig.rightShoulder.rotation.x +
-		rig.rightArm.rotation.x +
-		rig.rightElbow.rotation.x
-	)
+	alignBlasterHand(rig)
 }

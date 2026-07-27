@@ -1,3 +1,4 @@
+import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
 type JumpPose = {
@@ -191,12 +192,7 @@ export function applyJumpAnimation(rig: PilotRig, progress: number): void {
 	rig.leftElbow.rotation.x = -elbow
 	rig.rightElbow.rotation.x = -elbow * 0.82
 	rig.leftHand.rotation.x = arm * 0.14
-	rig.rightHand.rotation.x = arm * 0.1
 	rig.leftShoulder.rotation.z = -shoulderRoll
 	rig.rightShoulder.rotation.z = shoulderRoll
-	rig.weapon.rotation.x = -(
-		rig.rightShoulder.rotation.x +
-		rig.rightArm.rotation.x +
-		rig.rightElbow.rotation.x
-	)
+	alignBlasterHand(rig, arm * 0.1)
 }

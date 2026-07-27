@@ -1,4 +1,5 @@
 import { applyFreeAimPose } from "./AimPose.ts"
+import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
 export type PoseBucket = "apex" | "badass" | "goofy" | "jank"
@@ -316,14 +317,10 @@ export function applyPracticePose(
 		rig.rightKnee.rotation.x += Math.cos(index * 1.5) * 0.42
 		rig.leftShoulder.rotation.y += Math.sin(index) * 0.72
 		rig.rightShoulder.rotation.y -= Math.cos(index) * 0.72
-		rig.weapon.rotation.z += Math.sin(index * 2) * 0.48
+		rig.rightHand.rotation.z += Math.sin(index * 2) * 0.48
 	}
 
 	if (pose.arms !== "aim") {
-		rig.weapon.rotation.x = -(
-			rig.rightShoulder.rotation.x +
-			rig.rightArm.rotation.x +
-			rig.rightElbow.rotation.x
-		)
+		alignBlasterHand(rig, rig.rightHand.rotation.x)
 	}
 }
