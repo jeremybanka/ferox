@@ -125,7 +125,10 @@ function joint(radius: number, materials: PilotMaterials): THREE.Mesh {
 	return mesh
 }
 
-function makeArm(side: -1 | 1, materials: PilotMaterials): {
+function makeArm(
+	side: -1 | 1,
+	materials: PilotMaterials,
+): {
 	arm: THREE.Group
 	elbow: THREE.Group
 	hand: THREE.Group
@@ -175,7 +178,10 @@ function makeArm(side: -1 | 1, materials: PilotMaterials): {
 	return { arm, elbow, hand, shoulder }
 }
 
-function makeLeg(side: -1 | 1, materials: PilotMaterials): {
+function makeLeg(
+	side: -1 | 1,
+	materials: PilotMaterials,
+): {
 	foot: THREE.Group
 	knee: THREE.Group
 	leg: THREE.Group
@@ -301,14 +307,14 @@ export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
 	const jaw = box(0.58, 0.22, 0.5, materials.armorDark)
 	jaw.position.set(0, -0.26, -0.08)
 	const visor = box(0.68, 0.34, 0.12, materials.visor)
-	visor.position.set(0, 0.06, -0.46)
+	visor.position.set(0, 0.06, -0.415)
 	visor.rotation.x = -0.08
 	const visorDisplay = new VisorDisplay({
 		background: theme.visorBackground,
 		glow: theme.visorGlow,
 		pixels: theme.visorPixels,
 	})
-	visorDisplay.group.position.set(0, 0.06, -0.525)
+	visorDisplay.group.position.set(0, 0.06, -0.48)
 	visorDisplay.group.rotation.x = -0.08
 	const visorBrow = box(0.75, 0.1, 0.28, materials.armorDark)
 	visorBrow.position.set(0, 0.22, -0.43)
