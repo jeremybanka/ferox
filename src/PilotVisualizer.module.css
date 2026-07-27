@@ -53,7 +53,7 @@ pilot-visualizer.class {
 
 	> animation-stack {
 		position: absolute;
-		bottom: 12.2rem;
+		bottom: 14.9rem;
 		left: calc(50% - 7.5rem);
 		display: grid;
 		grid-template-columns: minmax(0, 2fr) minmax(11rem, 1fr);
@@ -266,6 +266,41 @@ pilot-visualizer.class {
 				}
 			}
 		}
+
+		> direction-control {
+			display: grid;
+			grid-template-columns: auto 1fr 1fr;
+			align-items: center;
+			gap: 0.65rem;
+
+			> strong {
+				color: #809399;
+				font-size: 0.5rem;
+				letter-spacing: 0.12em;
+			}
+
+			> label {
+				display: grid;
+				grid-template-columns: auto 1fr auto;
+				align-items: center;
+				gap: 0.55rem;
+				padding: 0.4rem 0.6rem;
+				border: 1px solid rgb(109 235 215 / 0.1);
+
+				> span,
+				> output {
+					color: #809399;
+					font-size: 0.48rem;
+					letter-spacing: 0.1em;
+				}
+
+				> output {
+					min-width: 2.4rem;
+					color: #e9fffa;
+					text-align: right;
+				}
+			}
+		}
 	}
 
 	> filmstrip-panel {
@@ -463,7 +498,7 @@ pilot-visualizer.class {
 	@media (width <= 900px) {
 		> animation-stack {
 			left: 50%;
-			bottom: 15rem;
+			bottom: 18rem;
 			grid-template-columns: 1fr;
 			width: calc(100% - 2rem);
 		}

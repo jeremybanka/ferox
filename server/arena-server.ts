@@ -18,6 +18,7 @@ import {
 import { ArenaSimulation } from "./ArenaSimulation.ts"
 
 type PlayerSnapshot = {
+	aimDirection: [number, number, number]
 	crouching: boolean
 	freeAim: boolean
 	id: string
@@ -142,6 +143,7 @@ realtime(
 		playerHealth.set(socketId, 100)
 		playerScores.set(socketId, 0)
 		players.set(socketId, {
+			aimDirection: [-Math.sin(spawnYaw), 0, -Math.cos(spawnYaw)],
 			crouching: false,
 			freeAim: false,
 			id: socketId,
@@ -164,17 +166,22 @@ realtime(
 
 		const onMove = (payload: MovePayload): void => {
 			if (
+				!Array.isArray(payload.aimDirection) ||
 				!Array.isArray(payload.position) ||
 				!Array.isArray(payload.rotation) ||
 				!Array.isArray(payload.velocity) ||
+				payload.aimDirection.length !== 3 ||
 				payload.position.length !== 3 ||
 				payload.rotation.length !== 2 ||
 				payload.velocity.length !== 3 ||
 				!isVisorExpression(payload.visorExpression) ||
 				!Number.isFinite(payload.visorStartedAt) ||
-				[...payload.position, ...payload.rotation, ...payload.velocity].some(
-					(value) => !Number.isFinite(value),
-				)
+				[
+					...payload.aimDirection,
+					...payload.position,
+					...payload.rotation,
+					...payload.velocity,
+				].some((value) => !Number.isFinite(value))
 			)
 				return
 			players.set(socketId, { ...payload, id: socketId })

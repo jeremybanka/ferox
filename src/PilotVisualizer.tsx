@@ -13,6 +13,12 @@ import {
 	DOUBLE_JUMP_KEYFRAME_MARKERS,
 } from "./pilot/DoubleJumpAnimation.ts"
 import {
+	lookTowardConstraint,
+	pointBlasterConstraint,
+	waveTowardConstraint,
+	type PilotPointDirection,
+} from "./pilot/DirectionalConstraints.ts"
+import {
 	applyJumpAnimation,
 	JUMP_KEYFRAME_MARKERS,
 } from "./pilot/JumpAnimation.ts"
@@ -83,6 +89,8 @@ type PreviewControls = {
 	sampleInterval: SampleInterval
 	selectedTime: number
 	speed: number
+	targetPitch: number
+	targetYaw: number
 	yaw: number
 }
 
@@ -124,6 +132,7 @@ function applyPreviewPose(
 	baseAnimation: BaseAnimation,
 	overlays: readonly OverlayAnimation[],
 	time: number,
+	direction: PilotPointDirection,
 ): void {
 	const duration = BASE_DURATION_SECONDS[baseAnimation]
 	const progress = Math.min(1, Math.max(0, time / duration))
@@ -168,12 +177,19 @@ function applyPreviewPose(
 		)
 	}
 	if (overlays.includes("free-aim")) {
-		layers.push(freeAimLayer(-0.18, 0.3))
+		layers.push(freeAimLayer(direction.pitch, direction.yaw))
 	}
 	if (overlays.includes("wave")) {
 		layers.push(waveAnimationLayer(progress))
 	}
-	applyPilotAnimationLayers(rig, layers)
+	const constraints = [lookTowardConstraint(direction, 0.94)]
+	if (overlays.includes("wave")) {
+		constraints.push(waveTowardConstraint(direction, 0.9))
+	}
+	if (overlays.includes("free-aim")) {
+		constraints.push(pointBlasterConstraint(direction, 0.88))
+	}
+	applyPilotAnimationLayers(rig, layers, constraints)
 }
 
 function draftPreviewLayer(
@@ -227,6 +243,8 @@ export function PilotVisualizer(): VNode {
 	const [overlays, setOverlays] = useState<readonly OverlayAnimation[]>([])
 	const [speed, setSpeed] = useState(1)
 	const [yaw, setYaw] = useState(0.42)
+	const [targetPitch, setTargetPitch] = useState(0)
+	const [targetYaw, setTargetYaw] = useState(0)
 	const [isPlaying, setIsPlaying] = useState(true)
 	const [sampleInterval, setSampleInterval] = useState<SampleInterval>(0.0833)
 	const [selectedTime, setSelectedTime] = useState(0)
@@ -237,6 +255,8 @@ export function PilotVisualizer(): VNode {
 		sampleInterval,
 		selectedTime,
 		speed,
+		targetPitch,
+		targetYaw,
 		yaw,
 	})
 
@@ -247,6 +267,8 @@ export function PilotVisualizer(): VNode {
 		sampleInterval,
 		selectedTime,
 		speed,
+		targetPitch,
+		targetYaw,
 		yaw,
 	}
 	const duration = BASE_DURATION_SECONDS[baseAnimation]
@@ -365,6 +387,10 @@ export function PilotVisualizer(): VNode {
 				controls.baseAnimation,
 				controls.overlays,
 				timelineRef.current,
+				{
+					pitch: controls.targetPitch,
+					yaw: controls.targetYaw,
+				},
 			)
 			rig.root.rotation.y = controls.yaw
 			applyPreviewVisor(
@@ -425,7 +451,8 @@ export function PilotVisualizer(): VNode {
 			const controls = controlsRef.current
 			const signature =
 				`${controls.baseAnimation}:${controls.overlays.join(",")}:` +
-				`${controls.sampleInterval}:${controls.yaw.toFixed(4)}`
+				`${controls.sampleInterval}:${controls.yaw.toFixed(4)}:` +
+				`${controls.targetPitch.toFixed(4)}:${controls.targetYaw.toFixed(4)}`
 			if (signature === previousSignature) return
 			previousSignature = signature
 			const activeDuration = BASE_DURATION_SECONDS[controls.baseAnimation]
@@ -437,7 +464,10 @@ export function PilotVisualizer(): VNode {
 				const y = totalHeight - (index + 1) * FILM_FRAME_HEIGHT
 				renderer.setViewport(0, y, FILM_FRAME_WIDTH, FILM_FRAME_HEIGHT)
 				renderer.setScissor(0, y, FILM_FRAME_WIDTH, FILM_FRAME_HEIGHT)
-				applyPreviewPose(rig, controls.baseAnimation, controls.overlays, time)
+				applyPreviewPose(rig, controls.baseAnimation, controls.overlays, time, {
+					pitch: controls.targetPitch,
+					yaw: controls.targetYaw,
+				})
 				rig.root.rotation.y = controls.yaw
 				applyPreviewVisor(rig, controls.baseAnimation, controls.overlays, time)
 				camera.lookAt(0, 2 + rig.root.position.y, 0)
@@ -559,6 +589,45 @@ export function PilotVisualizer(): VNode {
 						<output>{Math.round(THREE.MathUtils.radToDeg(yaw))}°</output>
 					</label>
 				</control-bank>
+				<direction-control>
+					<strong>POINT TARGET</strong>
+					<label>
+						<span>YAW</span>
+						<input
+							aria-label="Point target yaw"
+							type="range"
+							min="-50"
+							max="50"
+							step="1"
+							value={THREE.MathUtils.radToDeg(targetYaw)}
+							onInput={(event) => {
+								setTargetYaw(
+									THREE.MathUtils.degToRad(Number(event.currentTarget.value)),
+								)
+							}}
+						/>
+						<output>{Math.round(THREE.MathUtils.radToDeg(targetYaw))}°</output>
+					</label>
+					<label>
+						<span>PITCH</span>
+						<input
+							aria-label="Point target pitch"
+							type="range"
+							min="-45"
+							max="40"
+							step="1"
+							value={THREE.MathUtils.radToDeg(targetPitch)}
+							onInput={(event) => {
+								setTargetPitch(
+									THREE.MathUtils.degToRad(Number(event.currentTarget.value)),
+								)
+							}}
+						/>
+						<output>
+							{Math.round(THREE.MathUtils.radToDeg(targetPitch))}°
+						</output>
+					</label>
+				</direction-control>
 				<keyframe-control>
 					<strong>KEYFRAMES</strong>
 					{keyframeMarkers.length === 0 ? (

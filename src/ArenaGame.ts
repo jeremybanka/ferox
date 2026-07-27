@@ -25,6 +25,10 @@ import {
 	applyCrouchIdleAnimation,
 	applyCrouchMoveAnimation,
 } from "./pilot/CrouchAnimation.ts"
+import {
+	lookTowardConstraint,
+	pointBlasterConstraint,
+} from "./pilot/DirectionalConstraints.ts"
 import { applyDoubleJumpAnimation } from "./pilot/DoubleJumpAnimation.ts"
 import { applyJumpAnimation } from "./pilot/JumpAnimation.ts"
 import { createPilotModel, type PilotRig } from "./pilot/PilotModel.ts"
@@ -37,6 +41,7 @@ import {
 import { runAnimationLayer, type RunDirection } from "./pilot/RunAnimation.ts"
 
 type PlayerSnapshot = {
+	aimDirection: [number, number, number]
 	crouching: boolean
 	freeAim: boolean
 	id: string
@@ -77,6 +82,7 @@ type TargetingState =
 	| "lost"
 
 type RemotePilot = {
+	aimDirection: THREE.Vector3
 	animator: PilotAnimationMixer
 	crouching: boolean
 	freeAim: boolean
@@ -271,6 +277,9 @@ export class ArenaGame {
 		this.#camera.position.copy(this.#player.position)
 		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
 		this.#socket.emit("arena:move", {
+			aimDirection: new THREE.Vector3(0, 0, -1)
+				.applyQuaternion(this.#camera.quaternion)
+				.toArray(),
 			crouching: false,
 			freeAim: false,
 			jump: 0,
@@ -301,6 +310,7 @@ export class ArenaGame {
 				marker.rotation.y = Math.PI / 4
 				rig.root.add(marker)
 				model = {
+					aimDirection: new THREE.Vector3(0, 0, -1),
 					animator: new PilotAnimationMixer(),
 					crouching: false,
 					freeAim: false,
@@ -327,6 +337,13 @@ export class ArenaGame {
 				)
 			if (isNew) model.position.copy(model.target)
 			model.velocity.set(...snapshot.velocity)
+			if (
+				Array.isArray(snapshot.aimDirection) &&
+				snapshot.aimDirection.length === 3 &&
+				snapshot.aimDirection.every(Number.isFinite)
+			) {
+				model.aimDirection.set(...snapshot.aimDirection).normalize()
+			}
 			model.yaw = snapshot.rotation[0]
 			model.pitch = snapshot.rotation[1]
 			model.crouching = snapshot.crouching
@@ -721,16 +738,7 @@ export class ArenaGame {
 		this.#fireCooldown = 0.13
 		this.#ammo -= 1
 		const origin = this.#camera.getWorldPosition(new THREE.Vector3())
-		const acquiredPosition =
-			this.#acquiredTargetId === null
-				? null
-				: this.#drones.getTargetPosition(this.#acquiredTargetId)
-		const direction =
-			acquiredPosition === null
-				? new THREE.Vector3(0, 0, -1)
-						.applyQuaternion(this.#camera.quaternion)
-						.normalize()
-				: acquiredPosition.sub(origin).normalize()
+		const direction = this.#getAimDirection(origin)
 		origin.addScaledVector(direction, 0.8)
 		this.#noiseTimer = 0.85
 		this.#weapon.position.z += 0.12
@@ -740,6 +748,18 @@ export class ArenaGame {
 			direction: direction.toArray(),
 			origin: origin.toArray(),
 		} satisfies FireIntent)
+	}
+
+	#getAimDirection(origin = this.#camera.position): THREE.Vector3 {
+		const acquiredPosition =
+			this.#acquiredTargetId === null
+				? null
+				: this.#drones.getTargetPosition(this.#acquiredTargetId)
+		return acquiredPosition === null
+			? new THREE.Vector3(0, 0, -1)
+					.applyQuaternion(this.#camera.quaternion)
+					.normalize()
+			: acquiredPosition.sub(origin).normalize()
 	}
 
 	#spawnProjectile(
@@ -1028,7 +1048,24 @@ export class ArenaGame {
 			if (model.freeAim) {
 				layers.push(freeAimLayer(model.pitch, 0))
 			}
-			model.animator.update(model.rig, layers, delta)
+			const lookDirection = { pitch: model.pitch, yaw: 0 }
+			const localAimDirection = model.aimDirection
+				.clone()
+				.applyAxisAngle(new THREE.Vector3(0, 1, 0), -model.yaw)
+			const pointingDirection = {
+				pitch: Math.asin(THREE.MathUtils.clamp(localAimDirection.y, -1, 1)),
+				yaw: Math.atan2(-localAimDirection.x, -localAimDirection.z),
+			}
+			const constraints = [lookTowardConstraint(lookDirection, 0.92)]
+			if (!model.sprinting) {
+				constraints.push(
+					pointBlasterConstraint(
+						pointingDirection,
+						model.freeAim ? 0.94 : 0.72,
+					),
+				)
+			}
+			model.animator.update(model.rig, layers, delta, constraints)
 			const visorTime = Date.now() / 1_000
 			model.rig.visorDisplay.setSignal(
 				"combat",
@@ -1066,6 +1103,7 @@ export class ArenaGame {
 			this.#visorStartedAt = Date.now() / 1_000
 		}
 		this.#socket.emit("arena:move", {
+			aimDirection: this.#getAimDirection().toArray(),
 			crouching: this.#crouching,
 			freeAim: this.#freeAim,
 			jump: this.#player.jumps,
