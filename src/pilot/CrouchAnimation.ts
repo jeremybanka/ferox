@@ -9,21 +9,21 @@ function crouchWeight(weight: number): number {
 function applyGuardedCrouch(rig: PilotRig, weight: number): void {
 	const amount = crouchWeight(weight)
 
-	rig.root.position.y = -0.34 * amount
+	rig.root.position.y = -0.5 * amount
 	rig.hips.position.y = 1.72 - 0.2 * amount
 	rig.hips.rotation.x = -0.08 * amount
 	rig.body.position.y = -0.06 * amount
-	rig.body.rotation.x = -0.12 * amount
+	rig.body.rotation.x = -0.52 * amount
 	rig.neck.rotation.x = -0.05 * amount
 	rig.head.rotation.x = -0.07 * amount
 
-	rig.leftLeg.rotation.x = 0.5 * amount
+	rig.leftLeg.rotation.x = 1.5 * amount
 	rig.leftLeg.rotation.z = -0.22 * amount
 	rig.rightLeg.rotation.x = 0.5 * amount
 	rig.rightLeg.rotation.z = 0.22 * amount
-	rig.leftKnee.rotation.x = -1.12 * amount
-	rig.rightKnee.rotation.x = -1.12 * amount
-	rig.leftFoot.rotation.x = 0.62 * amount
+	rig.leftKnee.rotation.x = -1.52 * amount
+	rig.rightKnee.rotation.x = -1.92 * amount
+	rig.leftFoot.rotation.x = 0.1 * amount
 	rig.leftFoot.rotation.z = 0.1 * amount
 	rig.rightFoot.rotation.x = 0.62 * amount
 	rig.rightFoot.rotation.z = -0.1 * amount
@@ -32,19 +32,19 @@ function applyGuardedCrouch(rig: PilotRig, weight: number): void {
 
 	rig.leftShoulder.rotation.x = 0.62 * amount
 	rig.leftShoulder.rotation.z = -0.18 * amount
-	rig.leftArm.rotation.x = 0.18 * amount
+	rig.leftArm.rotation.x = -0.28 * amount
 	rig.leftArm.rotation.z = -0.42 * amount
-	rig.leftElbow.rotation.x = 1.08 * amount
+	rig.leftElbow.rotation.x = 0.38 * amount
 	rig.leftElbow.rotation.z = -0.16 * amount
 	rig.leftHand.rotation.x = 0.2 * amount
 
 	rig.rightShoulder.rotation.x = 0.74 * amount
-	rig.rightShoulder.rotation.z = 0.12 * amount
-	rig.rightArm.rotation.x = 0.2 * amount
+	rig.rightShoulder.rotation.z = -0.12 * amount
+	rig.rightArm.rotation.x = 0.1 * amount
 	rig.rightArm.rotation.z = 0.2 * amount
-	rig.rightElbow.rotation.x = 1.18 * amount
-	rig.rightElbow.rotation.z = 0.08 * amount
-	alignBlasterHand(rig, 0.16 * amount)
+	rig.rightElbow.rotation.x = 0.78 * amount
+	rig.rightElbow.rotation.z = -0.68 * amount
+	// alignBlasterHand(rig, 0.16 * amount)
 }
 
 export function applyCrouchIdleAnimation(
@@ -65,7 +65,6 @@ export function applyCrouchIdleAnimation(
 	rig.head.rotation.y = scan * 0.06 * amount
 	rig.leftElbow.rotation.x += breathing * 0.025 * amount
 	rig.rightElbow.rotation.x -= breathing * 0.02 * amount
-	alignBlasterHand(rig, 0.16 * amount, scan * 0.018 * amount)
 }
 
 export function applyCrouchMoveAnimation(
