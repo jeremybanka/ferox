@@ -90,6 +90,29 @@ pilot-visualizer.class {
 				letter-spacing: 0.1em;
 				text-transform: uppercase;
 
+				&:disabled {
+					cursor: not-allowed;
+					opacity: 0.32;
+				}
+
+				&[data-scenario] {
+					border-color: rgb(241 123 75 / 0.4);
+
+					> small {
+						margin-right: 0.38rem;
+						color: #f17b4b;
+						font-size: 0.42rem;
+						letter-spacing: 0.14em;
+					}
+
+					&[data-active="true"] {
+						border-color: #f17b4b;
+						background: rgb(125 52 30 / 0.42);
+						color: #fff0e8;
+						box-shadow: 0 0 1.2rem rgb(241 123 75 / 0.16);
+					}
+				}
+
 				&[data-active="true"] {
 					border-color: #6debd7;
 					background: rgb(43 118 105 / 0.42);

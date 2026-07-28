@@ -7,6 +7,7 @@ import {
 	airborneAnimationLayer,
 	DOUBLE_JUMP_BURST_SECONDS,
 	doubleJumpBurstLayer,
+	LANDING_PREP_SECONDS,
 	LANDING_RECOVERY_SECONDS,
 	landingPreparationLayer,
 	landingRecoveryLayer,
@@ -86,6 +87,29 @@ const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	right: 1,
 }
 
+const BUNNYHOP_GRAVITY = 23
+const BUNNYHOP_LAUNCH_VELOCITY = 10.6
+const BUNNYHOP_AIRTIME_SECONDS =
+	(2 * BUNNYHOP_LAUNCH_VELOCITY) / BUNNYHOP_GRAVITY
+const BUNNYHOP_GROUND_SECONDS = 0.22
+const BUNNYHOP_DURATION_SECONDS =
+	BUNNYHOP_AIRTIME_SECONDS + BUNNYHOP_GROUND_SECONDS
+const BUNNYHOP_MARKERS: readonly AnimationMarker[] = [
+	{ label: "takeoff", progress: 0 },
+	{
+		label: "apex",
+		progress:
+			BUNNYHOP_LAUNCH_VELOCITY /
+			BUNNYHOP_GRAVITY /
+			BUNNYHOP_DURATION_SECONDS,
+	},
+	{
+		label: "land",
+		progress: BUNNYHOP_AIRTIME_SECONDS / BUNNYHOP_DURATION_SECONDS,
+	},
+	{ label: "recover", progress: 1 },
+]
+
 type SampleInterval = 0.167 | 0.0833
 
 const FILM_FRAME_WIDTH = 192
@@ -93,6 +117,7 @@ const FILM_FRAME_HEIGHT = 120
 
 type PreviewControls = {
 	baseAnimation: BaseAnimation
+	bunnyhopping: boolean
 	isPlaying: boolean
 	overlays: readonly OverlayAnimation[]
 	sampleInterval: SampleInterval
@@ -114,15 +139,38 @@ type AlignmentSweepStatus = {
 	samples: number
 }
 
-function getAnimationMarkers(
+function isRunDirection(
 	baseAnimation: BaseAnimation,
-): readonly AnimationMarker[] {
-	if (
+): baseAnimation is RunDirection {
+	return (
 		baseAnimation === "forward" ||
 		baseAnimation === "backward" ||
 		baseAnimation === "left" ||
 		baseAnimation === "right"
-	) {
+	)
+}
+
+function supportsBunnyhop(baseAnimation: BaseAnimation): boolean {
+	return baseAnimation === "idle" || isRunDirection(baseAnimation)
+}
+
+function getPreviewDuration(
+	baseAnimation: BaseAnimation,
+	bunnyhopping: boolean,
+): number {
+	return bunnyhopping && supportsBunnyhop(baseAnimation)
+		? BUNNYHOP_DURATION_SECONDS
+		: BASE_DURATION_SECONDS[baseAnimation]
+}
+
+function getAnimationMarkers(
+	baseAnimation: BaseAnimation,
+	bunnyhopping = false,
+): readonly AnimationMarker[] {
+	if (bunnyhopping && supportsBunnyhop(baseAnimation)) {
+		return BUNNYHOP_MARKERS
+	}
+	if (isRunDirection(baseAnimation)) {
 		return RUN_KEYFRAME_MARKERS
 	}
 	if (baseAnimation === "jump") return JUMP_KEYFRAME_MARKERS
@@ -154,21 +202,69 @@ function applyPreviewPose(
 	time: number,
 	direction: PilotPointDirection,
 	overlayWeights: Partial<Record<OverlayAnimation, number>> = {},
+	bunnyhopping = false,
 ): void {
-	const duration = BASE_DURATION_SECONDS[baseAnimation]
+	const activeBunnyhop = bunnyhopping && supportsBunnyhop(baseAnimation)
+	const duration = getPreviewDuration(baseAnimation, activeBunnyhop)
 	const progress = Math.min(1, Math.max(0, time / duration))
 	const weaponsFreeWeight =
 		overlayWeights["weapons-free"] ??
 		(overlays.includes("weapons-free") ? 1 : 0)
 	const layers: PilotAnimationLayer[] = []
-	if (baseAnimation === "idle") {
+	let rootHeight = 0
+	if (activeBunnyhop) {
+		if (time < BUNNYHOP_AIRTIME_SECONDS) {
+			const verticalVelocity =
+				BUNNYHOP_LAUNCH_VELOCITY - BUNNYHOP_GRAVITY * time
+			const localVelocityX =
+				baseAnimation === "left" ? -7 : baseAnimation === "right" ? 7 : 0
+			const localVelocityZ =
+				baseAnimation === "forward"
+					? -8
+					: baseAnimation === "backward"
+						? 6.4
+						: 0
+			rootHeight = Math.max(
+				0,
+				BUNNYHOP_LAUNCH_VELOCITY * time -
+					0.5 * BUNNYHOP_GRAVITY * time * time,
+			)
+			layers.push(
+				airborneAnimationLayer({
+					jumpCount: 1,
+					localVelocityX,
+					localVelocityZ,
+					verticalVelocity,
+				}),
+			)
+			if (time < TAKEOFF_DURATION_SECONDS) {
+				layers.push(takeoffAnimationLayer(time))
+			}
+			const impactTime = BUNNYHOP_AIRTIME_SECONDS - time
+			if (impactTime < LANDING_PREP_SECONDS) {
+				layers.push(
+					landingPreparationLayer(
+						1 - impactTime / LANDING_PREP_SECONDS,
+						Math.max(0, -verticalVelocity),
+					),
+				)
+			}
+		} else {
+			if (baseAnimation === "idle") {
+				layers.push(idleAnimationLayer(time))
+			} else if (isRunDirection(baseAnimation)) {
+				layers.push(runAnimationLayer(time, 0.92, baseAnimation))
+			}
+			layers.push(
+				landingRecoveryLayer(
+					time - BUNNYHOP_AIRTIME_SECONDS,
+					BUNNYHOP_LAUNCH_VELOCITY,
+				),
+			)
+		}
+	} else if (baseAnimation === "idle") {
 		layers.push(idleAnimationLayer(time))
-	} else if (
-		baseAnimation === "forward" ||
-		baseAnimation === "backward" ||
-		baseAnimation === "left" ||
-		baseAnimation === "right"
-	) {
+	} else if (isRunDirection(baseAnimation)) {
 		layers.push(
 			runAnimationLayer((progress * Math.PI * 2) / 11, 0.92, baseAnimation),
 		)
@@ -252,6 +348,8 @@ function applyPreviewPose(
 			Math.sin((progress / 0.9) * Math.PI) * 1.55
 	} else if (baseAnimation === "double-jump") {
 		rig.root.position.y += Math.sin(progress * Math.PI) * 0.34
+	} else if (activeBunnyhop) {
+		rig.root.position.y += rootHeight
 	}
 }
 
@@ -303,6 +401,7 @@ export function PilotVisualizer(): VNode {
 	const dragXRef = useRef<number | null>(null)
 	const timelineRef = useRef(0)
 	const [baseAnimation, setBaseAnimation] = useState<BaseAnimation>("forward")
+	const [bunnyhopping, setBunnyhopping] = useState(false)
 	const [overlays, setOverlays] = useState<readonly OverlayAnimation[]>([])
 	const [speed, setSpeed] = useState(1)
 	const [yaw, setYaw] = useState(0.42)
@@ -316,6 +415,7 @@ export function PilotVisualizer(): VNode {
 	const [selectedTime, setSelectedTime] = useState(0)
 	const controlsRef = useRef<PreviewControls>({
 		baseAnimation,
+		bunnyhopping,
 		isPlaying,
 		overlays,
 		sampleInterval,
@@ -328,6 +428,7 @@ export function PilotVisualizer(): VNode {
 
 	controlsRef.current = {
 		baseAnimation,
+		bunnyhopping,
 		isPlaying,
 		overlays,
 		sampleInterval,
@@ -337,15 +438,28 @@ export function PilotVisualizer(): VNode {
 		targetYaw,
 		yaw,
 	}
-	const duration = BASE_DURATION_SECONDS[baseAnimation]
-	const keyframeMarkers = getAnimationMarkers(baseAnimation)
+	const duration = getPreviewDuration(baseAnimation, bunnyhopping)
+	const keyframeMarkers = getAnimationMarkers(baseAnimation, bunnyhopping)
 	const sampleTimes = getSampleTimes(duration, sampleInterval)
+	const stackLabels = [
+		...(bunnyhopping ? ["AUTO BUNNYHOP"] : []),
+		...overlays.map((overlay) => overlay.toUpperCase()),
+	]
 
 	const selectBaseAnimation = (nextAnimation: BaseAnimation): void => {
 		timelineRef.current = 0
 		setSelectedTime(0)
 		setIsPlaying(true)
+		if (!supportsBunnyhop(nextAnimation)) setBunnyhopping(false)
 		setBaseAnimation(nextAnimation)
+	}
+
+	const toggleBunnyhopping = (): void => {
+		if (!supportsBunnyhop(baseAnimation)) return
+		timelineRef.current = 0
+		setSelectedTime(0)
+		setIsPlaying(true)
+		setBunnyhopping((current) => !current)
 	}
 
 	const toggleOverlay = (overlay: OverlayAnimation): void => {
@@ -497,7 +611,10 @@ export function PilotVisualizer(): VNode {
 			const elapsed = Math.min(0.1, (now - previousTime) / 1_000)
 			previousTime = now
 			const controls = controlsRef.current
-			const activeDuration = BASE_DURATION_SECONDS[controls.baseAnimation]
+			const activeDuration = getPreviewDuration(
+				controls.baseAnimation,
+				controls.bunnyhopping,
+			)
 			if (controls.isPlaying) {
 				timelineRef.current =
 					(timelineRef.current + elapsed * controls.speed) % activeDuration
@@ -528,6 +645,7 @@ export function PilotVisualizer(): VNode {
 					yaw: controls.targetYaw,
 				},
 				{ "weapons-free": weaponsFreePreviewWeight },
+				controls.bunnyhopping,
 			)
 			rig.root.rotation.y = controls.yaw
 			const showAlignment = weaponsFreePreviewWeight > 0
@@ -656,12 +774,16 @@ export function PilotVisualizer(): VNode {
 			frame = requestAnimationFrame(renderFilmstrip)
 			const controls = controlsRef.current
 			const signature =
-				`${controls.baseAnimation}:${controls.overlays.join(",")}:` +
+				`${controls.baseAnimation}:${controls.bunnyhopping}:` +
+				`${controls.overlays.join(",")}:` +
 				`${controls.sampleInterval}:${controls.yaw.toFixed(4)}:` +
 				`${controls.targetPitch.toFixed(4)}:${controls.targetYaw.toFixed(4)}`
 			if (signature === previousSignature) return
 			previousSignature = signature
-			const activeDuration = BASE_DURATION_SECONDS[controls.baseAnimation]
+			const activeDuration = getPreviewDuration(
+				controls.baseAnimation,
+				controls.bunnyhopping,
+			)
 			const times = getSampleTimes(activeDuration, controls.sampleInterval)
 			const totalHeight = times.length * FILM_FRAME_HEIGHT
 			renderer.setSize(FILM_FRAME_WIDTH, totalHeight, false)
@@ -670,10 +792,18 @@ export function PilotVisualizer(): VNode {
 				const y = totalHeight - (index + 1) * FILM_FRAME_HEIGHT
 				renderer.setViewport(0, y, FILM_FRAME_WIDTH, FILM_FRAME_HEIGHT)
 				renderer.setScissor(0, y, FILM_FRAME_WIDTH, FILM_FRAME_HEIGHT)
-				applyPreviewPose(rig, controls.baseAnimation, controls.overlays, time, {
-					pitch: controls.targetPitch,
-					yaw: controls.targetYaw,
-				})
+				applyPreviewPose(
+					rig,
+					controls.baseAnimation,
+					controls.overlays,
+					time,
+					{
+						pitch: controls.targetPitch,
+						yaw: controls.targetYaw,
+					},
+					{},
+					controls.bunnyhopping,
+				)
 				rig.root.rotation.y = controls.yaw
 				applyPreviewVisor(rig, controls.baseAnimation, controls.overlays, time)
 				camera.lookAt(0, 2 + rig.root.position.y, 0)
@@ -733,7 +863,7 @@ export function PilotVisualizer(): VNode {
 					))}
 				</fieldset>
 				<fieldset>
-					<legend>OVERLAYS // STACKABLE</legend>
+					<legend>OVERLAYS // STACKABLE + AUTO</legend>
 					{OVERLAY_ANIMATIONS.map((overlay) => (
 						<button
 							key={overlay}
@@ -748,6 +878,18 @@ export function PilotVisualizer(): VNode {
 							{overlay}
 						</button>
 					))}
+					<button
+						type="button"
+						aria-pressed={bunnyhopping}
+						data-active={bunnyhopping}
+						data-scenario
+						disabled={!supportsBunnyhop(baseAnimation)}
+						onClick={toggleBunnyhopping}
+					>
+						<small>AUTO</small>
+						{bunnyhopping ? "+ " : "  "}
+						bunnyhop
+					</button>
 				</fieldset>
 			</animation-stack>
 			<animation-console>
@@ -863,7 +1005,11 @@ export function PilotVisualizer(): VNode {
 						<span>NO AUTHORED KEYS</span>
 					) : (
 						<fieldset>
-							<legend>{baseAnimation} animation keyframes</legend>
+							<legend>
+								{bunnyhopping
+									? `${baseAnimation} bunnyhop events`
+									: `${baseAnimation} animation keyframes`}
+							</legend>
 							{keyframeMarkers.map((marker, index) => {
 								const keyframeTime = marker.progress * duration
 								return (
@@ -956,7 +1102,7 @@ export function PilotVisualizer(): VNode {
 					<filmstrip-rail>
 						<canvas
 							ref={filmCanvasRef}
-							aria-label={`${baseAnimation} animation with ${overlays.length} overlays sampled every ${sampleInterval.toFixed(2)} seconds`}
+							aria-label={`${baseAnimation} animation${bunnyhopping ? " with automatic bunnyhopping" : ""} and ${overlays.length} overlays sampled every ${sampleInterval.toFixed(2)} seconds`}
 							width={FILM_FRAME_WIDTH}
 							height={sampleTimes.length * FILM_FRAME_HEIGHT}
 						/>
@@ -984,9 +1130,9 @@ export function PilotVisualizer(): VNode {
 			<aside>
 				<strong>{baseAnimation.toUpperCase()}</strong>
 				<span>
-					{overlays.length === 0
+					{stackLabels.length === 0
 						? "BASE POSE"
-						: `+ ${overlays.join(" + ").toUpperCase()}`}
+						: `+ ${stackLabels.join(" + ")}`}
 				</span>
 			</aside>
 		</pilot-visualizer>
