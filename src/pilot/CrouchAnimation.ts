@@ -13,7 +13,7 @@ import {
 } from "./PilotAnimation.ts"
 import type { RunDirection } from "./RunAnimation.ts"
 
-export const CROUCH_RUN_DURATION_SECONDS = 0.8
+export const CROUCH_RUN_DURATION_SECONDS = 1
 
 type CrouchLegFrame = {
 	foot: number
