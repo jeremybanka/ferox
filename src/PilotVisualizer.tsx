@@ -237,21 +237,20 @@ function applyPreviewPose(
 					: baseAnimation === "backward"
 						? 6.4
 						: 0
+			const airborneMotion = {
+				jumpCount: 1 as const,
+				localVelocityX,
+				localVelocityZ,
+				verticalVelocity,
+			}
 			rootHeight = Math.max(
 				0,
 				BUNNYHOP_LAUNCH_VELOCITY * time -
 					0.5 * BUNNYHOP_GRAVITY * time * time,
 			)
-			layers.push(
-				airborneAnimationLayer({
-					jumpCount: 1,
-					localVelocityX,
-					localVelocityZ,
-					verticalVelocity,
-				}),
-			)
+			layers.push(airborneAnimationLayer(airborneMotion))
 			if (time < TAKEOFF_DURATION_SECONDS) {
-				layers.push(takeoffAnimationLayer(time))
+				layers.push(takeoffAnimationLayer(time, airborneMotion))
 			}
 			const impactTime = BUNNYHOP_AIRTIME_SECONDS - time
 			if (impactTime < LANDING_PREP_SECONDS) {
@@ -259,6 +258,7 @@ function applyPreviewPose(
 					landingPreparationLayer(
 						1 - impactTime / LANDING_PREP_SECONDS,
 						Math.max(0, -verticalVelocity),
+						airborneMotion,
 					),
 				)
 			}
@@ -284,22 +284,22 @@ function applyPreviewPose(
 	} else if (baseAnimation === "jump") {
 		if (progress < 0.9) {
 			const verticalVelocity = THREE.MathUtils.lerp(10.6, -10.5, progress / 0.9)
-			layers.push(
-				airborneAnimationLayer({
-					jumpCount: 1,
-					localVelocityX: 0,
-					localVelocityZ: -4,
-					verticalVelocity,
-				}),
-			)
+			const airborneMotion = {
+				jumpCount: 1 as const,
+				localVelocityX: 0,
+				localVelocityZ: -7.2,
+				verticalVelocity,
+			}
+			layers.push(airborneAnimationLayer(airborneMotion))
 			if (time < TAKEOFF_DURATION_SECONDS) {
-				layers.push(takeoffAnimationLayer(time))
+				layers.push(takeoffAnimationLayer(time, airborneMotion))
 			}
 			if (progress > 0.74) {
 				layers.push(
 					landingPreparationLayer(
 						(progress - 0.74) / 0.16,
 						-verticalVelocity,
+						airborneMotion,
 					),
 				)
 			}
@@ -313,15 +313,19 @@ function applyPreviewPose(
 			)
 		}
 	} else if (baseAnimation === "double-jump") {
+		const airborneMotion = {
+			jumpCount: 2 as const,
+			localVelocityX: 1.4,
+			localVelocityZ: -7.2,
+			verticalVelocity: THREE.MathUtils.lerp(9.4, -8, progress),
+		}
+		layers.push(airborneAnimationLayer(airborneMotion))
 		layers.push(
-			airborneAnimationLayer({
-				jumpCount: 2,
-				localVelocityX: 1.4,
-				localVelocityZ: -3.5,
-				verticalVelocity: THREE.MathUtils.lerp(9.4, -8, progress),
-			}),
+			doubleJumpBurstLayer(
+				progress * DOUBLE_JUMP_BURST_SECONDS,
+				airborneMotion,
+			),
 		)
-		layers.push(doubleJumpBurstLayer(progress * DOUBLE_JUMP_BURST_SECONDS))
 	} else if (baseAnimation === "crouch") {
 		layers.push(
 			draftPreviewLayer("crouch", (draftRig) => {

@@ -1102,24 +1102,23 @@ export class ArenaGame {
 			const animationTime = performance.now() / 1_000
 			const layers: PilotAnimationLayer[] = []
 			if (model.jump > 0) {
-				layers.push(
-					airborneAnimationLayer({
-						jumpCount: model.jump === 2 ? 2 : 1,
-						localVelocityX: localVelocity.x,
-						localVelocityZ: localVelocity.z,
-						verticalVelocity: model.velocity.y,
-					}),
-				)
+				const airborneMotion = {
+					jumpCount: model.jump === 2 ? (2 as const) : (1 as const),
+					localVelocityX: localVelocity.x,
+					localVelocityZ: localVelocity.z,
+					verticalVelocity: model.velocity.y,
+				}
+				layers.push(airborneAnimationLayer(airborneMotion))
 				const takeoffElapsed = animationTime - model.jumpStartedAt
 				if (takeoffElapsed < TAKEOFF_DURATION_SECONDS) {
-					layers.push(takeoffAnimationLayer(takeoffElapsed))
+					layers.push(takeoffAnimationLayer(takeoffElapsed, airborneMotion))
 				}
 				const doubleJumpElapsed = animationTime - model.doubleJumpStartedAt
 				if (
 					model.jump === 2 &&
 					doubleJumpElapsed < DOUBLE_JUMP_BURST_SECONDS
 				) {
-					layers.push(doubleJumpBurstLayer(doubleJumpElapsed))
+					layers.push(doubleJumpBurstLayer(doubleJumpElapsed, airborneMotion))
 				}
 				if (model.velocity.y < -0.1) {
 					const groundClearance = Math.max(
@@ -1134,6 +1133,7 @@ export class ArenaGame {
 							landingPreparationLayer(
 								1 - predictedImpactSeconds / LANDING_PREP_SECONDS,
 								-model.velocity.y,
+								airborneMotion,
 							),
 						)
 					}
