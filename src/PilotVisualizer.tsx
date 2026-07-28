@@ -4,13 +4,20 @@ import { useEffect, useRef, useState } from "preact/hooks"
 
 import css from "./PilotVisualizer.module.css"
 import {
+	airborneAnimationLayer,
+	DOUBLE_JUMP_BURST_SECONDS,
+	doubleJumpBurstLayer,
+	LANDING_RECOVERY_SECONDS,
+	landingPreparationLayer,
+	landingRecoveryLayer,
+	TAKEOFF_DURATION_SECONDS,
+	takeoffAnimationLayer,
+} from "./pilot/AirborneAnimation.ts"
+import {
 	applyCrouchIdleAnimation,
 	applyCrouchMoveAnimation,
 } from "./pilot/CrouchAnimation.ts"
-import {
-	applyDoubleJumpAnimation,
-	DOUBLE_JUMP_KEYFRAME_MARKERS,
-} from "./pilot/DoubleJumpAnimation.ts"
+import { DOUBLE_JUMP_KEYFRAME_MARKERS } from "./pilot/DoubleJumpAnimation.ts"
 import {
 	lookTowardConstraint,
 	measureBlasterAlignment,
@@ -18,10 +25,7 @@ import {
 	waveTowardConstraint,
 	type PilotPointDirection,
 } from "./pilot/DirectionalConstraints.ts"
-import {
-	applyJumpAnimation,
-	JUMP_KEYFRAME_MARKERS,
-} from "./pilot/JumpAnimation.ts"
+import { JUMP_KEYFRAME_MARKERS } from "./pilot/JumpAnimation.ts"
 import {
 	idleAnimationLayer,
 	IDLE_DURATION_SECONDS,
@@ -74,7 +78,7 @@ const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	backward: 1,
 	crouch: 2.4,
 	"crouch-run": 0.8,
-	"double-jump": 1.6,
+	"double-jump": DOUBLE_JUMP_BURST_SECONDS,
 	forward: 1,
 	idle: IDLE_DURATION_SECONDS,
 	jump: 1.9,
@@ -169,17 +173,46 @@ function applyPreviewPose(
 			runAnimationLayer((progress * Math.PI * 2) / 11, 0.92, baseAnimation),
 		)
 	} else if (baseAnimation === "jump") {
-		layers.push(
-			draftPreviewLayer("jump", (draftRig) => {
-				applyJumpAnimation(draftRig, progress)
-			}),
-		)
+		if (progress < 0.9) {
+			const verticalVelocity = THREE.MathUtils.lerp(10.6, -10.5, progress / 0.9)
+			layers.push(
+				airborneAnimationLayer({
+					jumpCount: 1,
+					localVelocityX: 0,
+					localVelocityZ: -4,
+					verticalVelocity,
+				}),
+			)
+			if (time < TAKEOFF_DURATION_SECONDS) {
+				layers.push(takeoffAnimationLayer(time))
+			}
+			if (progress > 0.74) {
+				layers.push(
+					landingPreparationLayer(
+						(progress - 0.74) / 0.16,
+						-verticalVelocity,
+					),
+				)
+			}
+		} else {
+			layers.push(idleAnimationLayer(time))
+			layers.push(
+				landingRecoveryLayer(
+					((progress - 0.9) / 0.1) * LANDING_RECOVERY_SECONDS,
+					10.5,
+				),
+			)
+		}
 	} else if (baseAnimation === "double-jump") {
 		layers.push(
-			draftPreviewLayer("double-jump", (draftRig) => {
-				applyDoubleJumpAnimation(draftRig, progress)
+			airborneAnimationLayer({
+				jumpCount: 2,
+				localVelocityX: 1.4,
+				localVelocityZ: -3.5,
+				verticalVelocity: THREE.MathUtils.lerp(9.4, -8, progress),
 			}),
 		)
+		layers.push(doubleJumpBurstLayer(progress * DOUBLE_JUMP_BURST_SECONDS))
 	} else if (baseAnimation === "crouch") {
 		layers.push(
 			draftPreviewLayer("crouch", (draftRig) => {
@@ -214,6 +247,12 @@ function applyPreviewPose(
 		constraints.push(pointBlasterConstraint(direction, weaponsFreeWeight))
 	}
 	applyPilotAnimationLayers(rig, layers, constraints)
+	if (baseAnimation === "jump" && progress < 0.9) {
+		rig.root.position.y +=
+			Math.sin((progress / 0.9) * Math.PI) * 1.55
+	} else if (baseAnimation === "double-jump") {
+		rig.root.position.y += Math.sin(progress * Math.PI) * 0.34
+	}
 }
 
 function draftPreviewLayer(

@@ -21,6 +21,17 @@ import {
 } from "./game-constants.ts"
 import type { GameHudState } from "./game-state.ts"
 import {
+	airborneAnimationLayer,
+	DOUBLE_JUMP_BURST_SECONDS,
+	doubleJumpBurstLayer,
+	LANDING_PREP_SECONDS,
+	LANDING_RECOVERY_SECONDS,
+	landingPreparationLayer,
+	landingRecoveryLayer,
+	TAKEOFF_DURATION_SECONDS,
+	takeoffAnimationLayer,
+} from "./pilot/AirborneAnimation.ts"
+import {
 	applyCrouchIdleAnimation,
 	applyCrouchMoveAnimation,
 } from "./pilot/CrouchAnimation.ts"
@@ -28,9 +39,7 @@ import {
 	lookTowardConstraint,
 	pointBlasterConstraint,
 } from "./pilot/DirectionalConstraints.ts"
-import { applyDoubleJumpAnimation } from "./pilot/DoubleJumpAnimation.ts"
 import { idleAnimationLayer } from "./pilot/IdleAnimation.ts"
-import { applyJumpAnimation } from "./pilot/JumpAnimation.ts"
 import { createPilotModel, type PilotRig } from "./pilot/PilotModel.ts"
 import {
 	FULL_BODY_INFLUENCE,
@@ -94,8 +103,12 @@ type RemotePilot = {
 	aimDirection: THREE.Vector3
 	animator: PilotAnimationMixer
 	crouching: boolean
+	doubleJumpStartedAt: number
 	freeAim: boolean
 	jump: 0 | 1 | 2
+	jumpStartedAt: number
+	landingImpactVelocity: number
+	landingStartedAt: number
 	pitch: number
 	position: THREE.Vector3
 	rig: PilotRig
@@ -335,8 +348,12 @@ export class ArenaGame {
 					aimDirection: new THREE.Vector3(0, 0, -1),
 					animator: new PilotAnimationMixer(),
 					crouching: false,
+					doubleJumpStartedAt: -Infinity,
 					freeAim: false,
 					jump: 0,
+					jumpStartedAt: -Infinity,
+					landingImpactVelocity: 0,
+					landingStartedAt: -Infinity,
 					pitch: 0,
 					position: new THREE.Vector3(),
 					rig,
@@ -360,6 +377,9 @@ export class ArenaGame {
 					snapshot.crouching ? -CROUCH_EYE : -PLAYER_EYE,
 				)
 			if (isNew) model.position.copy(model.target)
+			const previousJump = model.jump
+			const previousVerticalVelocity = model.velocity.y
+			const animationEventTime = performance.now() / 1_000
 			model.velocity.set(...snapshot.velocity)
 			if (
 				Array.isArray(snapshot.aimDirection) &&
@@ -373,6 +393,17 @@ export class ArenaGame {
 			model.crouching = snapshot.crouching
 			model.freeAim = snapshot.freeAim
 			model.jump = snapshot.jump
+			if (model.jump > 0 && previousJump === 0) {
+				model.jumpStartedAt = animationEventTime
+				model.landingStartedAt = -Infinity
+			}
+			if (model.jump === 2 && previousJump !== 2) {
+				model.doubleJumpStartedAt = animationEventTime
+			}
+			if (model.jump === 0 && previousJump > 0) {
+				model.landingStartedAt = animationEventTime
+				model.landingImpactVelocity = Math.max(0, -previousVerticalVelocity)
+			}
 			model.sprinting = snapshot.sprinting
 			model.weaponsFree = snapshot.weaponsFree === true
 			if (
@@ -1070,7 +1101,44 @@ export class ArenaGame {
 			}
 			const animationTime = performance.now() / 1_000
 			const layers: PilotAnimationLayer[] = []
-			if (model.crouching) {
+			if (model.jump > 0) {
+				layers.push(
+					airborneAnimationLayer({
+						jumpCount: model.jump === 2 ? 2 : 1,
+						localVelocityX: localVelocity.x,
+						localVelocityZ: localVelocity.z,
+						verticalVelocity: model.velocity.y,
+					}),
+				)
+				const takeoffElapsed = animationTime - model.jumpStartedAt
+				if (takeoffElapsed < TAKEOFF_DURATION_SECONDS) {
+					layers.push(takeoffAnimationLayer(takeoffElapsed))
+				}
+				const doubleJumpElapsed = animationTime - model.doubleJumpStartedAt
+				if (
+					model.jump === 2 &&
+					doubleJumpElapsed < DOUBLE_JUMP_BURST_SECONDS
+				) {
+					layers.push(doubleJumpBurstLayer(doubleJumpElapsed))
+				}
+				if (model.velocity.y < -0.1) {
+					const groundClearance = Math.max(
+						0,
+						model.position.y -
+							this.#heightAt(model.position.x, model.position.z),
+					)
+					const predictedImpactSeconds =
+						groundClearance / Math.max(0.1, -model.velocity.y)
+					if (predictedImpactSeconds < LANDING_PREP_SECONDS) {
+						layers.push(
+							landingPreparationLayer(
+								1 - predictedImpactSeconds / LANDING_PREP_SECONDS,
+								-model.velocity.y,
+							),
+						)
+					}
+				}
+			} else if (model.crouching) {
 				if (horizontalSpeed > 0.35) {
 					layers.push({
 						fadeSeconds: 0.12,
@@ -1092,38 +1160,6 @@ export class ArenaGame {
 						}),
 					})
 				}
-			} else if (model.jump === 2) {
-				const progress = THREE.MathUtils.clamp(
-					(9.4 - model.velocity.y) / 22,
-					0,
-					1,
-				)
-				layers.push({
-					fadeSeconds: 0.08,
-					id: "draft:double-jump",
-					influence: FULL_BODY_INFLUENCE,
-					mode: "override",
-					pose: sampleDraftAnimation((rig) => {
-						applyDoubleJumpAnimation(rig, progress)
-						rig.root.position.y = 0
-					}),
-				})
-			} else if (model.jump === 1) {
-				const progress = THREE.MathUtils.clamp(
-					(10.6 - model.velocity.y) / 23,
-					0,
-					1,
-				)
-				layers.push({
-					fadeSeconds: 0.08,
-					id: "draft:jump",
-					influence: FULL_BODY_INFLUENCE,
-					mode: "override",
-					pose: sampleDraftAnimation((rig) => {
-						applyJumpAnimation(rig, progress)
-						rig.root.position.y = 0
-					}),
-				})
 			} else if (horizontalSpeed > 0.35) {
 				layers.push(
 					runAnimationLayer(
@@ -1134,6 +1170,15 @@ export class ArenaGame {
 				)
 			} else {
 				layers.push(idleAnimationLayer(animationTime))
+			}
+			const landingElapsed = animationTime - model.landingStartedAt
+			if (landingElapsed < LANDING_RECOVERY_SECONDS) {
+				layers.push(
+					landingRecoveryLayer(
+						landingElapsed,
+						model.landingImpactVelocity,
+					),
+				)
 			}
 			const lookDirection = { pitch: model.pitch, yaw: 0 }
 			const localAimDirection = model.aimDirection
