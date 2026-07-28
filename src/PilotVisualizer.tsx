@@ -17,6 +17,8 @@ import {
 import {
 	applyCrouchIdleAnimation,
 	applyCrouchMoveAnimation,
+	CROUCH_RUN_DURATION_SECONDS,
+	CROUCH_RUN_KEYFRAME_MARKERS,
 } from "./pilot/CrouchAnimation.ts"
 import { DOUBLE_JUMP_KEYFRAME_MARKERS } from "./pilot/DoubleJumpAnimation.ts"
 import {
@@ -46,13 +48,15 @@ import {
 import { waveAnimationLayer } from "./pilot/WaveAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 
+type CrouchRunAnimation = `crouch-run-${RunDirection}`
+
 type BaseAnimation =
 	| RunDirection
 	| "crouch"
-	| "crouch-run"
 	| "double-jump"
 	| "idle"
 	| "jump"
+	| CrouchRunAnimation
 
 type OverlayAnimation = "wave" | "weapons-free"
 
@@ -70,7 +74,10 @@ const BASE_ANIMATIONS: readonly BaseAnimation[] = [
 	"jump",
 	"double-jump",
 	"crouch",
-	"crouch-run",
+	"crouch-run-forward",
+	"crouch-run-left",
+	"crouch-run-backward",
+	"crouch-run-right",
 ]
 
 const OVERLAY_ANIMATIONS: readonly OverlayAnimation[] = ["weapons-free", "wave"]
@@ -78,7 +85,10 @@ const OVERLAY_ANIMATIONS: readonly OverlayAnimation[] = ["weapons-free", "wave"]
 const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	backward: 1,
 	crouch: 2.4,
-	"crouch-run": 0.8,
+	"crouch-run-backward": CROUCH_RUN_DURATION_SECONDS,
+	"crouch-run-forward": CROUCH_RUN_DURATION_SECONDS,
+	"crouch-run-left": CROUCH_RUN_DURATION_SECONDS,
+	"crouch-run-right": CROUCH_RUN_DURATION_SECONDS,
 	"double-jump": DOUBLE_JUMP_BURST_SECONDS,
 	forward: 1,
 	idle: IDLE_DURATION_SECONDS,
@@ -150,6 +160,23 @@ function isRunDirection(
 	)
 }
 
+function getCrouchRunDirection(
+	baseAnimation: BaseAnimation,
+): RunDirection | null {
+	switch (baseAnimation) {
+		case "crouch-run-backward":
+			return "backward"
+		case "crouch-run-forward":
+			return "forward"
+		case "crouch-run-left":
+			return "left"
+		case "crouch-run-right":
+			return "right"
+		default:
+			return null
+	}
+}
+
 function supportsBunnyhop(baseAnimation: BaseAnimation): boolean {
 	return baseAnimation === "idle" || isRunDirection(baseAnimation)
 }
@@ -172,6 +199,9 @@ function getAnimationMarkers(
 	}
 	if (isRunDirection(baseAnimation)) {
 		return RUN_KEYFRAME_MARKERS
+	}
+	if (getCrouchRunDirection(baseAnimation) !== null) {
+		return CROUCH_RUN_KEYFRAME_MARKERS
 	}
 	if (baseAnimation === "jump") return JUMP_KEYFRAME_MARKERS
 	if (baseAnimation === "double-jump") return DOUBLE_JUMP_KEYFRAME_MARKERS
@@ -315,14 +345,15 @@ function applyPreviewPose(
 				applyCrouchIdleAnimation(draftRig, (progress * Math.PI * 2) / 2.6, 1)
 			}),
 		)
-	} else if (baseAnimation === "crouch-run") {
+	} else if (getCrouchRunDirection(baseAnimation) !== null) {
+		const crouchDirection = getCrouchRunDirection(baseAnimation) ?? "forward"
 		layers.push(
-			draftPreviewLayer("crouch-run", (draftRig) => {
+			draftPreviewLayer(`crouch-run:${crouchDirection}`, (draftRig) => {
 				applyCrouchMoveAnimation(
 					draftRig,
 					(progress * Math.PI * 2) / 7.6,
 					1,
-					"forward",
+					crouchDirection,
 				)
 			}),
 		)
@@ -383,7 +414,10 @@ function applyPreviewVisor(
 	} else if (baseAnimation === "double-jump") {
 		source = "movement"
 		expression = "alarm"
-	} else if (baseAnimation === "crouch" || baseAnimation === "crouch-run") {
+	} else if (
+		baseAnimation === "crouch" ||
+		getCrouchRunDirection(baseAnimation) !== null
+	) {
 		source = "movement"
 		expression = "angry"
 	}

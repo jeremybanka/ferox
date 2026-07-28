@@ -2,6 +2,72 @@ import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
 import type { RunDirection } from "./RunAnimation.ts"
 
+export const CROUCH_RUN_DURATION_SECONDS = 0.8
+
+type CrouchRunGaitPose = {
+	lift: number
+	stride: number
+}
+
+const CROUCH_RUN_KEYFRAMES: ReadonlyArray<
+	readonly [number, CrouchRunGaitPose]
+> = [
+	[0, { lift: 0.08, stride: 0.18 }],
+	[0.125, { lift: 0.48, stride: 0.72 }],
+	[0.25, { lift: 0.92, stride: 1 }],
+	[0.375, { lift: 0.68, stride: 0.46 }],
+	[0.5, { lift: 0.08, stride: -0.18 }],
+	[0.625, { lift: 0.48, stride: -0.72 }],
+	[0.75, { lift: 0.92, stride: -1 }],
+	[0.875, { lift: 0.68, stride: -0.46 }],
+	[1, { lift: 0.08, stride: 0.18 }],
+]
+
+const CROUCH_RUN_KEYFRAME_LABELS = [
+	"contact L",
+	"passing L",
+	"push L",
+	"flight L",
+	"contact R",
+	"passing R",
+	"push R",
+	"flight R",
+	"loop",
+] as const
+
+export const CROUCH_RUN_KEYFRAME_MARKERS = CROUCH_RUN_KEYFRAMES.map(
+	([progress], index) => ({
+		label: CROUCH_RUN_KEYFRAME_LABELS[index] ?? `pose ${index + 1}`,
+		progress,
+	}),
+)
+
+function blend(from: number, to: number, amount: number): number {
+	return from + (to - from) * amount
+}
+
+function smoothstep(value: number): number {
+	return value * value * (3 - 2 * value)
+}
+
+function sampleCrouchRunGait(progress: number): CrouchRunGaitPose {
+	const cycle = ((progress % 1) + 1) % 1
+	let poseIndex = 0
+	while (
+		poseIndex < CROUCH_RUN_KEYFRAMES.length - 2 &&
+		cycle > CROUCH_RUN_KEYFRAMES[poseIndex + 1]![0]
+	) {
+		poseIndex += 1
+	}
+	const [fromTime, from] = CROUCH_RUN_KEYFRAMES[poseIndex]!
+	const [toTime, to] = CROUCH_RUN_KEYFRAMES[poseIndex + 1]!
+	const amount = smoothstep((cycle - fromTime) / (toTime - fromTime))
+	return {
+		lift: blend(from.lift, to.lift, amount),
+		stride: blend(from.stride, to.stride, amount),
+	}
+}
+
 function crouchWeight(weight: number): number {
 	return Math.max(0, Math.min(1, weight))
 }
@@ -75,9 +141,10 @@ export function applyCrouchMoveAnimation(
 ): void {
 	const amount = crouchWeight(weight)
 	const phaseDirection = direction === "backward" ? -1 : 1
-	const phase = time * 7.6 * phaseDirection
-	const stride = Math.sin(phase)
-	const step = Math.abs(Math.sin(phase))
+	const progress = (time * 7.6 * phaseDirection) / (Math.PI * 2)
+	const gait = sampleCrouchRunGait(progress)
+	const stride = gait.stride
+	const step = gait.lift
 	const strafe = direction === "left" ? -1 : direction === "right" ? 1 : 0
 	const forward =
 		direction === "forward" ? 1 : direction === "backward" ? -1 : 0
