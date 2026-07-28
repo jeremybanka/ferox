@@ -149,9 +149,13 @@ function applyPreviewPose(
 	overlays: readonly OverlayAnimation[],
 	time: number,
 	direction: PilotPointDirection,
+	overlayWeights: Partial<Record<OverlayAnimation, number>> = {},
 ): void {
 	const duration = BASE_DURATION_SECONDS[baseAnimation]
 	const progress = Math.min(1, Math.max(0, time / duration))
+	const weaponsFreeWeight =
+		overlayWeights["weapons-free"] ??
+		(overlays.includes("weapons-free") ? 1 : 0)
 	const layers: PilotAnimationLayer[] = []
 	if (baseAnimation === "idle") {
 		layers.push(idleAnimationLayer(time))
@@ -194,8 +198,10 @@ function applyPreviewPose(
 			}),
 		)
 	}
-	if (overlays.includes("weapons-free")) {
-		layers.push(weaponsFreeLayer(direction.pitch, direction.yaw))
+	if (weaponsFreeWeight > 0) {
+		layers.push(
+			weaponsFreeLayer(direction.pitch, direction.yaw, weaponsFreeWeight),
+		)
 	}
 	if (overlays.includes("wave")) {
 		layers.push(waveAnimationLayer(progress))
@@ -204,8 +210,8 @@ function applyPreviewPose(
 	if (overlays.includes("wave")) {
 		constraints.push(waveTowardConstraint(direction, 0.9))
 	}
-	if (overlays.includes("weapons-free")) {
-		constraints.push(pointBlasterConstraint(direction, 1))
+	if (weaponsFreeWeight > 0) {
+		constraints.push(pointBlasterConstraint(direction, weaponsFreeWeight))
 	}
 	applyPilotAnimationLayers(rig, layers, constraints)
 }
@@ -343,7 +349,8 @@ export function PilotVisualizer(): VNode {
 		scene.background = new THREE.Color("#111827")
 		scene.fog = new THREE.Fog("#111827", 9, 18)
 		const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 40)
-		camera.position.set(6.2, 4.15, -8.75)
+		const cameraNormalPosition = new THREE.Vector3(6.2, 4.15, -8.75)
+		camera.position.copy(cameraNormalPosition)
 		camera.lookAt(0, 2, 0)
 		const renderer = new THREE.WebGLRenderer({ antialias: true, canvas })
 		renderer.setPixelRatio(Math.min(devicePixelRatio, 1.8))
@@ -426,8 +433,17 @@ export function PilotVisualizer(): VNode {
 		let previousTime = performance.now()
 		let lastTimelineUpdate = 0
 		let lastAlignmentUpdate = 0
+		let weaponsFreePreviewWeight = controlsRef.current.overlays.includes(
+			"weapons-free",
+		)
+			? 1
+			: 0
 		const cameraViewCenter = new THREE.Vector3()
 		const cameraViewDirection = new THREE.Vector3()
+		const cameraDiagnosticPosition = new THREE.Vector3()
+		const cameraLookTarget = new THREE.Vector3()
+		const cameraNormalFocus = new THREE.Vector3()
+		const cameraOrbitAxis = new THREE.Vector3(0, 1, 0)
 		const cameraViewSide = new THREE.Vector3()
 		const resize = (): void => {
 			const width = canvas.clientWidth
@@ -452,6 +468,16 @@ export function PilotVisualizer(): VNode {
 			} else {
 				timelineRef.current = controls.selectedTime
 			}
+			const weaponsFreeTarget = controls.overlays.includes("weapons-free")
+				? 1
+				: 0
+			const weaponsFreeTransition =
+				weaponsFreeTarget > weaponsFreePreviewWeight ? 0.1 : 0.28
+			const weaponsFreeStep = elapsed / weaponsFreeTransition
+			weaponsFreePreviewWeight =
+				weaponsFreeTarget > weaponsFreePreviewWeight
+					? Math.min(weaponsFreeTarget, weaponsFreePreviewWeight + weaponsFreeStep)
+					: Math.max(weaponsFreeTarget, weaponsFreePreviewWeight - weaponsFreeStep)
 			applyPreviewPose(
 				rig,
 				controls.baseAnimation,
@@ -461,9 +487,10 @@ export function PilotVisualizer(): VNode {
 					pitch: controls.targetPitch,
 					yaw: controls.targetYaw,
 				},
+				{ "weapons-free": weaponsFreePreviewWeight },
 			)
 			rig.root.rotation.y = controls.yaw
-			const showAlignment = controls.overlays.includes("weapons-free")
+			const showAlignment = weaponsFreePreviewWeight > 0
 			targetMarker.visible = showAlignment
 			hitscan.visible = showAlignment
 			if (showAlignment) {
@@ -489,10 +516,11 @@ export function PilotVisualizer(): VNode {
 					measured.rayEnd.z,
 				)
 				positions.needsUpdate = true
+				const targetFocus =
+					0.5 * Math.pow(Math.abs(Math.cos(controls.yaw)), 6)
 				cameraViewCenter
 					.copy(measured.muzzleOrigin)
-					.add(measured.target)
-					.multiplyScalar(0.5)
+					.lerp(measured.target, targetFocus)
 				cameraViewDirection
 					.copy(measured.target)
 					.sub(measured.muzzleOrigin)
@@ -500,11 +528,19 @@ export function PilotVisualizer(): VNode {
 				cameraViewSide
 					.set(-cameraViewDirection.z, 0, cameraViewDirection.x)
 					.normalize()
-				camera.position
+					.applyAxisAngle(cameraOrbitAxis, controls.yaw)
+				cameraDiagnosticPosition
 					.copy(cameraViewCenter)
 					.addScaledVector(cameraViewSide, 13)
-				camera.position.y += 4
-				camera.lookAt(cameraViewCenter)
+				cameraDiagnosticPosition.y += 4
+				cameraNormalFocus.set(0, 2 + rig.root.position.y, 0)
+				camera.position
+					.copy(cameraNormalPosition)
+					.lerp(cameraDiagnosticPosition, weaponsFreePreviewWeight)
+				cameraLookTarget
+					.copy(cameraNormalFocus)
+					.lerp(cameraViewCenter, weaponsFreePreviewWeight)
+				camera.lookAt(cameraLookTarget)
 				if (now - lastAlignmentUpdate >= 75) {
 					lastAlignmentUpdate = now
 					setAlignment({
@@ -517,7 +553,7 @@ export function PilotVisualizer(): VNode {
 				setAlignment(null)
 			}
 			if (!showAlignment) {
-				camera.position.set(6.2, 4.15, -8.75)
+				camera.position.copy(cameraNormalPosition)
 				camera.lookAt(0, 2 + rig.root.position.y, 0)
 			}
 			applyPreviewVisor(

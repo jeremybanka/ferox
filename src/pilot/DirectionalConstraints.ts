@@ -130,6 +130,8 @@ export function pointBlasterConstraint(
 	weight = 1,
 ): PilotAnimationConstraint {
 	const limited = limitedDirection(direction)
+	const iterationWeight =
+		1 - Math.pow(1 - THREE.MathUtils.clamp(weight, 0, 1), 1 / 6)
 	return (rig) => {
 		const local = directionRelativeToBody(rig, limited)
 		rig.rightShoulder.rotation.x = blendAngle(
@@ -187,7 +189,10 @@ export function pointBlasterConstraint(
 				.invert()
 				.multiply(shoulderCorrection)
 				.multiply(currentShoulderWorld)
-			rig.rightShoulder.quaternion.slerp(desiredShoulderLocal, weight)
+			rig.rightShoulder.quaternion.slerp(
+				desiredShoulderLocal,
+				iterationWeight,
+			)
 		}
 	}
 }

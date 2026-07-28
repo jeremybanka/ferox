@@ -75,6 +75,13 @@ type Projectile = {
 	velocity: THREE.Vector3
 }
 
+type MuzzleFlash = {
+	life: number
+	light: THREE.PointLight
+	material: THREE.MeshBasicMaterial
+	mesh: THREE.Mesh
+}
+
 type TargetingState =
 	| "acquired"
 	| "escaping"
@@ -98,6 +105,7 @@ type RemotePilot = {
 	visorExpression: VisorExpression
 	visorStartedAt: number
 	weaponsFree: boolean
+	weaponsFreeWeight: number
 	yaw: number
 }
 
@@ -124,6 +132,7 @@ export class ArenaGame {
 		pitch: -0.04,
 		jumps: 0 as 0 | 1 | 2,
 	}
+	readonly #muzzleFlashes: MuzzleFlash[] = []
 	readonly #projectiles: Projectile[] = []
 	readonly #remotePlayers = new Map<string, RemotePilot>()
 	readonly #renderer: THREE.WebGLRenderer
@@ -131,6 +140,7 @@ export class ArenaGame {
 	readonly #seed: number
 	readonly #socket: Socket
 	readonly #weapon = new THREE.Group()
+	readonly #weaponMuzzle = new THREE.Group()
 	#ammo = 28
 	#acquiredTargetId: number | null = null
 	#animationFrame = 0
@@ -218,6 +228,12 @@ export class ArenaGame {
 		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
+		for (const flash of this.#muzzleFlashes) {
+			this.#scene.remove(flash.mesh)
+			flash.mesh.geometry.dispose()
+			flash.material.dispose()
+		}
+		this.#muzzleFlashes.length = 0
 		this.#renderer.dispose()
 	}
 
@@ -330,6 +346,7 @@ export class ArenaGame {
 					visorExpression: "boot",
 					visorStartedAt: Date.now() / 1_000,
 					weaponsFree: false,
+					weaponsFreeWeight: 0,
 					yaw: 0,
 				}
 				this.#remotePlayers.set(snapshot.id, model)
@@ -389,10 +406,13 @@ export class ArenaGame {
 	}
 
 	readonly #onProjectile = (projectile: ProjectileSnapshot): void => {
+		const origin = new THREE.Vector3(...projectile.origin)
+		const direction = new THREE.Vector3(...projectile.direction)
+		this.#spawnMuzzleFlash(origin, direction, projectile.color)
 		this.#spawnProjectile(
 			projectile.id,
-			new THREE.Vector3(...projectile.origin),
-			new THREE.Vector3(...projectile.direction),
+			origin,
+			direction,
 			projectile.color,
 		)
 	}
@@ -544,7 +564,9 @@ export class ArenaGame {
 		barrel.position.set(0, 0.03, -0.47)
 		const sight = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.12), accent)
 		sight.position.set(0, 0.14, -0.1)
-		this.#weapon.add(body, barrel, sight)
+		this.#weaponMuzzle.name = "first-person blaster muzzle"
+		this.#weaponMuzzle.position.set(0, 0.03, -0.7)
+		this.#weapon.add(body, barrel, sight, this.#weaponMuzzle)
 		this.#weapon.position.set(0.35, -0.31, -0.7)
 		this.#camera.add(this.#weapon)
 		this.#scene.add(this.#camera)
@@ -747,9 +769,11 @@ export class ArenaGame {
 		this.#weaponsFreeUntil =
 			performance.now() / 1_000 + WEAPONS_FREE_COOLDOWN_SECONDS
 		this.#ammo -= 1
-		const origin = this.#camera.getWorldPosition(new THREE.Vector3())
+		this.#camera.position.copy(this.#player.position)
+		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
+		this.#camera.updateMatrixWorld(true)
+		const origin = this.#weaponMuzzle.getWorldPosition(new THREE.Vector3())
 		const direction = this.#getAimDirection(origin)
-		origin.addScaledVector(direction, 0.8)
 		this.#noiseTimer = 0.85
 		this.#weapon.position.z += 0.12
 		this.#shotSequence += 1
@@ -792,6 +816,60 @@ export class ArenaGame {
 			mesh,
 			velocity: direction.multiplyScalar(55),
 		})
+	}
+
+	#spawnMuzzleFlash(
+		origin: THREE.Vector3,
+		direction: THREE.Vector3,
+		color: THREE.ColorRepresentation,
+	): void {
+		const material = new THREE.MeshBasicMaterial({
+			blending: THREE.AdditiveBlending,
+			color,
+			depthWrite: false,
+			opacity: 1,
+			transparent: true,
+		})
+		const mesh = new THREE.Mesh(
+			new THREE.OctahedronGeometry(1, 0),
+			material,
+		)
+		mesh.position.copy(origin).addScaledVector(direction, 0.06)
+		mesh.quaternion.setFromUnitVectors(
+			new THREE.Vector3(0, 0, -1),
+			direction,
+		)
+		mesh.scale.set(0.11, 0.11, 0.34)
+		const light = new THREE.PointLight(color, 5, 4)
+		mesh.add(light)
+		this.#scene.add(mesh)
+		this.#muzzleFlashes.push({
+			life: 0.075,
+			light,
+			material,
+			mesh,
+		})
+	}
+
+	#updateMuzzleFlashes(delta: number): void {
+		for (let index = this.#muzzleFlashes.length - 1; index >= 0; index -= 1) {
+			const flash = this.#muzzleFlashes[index]
+			if (flash === undefined) continue
+			flash.life -= delta
+			const strength = THREE.MathUtils.clamp(flash.life / 0.075, 0, 1)
+			flash.material.opacity = strength
+			flash.light.intensity = strength * 5
+			flash.mesh.scale.set(
+				0.11 + (1 - strength) * 0.08,
+				0.11 + (1 - strength) * 0.08,
+				0.34 + (1 - strength) * 0.16,
+			)
+			if (flash.life > 0) continue
+			this.#scene.remove(flash.mesh)
+			flash.mesh.geometry.dispose()
+			flash.material.dispose()
+			this.#muzzleFlashes.splice(index, 1)
+		}
 	}
 
 	#updateProjectiles(delta: number): void {
@@ -1065,14 +1143,30 @@ export class ArenaGame {
 				pitch: Math.asin(THREE.MathUtils.clamp(localAimDirection.y, -1, 1)),
 				yaw: Math.atan2(-localAimDirection.x, -localAimDirection.z),
 			}
+			const weaponsFreeTarget = model.weaponsFree ? 1 : 0
+			const weaponsFreeTransition =
+				weaponsFreeTarget > model.weaponsFreeWeight ? 0.1 : 0.28
+			const weaponsFreeStep = delta / weaponsFreeTransition
+			model.weaponsFreeWeight =
+				weaponsFreeTarget > model.weaponsFreeWeight
+					? Math.min(
+							weaponsFreeTarget,
+							model.weaponsFreeWeight + weaponsFreeStep,
+						)
+					: Math.max(
+							weaponsFreeTarget,
+							model.weaponsFreeWeight - weaponsFreeStep,
+						)
 			if (model.weaponsFree) {
 				layers.push(
 					weaponsFreeLayer(pointingDirection.pitch, pointingDirection.yaw),
 				)
 			}
 			const constraints = [lookTowardConstraint(lookDirection, 0.92)]
-			if (model.weaponsFree && !model.sprinting) {
-				constraints.push(pointBlasterConstraint(pointingDirection, 1))
+			if (model.weaponsFreeWeight > 0 && !model.sprinting) {
+				constraints.push(
+					pointBlasterConstraint(pointingDirection, model.weaponsFreeWeight),
+				)
 			}
 			model.animator.update(model.rig, layers, delta, constraints)
 			const visorTime = Date.now() / 1_000
@@ -1162,6 +1256,7 @@ export class ArenaGame {
 		this.#updatePhysics(delta)
 		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)
 		this.#drones.update(delta)
+		this.#updateMuzzleFlashes(delta)
 		this.#updateProjectiles(delta)
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)

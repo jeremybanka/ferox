@@ -21,7 +21,7 @@ export function weaponsFreeLayer(
 	weight = 1,
 ): PilotAnimationLayer {
 	return {
-		fadeSeconds: 0.1,
+		fadeSeconds: 0.18,
 		id: "weapons-free",
 		influence: WEAPONS_FREE_INFLUENCE,
 		mode: "override",
