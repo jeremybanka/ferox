@@ -217,9 +217,8 @@ function makeLeg(
 	const boot = box(0.5, 0.28, 0.73, materials.armor)
 	boot.position.set(0, -0.06, -0.11)
 	const toe = new THREE.Group()
-	toe.position.set(0, -0.1, -0.28)
-	const toePlate = box(0.52, 0.2, 0.32, materials.armor)
-	toePlate.position.z = -0.16
+	toe.position.set(0, -0.05, -0.5)
+	const toePlate = box(0.52, 0.28, 0.32, materials.armor)
 	toe.add(toePlate)
 	foot.add(boot, toe)
 	knee.add(foot)
