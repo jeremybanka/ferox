@@ -29,6 +29,7 @@ import {
 	pointBlasterConstraint,
 } from "./pilot/DirectionalConstraints.ts"
 import { applyDoubleJumpAnimation } from "./pilot/DoubleJumpAnimation.ts"
+import { idleAnimationLayer } from "./pilot/IdleAnimation.ts"
 import { applyJumpAnimation } from "./pilot/JumpAnimation.ts"
 import { createPilotModel, type PilotRig } from "./pilot/PilotModel.ts"
 import {
@@ -1053,6 +1054,8 @@ export class ArenaGame {
 						direction,
 					),
 				)
+			} else {
+				layers.push(idleAnimationLayer(animationTime))
 			}
 			const lookDirection = { pitch: model.pitch, yaw: 0 }
 			const localAimDirection = model.aimDirection

@@ -23,6 +23,10 @@ import {
 	JUMP_KEYFRAME_MARKERS,
 } from "./pilot/JumpAnimation.ts"
 import {
+	idleAnimationLayer,
+	IDLE_DURATION_SECONDS,
+} from "./pilot/IdleAnimation.ts"
+import {
 	applyPilotAnimationLayers,
 	FULL_BODY_INFLUENCE,
 	sampleDraftAnimation,
@@ -72,7 +76,7 @@ const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	"crouch-run": 0.8,
 	"double-jump": 1.6,
 	forward: 1,
-	idle: 1,
+	idle: IDLE_DURATION_SECONDS,
 	jump: 1.9,
 	left: 1,
 	right: 1,
@@ -149,7 +153,9 @@ function applyPreviewPose(
 	const duration = BASE_DURATION_SECONDS[baseAnimation]
 	const progress = Math.min(1, Math.max(0, time / duration))
 	const layers: PilotAnimationLayer[] = []
-	if (
+	if (baseAnimation === "idle") {
+		layers.push(idleAnimationLayer(time))
+	} else if (
 		baseAnimation === "forward" ||
 		baseAnimation === "backward" ||
 		baseAnimation === "left" ||
