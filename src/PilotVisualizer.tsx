@@ -346,8 +346,8 @@ export function PilotVisualizer(): VNode {
 		const canvas = canvasRef.current
 		if (canvas === null) return
 		const scene = new THREE.Scene()
-		scene.background = new THREE.Color("#111827")
-		scene.fog = new THREE.Fog("#111827", 9, 18)
+		scene.background = new THREE.Color("#172230")
+		scene.fog = new THREE.Fog("#172230", 15, 30)
 		const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 40)
 		const cameraNormalPosition = new THREE.Vector3(6.2, 4.15, -8.75)
 		camera.position.copy(cameraNormalPosition)
@@ -359,13 +359,14 @@ export function PilotVisualizer(): VNode {
 		renderer.toneMappingExposure = 1.15
 		renderer.shadowMap.enabled = true
 
-		const hemisphere = new THREE.HemisphereLight("#d6f7ff", "#19151a", 2.2)
+		const ambient = new THREE.AmbientLight("#b8d7df", 1.15)
+		const hemisphere = new THREE.HemisphereLight("#d6f7ff", "#201a20", 2.8)
 		const key = new THREE.DirectionalLight("#fff0d4", 5.2)
 		key.position.set(4, 8, -5)
 		key.castShadow = true
 		const rim = new THREE.DirectionalLight("#5cf4dc", 3.5)
 		rim.position.set(-5, 3, -4)
-		scene.add(hemisphere, key, rim)
+		scene.add(ambient, hemisphere, key, rim)
 
 		const rig = createPilotModel()
 		scene.add(rig.root)
