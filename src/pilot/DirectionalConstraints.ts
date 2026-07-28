@@ -121,9 +121,9 @@ export function waveTowardConstraint(
 }
 
 /**
- * Solves an approximate wrist-blaster pointing chain after animation blending.
- * It deliberately distributes the correction across shoulder, elbow, and
- * wrist rather than making the wrist absorb the entire target angle.
+ * Solves the wrist-blaster direction after animation blending. The authored
+ * arm shape stays intact while the final correction rotates the entire chain
+ * from the shoulder, so the weapon cannot act like a gimbal in the hand.
  */
 export function pointBlasterConstraint(
 	direction: PilotPointDirection,
@@ -154,16 +154,16 @@ export function pointBlasterConstraint(
 		)
 		rig.rightHand.rotation.x = blendAngle(
 			rig.rightHand.rotation.x,
-			0.08 + local.pitch * 0.5,
+			0.08,
 			weight,
 		)
 		rig.rightHand.rotation.y = blendAngle(
 			rig.rightHand.rotation.y,
-			-0.12 - local.yaw * 0.34,
+			-0.12,
 			weight,
 		)
 
-		for (let iteration = 0; iteration < 3; iteration += 1) {
+		for (let iteration = 0; iteration < 6; iteration += 1) {
 			rig.root.updateMatrixWorld(true)
 			const headOrigin = rig.head.getWorldPosition(new THREE.Vector3())
 			const headDirection = FORWARD.clone().applyQuaternion(
@@ -171,23 +171,23 @@ export function pointBlasterConstraint(
 			)
 			const target = headOrigin.addScaledVector(headDirection, 10)
 			const muzzleOrigin = rig.muzzle.getWorldPosition(new THREE.Vector3())
+			const muzzleDirection = FORWARD.clone().applyQuaternion(
+				rig.muzzle.getWorldQuaternion(new THREE.Quaternion()),
+			)
 			const desiredDirection = target.sub(muzzleOrigin).normalize()
-			const desiredMuzzleWorld = new THREE.Quaternion().setFromUnitVectors(
-				FORWARD,
+			const shoulderCorrection = new THREE.Quaternion().setFromUnitVectors(
+				muzzleDirection,
 				desiredDirection,
 			)
-			const parentWorld = rig.rightElbow.getWorldQuaternion(
+			const currentShoulderWorld = rig.rightShoulder.getWorldQuaternion(
 				new THREE.Quaternion(),
 			)
-			const attachment = rig.weaponMount.quaternion
-				.clone()
-				.multiply(rig.weapon.quaternion)
-				.multiply(rig.muzzle.quaternion)
-			const desiredHandLocal = parentWorld
+			const parentWorld = rig.body.getWorldQuaternion(new THREE.Quaternion())
+			const desiredShoulderLocal = parentWorld
 				.invert()
-				.multiply(desiredMuzzleWorld)
-				.multiply(attachment.invert())
-			rig.rightHand.quaternion.slerp(desiredHandLocal, weight)
+				.multiply(shoulderCorrection)
+				.multiply(currentShoulderWorld)
+			rig.rightShoulder.quaternion.slerp(desiredShoulderLocal, weight)
 		}
 	}
 }
