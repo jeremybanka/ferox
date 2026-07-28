@@ -1,71 +1,46 @@
-import { alignBlasterHand } from "./BlasterPose.ts"
 import type { PilotRig } from "./PilotModel.ts"
-import type { RunDirection } from "./RunAnimation.ts"
+import {
+	PILOT_JOINTS,
+	RUN_INFLUENCE,
+	sampleDraftAnimation,
+	type PilotAnimationLayer,
+	type PilotJoint,
+	type PilotPose,
+	type PoseChannels,
+	type PoseInfluence,
+} from "./PilotAnimation.ts"
+import {
+	RUN_KEYFRAME_MARKERS,
+	sampleRunAnimationPose,
+	type RunDirection,
+} from "./RunAnimation.ts"
 
 export const CROUCH_RUN_DURATION_SECONDS = 0.8
 
-type CrouchRunGaitPose = {
-	lift: number
-	stride: number
-}
+export const CROUCH_RUN_KEYFRAME_MARKERS = RUN_KEYFRAME_MARKERS
 
-const CROUCH_RUN_KEYFRAMES: ReadonlyArray<
-	readonly [number, CrouchRunGaitPose]
-> = [
-	[0, { lift: 0.08, stride: 0.18 }],
-	[0.125, { lift: 0.48, stride: 0.72 }],
-	[0.25, { lift: 0.92, stride: 1 }],
-	[0.375, { lift: 0.68, stride: 0.46 }],
-	[0.5, { lift: 0.08, stride: -0.18 }],
-	[0.625, { lift: 0.48, stride: -0.72 }],
-	[0.75, { lift: 0.92, stride: -1 }],
-	[0.875, { lift: 0.68, stride: -0.46 }],
-	[1, { lift: 0.08, stride: 0.18 }],
-]
-
-const CROUCH_RUN_KEYFRAME_LABELS = [
-	"contact L",
-	"passing L",
-	"push L",
-	"flight L",
-	"contact R",
-	"passing R",
-	"push R",
-	"flight R",
-	"loop",
-] as const
-
-export const CROUCH_RUN_KEYFRAME_MARKERS = CROUCH_RUN_KEYFRAMES.map(
-	([progress], index) => ({
-		label: CROUCH_RUN_KEYFRAME_LABELS[index] ?? `pose ${index + 1}`,
-		progress,
-	}),
-)
-
-function blend(from: number, to: number, amount: number): number {
-	return from + (to - from) * amount
-}
-
-function smoothstep(value: number): number {
-	return value * value * (3 - 2 * value)
-}
-
-function sampleCrouchRunGait(progress: number): CrouchRunGaitPose {
-	const cycle = ((progress % 1) + 1) % 1
-	let poseIndex = 0
-	while (
-		poseIndex < CROUCH_RUN_KEYFRAMES.length - 2 &&
-		cycle > CROUCH_RUN_KEYFRAMES[poseIndex + 1]![0]
-	) {
-		poseIndex += 1
-	}
-	const [fromTime, from] = CROUCH_RUN_KEYFRAMES[poseIndex]!
-	const [toTime, to] = CROUCH_RUN_KEYFRAMES[poseIndex + 1]!
-	const amount = smoothstep((cycle - fromTime) / (toTime - fromTime))
-	return {
-		lift: blend(from.lift, to.lift, amount),
-		stride: blend(from.stride, to.stride, amount),
-	}
+const CROUCH_RUN_MOTION_BLEND: Readonly<PoseInfluence> = {
+	body: 0.34,
+	head: 0.12,
+	hips: 0.5,
+	leftArm: 0.08,
+	leftElbow: 0.08,
+	leftFoot: 0.58,
+	leftHand: 0.05,
+	leftKnee: 0.58,
+	leftLeg: 0.58,
+	leftShoulder: 0.1,
+	leftToe: 0.58,
+	neck: 0.14,
+	rightArm: 0.08,
+	rightElbow: 0.08,
+	rightFoot: 0.58,
+	rightHand: 0.05,
+	rightKnee: 0.58,
+	rightLeg: 0.58,
+	rightShoulder: 0.1,
+	rightToe: 0.58,
+	root: 0.52,
 }
 
 function crouchWeight(weight: number): number {
@@ -113,6 +88,77 @@ function applyGuardedCrouch(rig: PilotRig, weight: number): void {
 	// alignBlasterHand(rig, 0.16 * amount)
 }
 
+const GUARDED_CROUCH_POSE = sampleDraftAnimation((rig) => {
+	applyGuardedCrouch(rig, 1)
+})
+
+function blendChannels(
+	crouch: PoseChannels | undefined,
+	run: PoseChannels | undefined,
+	amount: number,
+): PoseChannels | undefined {
+	if (crouch === undefined && run === undefined) return undefined
+	const channels: PoseChannels = {}
+	for (const axis of ["x", "y", "z"] as const) {
+		const crouchValue = crouch?.[axis] ?? run?.[axis]
+		const runValue = run?.[axis] ?? crouch?.[axis]
+		if (crouchValue === undefined || runValue === undefined) continue
+		channels[axis] = crouchValue + (runValue - crouchValue) * amount
+	}
+	return channels
+}
+
+function blendJoint(
+	crouch: PilotPose[PilotJoint],
+	run: PilotPose[PilotJoint],
+	amount: number,
+): PilotPose[PilotJoint] {
+	if (crouch === undefined && run === undefined) return undefined
+	const position = blendChannels(crouch?.position, run?.position, amount)
+	const rotation = blendChannels(crouch?.rotation, run?.rotation, amount)
+	return {
+		...(position === undefined ? {} : { position }),
+		...(rotation === undefined ? {} : { rotation }),
+	}
+}
+
+export function sampleCrouchRunAnimationPose(
+	time: number,
+	intensity: number,
+	direction: RunDirection,
+): PilotPose {
+	const runCycleTime =
+		(time / CROUCH_RUN_DURATION_SECONDS) * ((Math.PI * 2) / 11)
+	const runPose = sampleRunAnimationPose(runCycleTime, 1, direction)
+	const pose: PilotPose = {}
+	for (const joint of PILOT_JOINTS) {
+		const amount =
+			Math.max(0, Math.min(1, intensity)) *
+			(CROUCH_RUN_MOTION_BLEND[joint] ?? 0)
+		const blended = blendJoint(
+			GUARDED_CROUCH_POSE[joint],
+			runPose[joint],
+			amount,
+		)
+		if (blended !== undefined) pose[joint] = blended
+	}
+	return pose
+}
+
+export function crouchRunAnimationLayer(
+	time: number,
+	intensity: number,
+	direction: RunDirection,
+): PilotAnimationLayer {
+	return {
+		fadeSeconds: 0.12,
+		id: `locomotion:crouch-${direction}`,
+		influence: RUN_INFLUENCE,
+		mode: "override",
+		pose: sampleCrouchRunAnimationPose(time, intensity, direction),
+	}
+}
+
 export function applyCrouchIdleAnimation(
 	rig: PilotRig,
 	time: number,
@@ -131,62 +177,4 @@ export function applyCrouchIdleAnimation(
 	rig.head.rotation.y = scan * 0.06 * amount
 	rig.leftElbow.rotation.x += breathing * 0.025 * amount
 	rig.rightElbow.rotation.x -= breathing * 0.02 * amount
-}
-
-export function applyCrouchMoveAnimation(
-	rig: PilotRig,
-	time: number,
-	weight: number,
-	direction: RunDirection,
-): void {
-	const amount = crouchWeight(weight)
-	const phaseDirection = direction === "backward" ? -1 : 1
-	const progress = (time * 7.6 * phaseDirection) / (Math.PI * 2)
-	const gait = sampleCrouchRunGait(progress)
-	const stride = gait.stride
-	const step = gait.lift
-	const strafe = direction === "left" ? -1 : direction === "right" ? 1 : 0
-	const forward =
-		direction === "forward" ? 1 : direction === "backward" ? -1 : 0
-
-	applyGuardedCrouch(rig, amount)
-
-	rig.root.position.y += step * 0.045 * amount
-	rig.root.rotation.z = -strafe * 0.08 * amount
-	rig.hips.rotation.y = stride * 0.12 * amount
-	rig.hips.rotation.z = -strafe * 0.08 * amount
-	rig.body.position.y += step * 0.025 * amount
-	rig.body.rotation.x -= forward * 0.08 * amount
-	rig.body.rotation.z = -strafe * 0.13 * amount
-	rig.neck.rotation.z = strafe * 0.03 * amount
-	rig.head.rotation.z = strafe * 0.05 * amount
-
-	if (strafe === 0) {
-		rig.leftLeg.rotation.x += stride * 0.28 * amount
-		rig.rightLeg.rotation.x -= stride * 0.28 * amount
-		rig.leftKnee.rotation.x -= Math.max(0, stride) * 0.22 * amount
-		rig.rightKnee.rotation.x -= Math.max(0, -stride) * 0.22 * amount
-		rig.leftFoot.rotation.x = -(
-			rig.leftLeg.rotation.x + rig.leftKnee.rotation.x
-		)
-		rig.rightFoot.rotation.x = -(
-			rig.rightLeg.rotation.x + rig.rightKnee.rotation.x
-		)
-		rig.leftToe.rotation.x += Math.max(0, -stride) * 0.24 * amount
-		rig.rightToe.rotation.x += Math.max(0, stride) * 0.24 * amount
-	} else {
-		const plantedStep = (0.5 + 0.5 * stride * strafe) * amount
-		rig.leftLeg.rotation.z -= strafe * stride * 0.12 * amount
-		rig.rightLeg.rotation.z -= strafe * stride * 0.12 * amount
-		rig.leftLeg.rotation.y = strafe * 0.12 * plantedStep
-		rig.rightLeg.rotation.y = -strafe * 0.12 * (amount - plantedStep)
-		rig.leftFoot.rotation.z += strafe * stride * 0.08 * amount
-		rig.rightFoot.rotation.z -= strafe * stride * 0.08 * amount
-	}
-
-	rig.leftShoulder.rotation.y = -stride * 0.04 * amount
-	rig.rightShoulder.rotation.y = stride * 0.04 * amount
-	rig.leftElbow.rotation.x += step * 0.06 * amount
-	rig.rightElbow.rotation.x += step * 0.04 * amount
-	alignBlasterHand(rig, 0.16 * amount, -strafe * 0.04 * amount)
 }

@@ -33,7 +33,7 @@ import {
 } from "./pilot/AirborneAnimation.ts"
 import {
 	applyCrouchIdleAnimation,
-	applyCrouchMoveAnimation,
+	crouchRunAnimationLayer,
 } from "./pilot/CrouchAnimation.ts"
 import {
 	lookTowardConstraint,
@@ -1140,15 +1140,13 @@ export class ArenaGame {
 				}
 			} else if (model.crouching) {
 				if (horizontalSpeed > 0.35) {
-					layers.push({
-						fadeSeconds: 0.12,
-						id: `draft:crouch-move:${direction}`,
-						influence: FULL_BODY_INFLUENCE,
-						mode: "override",
-						pose: sampleDraftAnimation((rig) => {
-							applyCrouchMoveAnimation(rig, animationTime, 1, direction)
-						}),
-					})
+					layers.push(
+						crouchRunAnimationLayer(
+							animationTime,
+							THREE.MathUtils.clamp(horizontalSpeed / 6, 0.35, 1),
+							direction,
+						),
+					)
 				} else {
 					layers.push({
 						fadeSeconds: 0.14,

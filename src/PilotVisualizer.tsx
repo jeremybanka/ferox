@@ -26,9 +26,9 @@ import {
 } from "./pilot/AirborneAnimation.ts"
 import {
 	applyCrouchIdleAnimation,
-	applyCrouchMoveAnimation,
 	CROUCH_RUN_DURATION_SECONDS,
 	CROUCH_RUN_KEYFRAME_MARKERS,
+	crouchRunAnimationLayer,
 } from "./pilot/CrouchAnimation.ts"
 import { DOUBLE_JUMP_KEYFRAME_MARKERS } from "./pilot/DoubleJumpAnimation.ts"
 import {
@@ -330,16 +330,7 @@ function applyPreviewPose(
 		)
 	} else if (getCrouchRunDirection(baseAnimation) !== null) {
 		const crouchDirection = getCrouchRunDirection(baseAnimation) ?? "forward"
-		layers.push(
-			draftPreviewLayer(`crouch-run:${crouchDirection}`, (draftRig) => {
-				applyCrouchMoveAnimation(
-					draftRig,
-					(progress * Math.PI * 2) / 7.6,
-					1,
-					crouchDirection,
-				)
-			}),
-		)
+		layers.push(crouchRunAnimationLayer(time, 1, crouchDirection))
 	}
 	if (weaponsFreeWeight > 0) {
 		layers.push(
