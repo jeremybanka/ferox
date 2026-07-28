@@ -1,8 +1,18 @@
 import * as THREE from "three"
+import { useI, useO } from "atom.io/react"
 import type { VNode } from "preact"
-import { useEffect, useRef, useState } from "preact/hooks"
+import { useEffect, useRef } from "preact/hooks"
 
 import css from "./PilotVisualizer.module.css"
+import {
+	pilotVisualizerAlignmentAtom,
+	pilotVisualizerAlignmentSweepAtom,
+	pilotVisualizerControlsAtom,
+	type BaseAnimation,
+	type OverlayAnimation,
+	type PilotVisualizerControls,
+	type SampleInterval,
+} from "./pilot-visualizer-state.ts"
 import {
 	airborneAnimationLayer,
 	DOUBLE_JUMP_BURST_SECONDS,
@@ -47,18 +57,6 @@ import {
 } from "./pilot/RunAnimation.ts"
 import { waveAnimationLayer } from "./pilot/WaveAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
-
-type CrouchRunAnimation = `crouch-run-${RunDirection}`
-
-type BaseAnimation =
-	| RunDirection
-	| "crouch"
-	| "double-jump"
-	| "idle"
-	| "jump"
-	| CrouchRunAnimation
-
-type OverlayAnimation = "wave" | "weapons-free"
 
 type AnimationMarker = {
 	label: string
@@ -120,33 +118,18 @@ const BUNNYHOP_MARKERS: readonly AnimationMarker[] = [
 	{ label: "recover", progress: 1 },
 ]
 
-type SampleInterval = 0.167 | 0.0833
-
 const FILM_FRAME_WIDTH = 192
 const FILM_FRAME_HEIGHT = 120
 
-type PreviewControls = {
-	baseAnimation: BaseAnimation
-	bunnyhopping: boolean
-	isPlaying: boolean
-	overlays: readonly OverlayAnimation[]
-	sampleInterval: SampleInterval
-	selectedTime: number
-	speed: number
-	targetPitch: number
-	targetYaw: number
-	yaw: number
-}
+type StateUpdate<Value> = Value | ((current: Value) => Value)
 
-type AlignmentStatus = {
-	hit: boolean
-	missDistance: number
-}
-
-type AlignmentSweepStatus = {
-	maxMissDistance: number
-	passed: boolean
-	samples: number
+function resolveStateUpdate<Value>(
+	current: Value,
+	next: StateUpdate<Value>,
+): Value {
+	return typeof next === "function"
+		? (next as (current: Value) => Value)(current)
+		: next
 }
 
 function isRunDirection(
@@ -433,21 +416,13 @@ export function PilotVisualizer(): VNode {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const filmCanvasRef = useRef<HTMLCanvasElement>(null)
 	const dragXRef = useRef<number | null>(null)
-	const timelineRef = useRef(0)
-	const [baseAnimation, setBaseAnimation] = useState<BaseAnimation>("forward")
-	const [bunnyhopping, setBunnyhopping] = useState(false)
-	const [overlays, setOverlays] = useState<readonly OverlayAnimation[]>([])
-	const [speed, setSpeed] = useState(1)
-	const [yaw, setYaw] = useState(0.42)
-	const [targetPitch, setTargetPitch] = useState(0)
-	const [targetYaw, setTargetYaw] = useState(0)
-	const [alignment, setAlignment] = useState<AlignmentStatus | null>(null)
-	const [alignmentSweep, setAlignmentSweep] =
-		useState<AlignmentSweepStatus | null>(null)
-	const [isPlaying, setIsPlaying] = useState(true)
-	const [sampleInterval, setSampleInterval] = useState<SampleInterval>(0.0833)
-	const [selectedTime, setSelectedTime] = useState(0)
-	const controlsRef = useRef<PreviewControls>({
+	const controls = useO(pilotVisualizerControlsAtom)
+	const setControls = useI(pilotVisualizerControlsAtom)
+	const alignment = useO(pilotVisualizerAlignmentAtom)
+	const setAlignment = useI(pilotVisualizerAlignmentAtom)
+	const alignmentSweep = useO(pilotVisualizerAlignmentSweepAtom)
+	const setAlignmentSweep = useI(pilotVisualizerAlignmentSweepAtom)
+	const {
 		baseAnimation,
 		bunnyhopping,
 		isPlaying,
@@ -458,19 +433,54 @@ export function PilotVisualizer(): VNode {
 		targetPitch,
 		targetYaw,
 		yaw,
-	})
+	} = controls
+	const timelineRef = useRef(selectedTime)
+	const controlsRef = useRef<PilotVisualizerControls>(controls)
+	controlsRef.current = controls
 
-	controlsRef.current = {
-		baseAnimation,
-		bunnyhopping,
-		isPlaying,
-		overlays,
-		sampleInterval,
-		selectedTime,
-		speed,
-		targetPitch,
-		targetYaw,
-		yaw,
+	function setControl<Key extends keyof PilotVisualizerControls>(
+		key: Key,
+		next: StateUpdate<PilotVisualizerControls[Key]>,
+	): void {
+		setControls((current) => ({
+			...current,
+			[key]: resolveStateUpdate(current[key], next),
+		}))
+	}
+
+	const setBaseAnimation = (next: BaseAnimation): void => {
+		setControl("baseAnimation", next)
+	}
+	const setBunnyhopping = (
+		next: boolean | ((current: boolean) => boolean),
+	): void => {
+		setControl("bunnyhopping", next)
+	}
+	const setIsPlaying = (next: boolean): void => {
+		setControl("isPlaying", next)
+	}
+	const setOverlays = (
+		next: StateUpdate<readonly OverlayAnimation[]>,
+	): void => {
+		setControl("overlays", next)
+	}
+	const setSampleInterval = (next: SampleInterval): void => {
+		setControl("sampleInterval", next)
+	}
+	const setSelectedTime = (next: number): void => {
+		setControl("selectedTime", next)
+	}
+	const setSpeed = (next: number): void => {
+		setControl("speed", next)
+	}
+	const setTargetPitch = (next: number): void => {
+		setControl("targetPitch", next)
+	}
+	const setTargetYaw = (next: number): void => {
+		setControl("targetYaw", next)
+	}
+	const setYaw = (next: number | ((current: number) => number)): void => {
+		setControl("yaw", next)
 	}
 	const duration = getPreviewDuration(baseAnimation, bunnyhopping)
 	const keyframeMarkers = getAnimationMarkers(baseAnimation, bunnyhopping)
