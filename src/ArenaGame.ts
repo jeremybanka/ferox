@@ -27,15 +27,14 @@ import {
 	stepJumpPhysics,
 } from "./JumpPhysics.ts"
 import {
-	airborneAnimationLayer,
+	airborneMomentumLayer,
 	DOUBLE_JUMP_BURST_SECONDS,
 	doubleJumpBurstLayer,
 	LANDING_PREP_SECONDS,
 	LANDING_RECOVERY_SECONDS,
 	landingPreparationLayer,
 	landingRecoveryLayer,
-	TAKEOFF_DURATION_SECONDS,
-	takeoffAnimationLayer,
+	risingFallingAnimationLayer,
 } from "./pilot/AirborneAnimation.ts"
 import {
 	applyCrouchIdleAnimation,
@@ -122,7 +121,6 @@ type RemotePilot = {
 	emoteStartedAt: number
 	freeAim: boolean
 	jump: 0 | 1 | 2
-	jumpStartedAt: number
 	landingImpactVelocity: number
 	landingStartedAt: number
 	pitch: number
@@ -375,7 +373,6 @@ export class ArenaGame {
 					emoteStartedAt: -Infinity,
 					freeAim: false,
 					jump: 0,
-					jumpStartedAt: -Infinity,
 					landingImpactVelocity: 0,
 					landingStartedAt: -Infinity,
 					pitch: 0,
@@ -427,7 +424,6 @@ export class ArenaGame {
 			model.freeAim = snapshot.freeAim
 			model.jump = snapshot.jump
 			if (model.jump > 0 && previousJump === 0) {
-				model.jumpStartedAt = animationEventTime
 				model.landingStartedAt = -Infinity
 			}
 			if (model.jump === 2 && previousJump !== 2) {
@@ -1140,15 +1136,12 @@ export class ArenaGame {
 					localVelocityZ: localVelocity.z,
 					verticalVelocity: model.velocity.y,
 				}
-				layers.push(airborneAnimationLayer(airborneMotion))
-				const takeoffElapsed = animationTime - model.jumpStartedAt
-				if (takeoffElapsed < TAKEOFF_DURATION_SECONDS) {
-					layers.push(takeoffAnimationLayer(takeoffElapsed, airborneMotion))
-				}
+				layers.push(risingFallingAnimationLayer(airborneMotion))
 				const doubleJumpElapsed = animationTime - model.doubleJumpStartedAt
 				if (model.jump === 2 && doubleJumpElapsed < DOUBLE_JUMP_BURST_SECONDS) {
 					layers.push(doubleJumpBurstLayer(doubleJumpElapsed, airborneMotion))
 				}
+				let momentumWeight = 1
 				if (model.velocity.y < -0.1) {
 					const groundClearance = Math.max(
 						0,
@@ -1158,6 +1151,8 @@ export class ArenaGame {
 					const predictedImpactSeconds =
 						groundClearance / Math.max(0.1, -model.velocity.y)
 					if (predictedImpactSeconds < LANDING_PREP_SECONDS) {
+						momentumWeight =
+							predictedImpactSeconds / LANDING_PREP_SECONDS
 						layers.push(
 							landingPreparationLayer(
 								1 - predictedImpactSeconds / LANDING_PREP_SECONDS,
@@ -1167,6 +1162,7 @@ export class ArenaGame {
 						)
 					}
 				}
+				layers.push(airborneMomentumLayer(airborneMotion, momentumWeight))
 			} else if (model.crouching) {
 				if (horizontalSpeed > 0.35) {
 					layers.push(

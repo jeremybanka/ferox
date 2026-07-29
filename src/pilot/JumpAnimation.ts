@@ -166,13 +166,12 @@ export function sampleJumpAnimationPose(progress: number): PilotPose {
 	return definePilotPose({
 		body: {
 			position: { y: pose.bodyY },
-			rotation: { x: -0.1, y: pose.bodyYaw },
+			rotation: { y: pose.bodyYaw },
 		},
 		head: { rotation: { y: -pose.bodyYaw * 0.34 } },
 		hips: {
 			position: { y: 1.72 + pose.hipsY },
 			rotation: {
-				x: -0.55,
 				y: pose.hipsYaw,
 				z: pose.hipsRoll,
 			},

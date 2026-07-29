@@ -19,15 +19,14 @@ import {
 	simulateFlatGroundJump,
 } from "./JumpPhysics.ts"
 import {
-	airborneAnimationLayer,
+	airborneMomentumLayer,
 	DOUBLE_JUMP_BURST_SECONDS,
 	doubleJumpBurstLayer,
 	LANDING_PREP_SECONDS,
 	LANDING_RECOVERY_SECONDS,
 	landingPreparationLayer,
 	landingRecoveryLayer,
-	TAKEOFF_DURATION_SECONDS,
-	takeoffAnimationLayer,
+	risingFallingAnimationLayer,
 } from "./pilot/AirborneAnimation.ts"
 import {
 	applyCrouchIdleAnimation,
@@ -257,11 +256,14 @@ function applyPreviewPose(
 				verticalVelocity: jumpSample.velocityY,
 			}
 			rootHeight = jumpSample.positionY
-			layers.push(airborneAnimationLayer(airborneMotion))
-			if (time < TAKEOFF_DURATION_SECONDS) {
-				layers.push(takeoffAnimationLayer(time, airborneMotion))
-			}
 			const impactTime = JUMP_TRAJECTORY.duration - time
+			layers.push(risingFallingAnimationLayer(airborneMotion))
+			layers.push(
+				airborneMomentumLayer(
+					airborneMotion,
+					Math.min(1, impactTime / LANDING_PREP_SECONDS),
+				),
+			)
 			if (impactTime < LANDING_PREP_SECONDS) {
 				layers.push(
 					landingPreparationLayer(
@@ -300,11 +302,14 @@ function applyPreviewPose(
 				verticalVelocity: jumpSample.velocityY,
 			}
 			rootHeight = jumpSample.positionY
-			layers.push(airborneAnimationLayer(airborneMotion))
-			if (time < TAKEOFF_DURATION_SECONDS) {
-				layers.push(takeoffAnimationLayer(time, airborneMotion))
-			}
 			const impactTime = JUMP_TRAJECTORY.duration - time
+			layers.push(risingFallingAnimationLayer(airborneMotion))
+			layers.push(
+				airborneMomentumLayer(
+					airborneMotion,
+					Math.min(1, impactTime / LANDING_PREP_SECONDS),
+				),
+			)
 			if (impactTime < LANDING_PREP_SECONDS) {
 				layers.push(
 					landingPreparationLayer(
@@ -332,7 +337,8 @@ function applyPreviewPose(
 			verticalVelocity: jumpSample.velocityY,
 		}
 		rootHeight = jumpSample.positionY
-		layers.push(airborneAnimationLayer(airborneMotion))
+		layers.push(risingFallingAnimationLayer(airborneMotion))
+		layers.push(airborneMomentumLayer(airborneMotion))
 		layers.push(
 			doubleJumpBurstLayer(
 				progress * DOUBLE_JUMP_BURST_SECONDS,
