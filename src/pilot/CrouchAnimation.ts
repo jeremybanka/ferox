@@ -128,7 +128,11 @@ const CROUCH_RUN_KEYFRAMES = [
 	{ at: 0.125, label: "passing L", pose: crouchGaitPose(passingLeft) },
 	{ at: 0.208, label: "push L", pose: crouchGaitPose(pushLeft) },
 	{ at: 0.33, label: "flight L", pose: crouchGaitPose(flightLeft) },
-	{ at: 0.5, label: "contact R", pose: crouchGaitPose(mirrorFrame(contactLeft)) },
+	{
+		at: 0.5,
+		label: "contact R",
+		pose: crouchGaitPose(mirrorFrame(contactLeft)),
+	},
 	{
 		at: 0.625,
 		label: "passing R",
@@ -249,8 +253,7 @@ export function sampleCrouchRunAnimationPose(
 	direction: RunDirection,
 ): PilotPose {
 	const phaseDirection = direction === "backward" ? -1 : 1
-	const progress =
-		(time / CROUCH_RUN_DURATION_SECONDS) * phaseDirection
+	const progress = (time / CROUCH_RUN_DURATION_SECONDS) * phaseDirection
 	const gaitPose = samplePilotKeyframes(CROUCH_RUN_ANIMATION, progress)
 	const amount = crouchWeight(intensity)
 	const pose: PilotPose = {}

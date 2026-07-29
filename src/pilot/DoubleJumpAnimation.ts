@@ -78,9 +78,8 @@ export function applyDoubleJumpAnimation(
 		-(rig.leftLeg.rotation.x + rig.leftKnee.rotation.x) +
 		keyframe(phase, 0.08, -0.12, -0.04)
 	rig.leftFoot.rotation.z = keyframe(phase, 0, -0.12, -0.08)
-	rig.rightFoot.rotation.x =
-		-(rig.rightLeg.rotation.x + rig.rightKnee.rotation.x) +
-		keyframe(phase, 0.06, -0.1, -0.04)
+	rig.rightFoot.rotation.x = 0
+	keyframe(phase, 0.06, -0.1, -0.04)
 	rig.rightFoot.rotation.z = keyframe(phase, 0, 0.12, 0.08)
 	rig.leftToe.rotation.x = keyframe(phase, 0.12, 0.34, 0.06)
 	rig.rightToe.rotation.x = keyframe(phase, 0.1, 0.38, 0.06)

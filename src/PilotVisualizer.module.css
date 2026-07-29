@@ -54,13 +54,12 @@ pilot-visualizer.class {
 	> animation-stack {
 		position: absolute;
 		bottom: 14.9rem;
-		left: calc(50% - 7.5rem);
+		left: clamp(1.2rem, 4vw, 4rem);
 		display: grid;
-		grid-template-columns: minmax(0, 2fr) minmax(11rem, 1fr);
-		gap: 0.65rem;
-		width: min(50rem, calc(100% - 30rem));
+		grid-template-columns: minmax(0, 1fr);
+		gap: 0.45rem;
+		width: min(23rem, calc(100% - 2.4rem));
 		font-family: var(--font-mono);
-		translate: -50%;
 
 		> fieldset {
 			display: flex;
@@ -561,10 +560,9 @@ pilot-visualizer.class {
 
 	@media (width <= 900px) {
 		> animation-stack {
-			left: 50%;
+			left: 1rem;
 			bottom: 18rem;
-			grid-template-columns: 1fr;
-			width: calc(100% - 2rem);
+			width: min(23rem, calc(100% - 2rem));
 		}
 
 		> animation-console {

@@ -107,9 +107,7 @@ const BUNNYHOP_MARKERS: readonly AnimationMarker[] = [
 	{
 		label: "apex",
 		progress:
-			BUNNYHOP_LAUNCH_VELOCITY /
-			BUNNYHOP_GRAVITY /
-			BUNNYHOP_DURATION_SECONDS,
+			BUNNYHOP_LAUNCH_VELOCITY / BUNNYHOP_GRAVITY / BUNNYHOP_DURATION_SECONDS,
 	},
 	{
 		label: "land",
@@ -245,8 +243,7 @@ function applyPreviewPose(
 			}
 			rootHeight = Math.max(
 				0,
-				BUNNYHOP_LAUNCH_VELOCITY * time -
-					0.5 * BUNNYHOP_GRAVITY * time * time,
+				BUNNYHOP_LAUNCH_VELOCITY * time - 0.5 * BUNNYHOP_GRAVITY * time * time,
 			)
 			layers.push(airborneAnimationLayer(airborneMotion))
 			if (time < TAKEOFF_DURATION_SECONDS) {
@@ -353,8 +350,7 @@ function applyPreviewPose(
 	}
 	applyPilotAnimationLayers(rig, layers, constraints)
 	if (baseAnimation === "jump" && progress < 0.9) {
-		rig.root.position.y +=
-			Math.sin((progress / 0.9) * Math.PI) * 1.55
+		rig.root.position.y += Math.sin((progress / 0.9) * Math.PI) * 1.55
 	} else if (baseAnimation === "double-jump") {
 		rig.root.position.y += Math.sin(progress * Math.PI) * 0.34
 	} else if (activeBunnyhop) {
@@ -672,8 +668,14 @@ export function PilotVisualizer(): VNode {
 			const weaponsFreeStep = elapsed / weaponsFreeTransition
 			weaponsFreePreviewWeight =
 				weaponsFreeTarget > weaponsFreePreviewWeight
-					? Math.min(weaponsFreeTarget, weaponsFreePreviewWeight + weaponsFreeStep)
-					: Math.max(weaponsFreeTarget, weaponsFreePreviewWeight - weaponsFreeStep)
+					? Math.min(
+							weaponsFreeTarget,
+							weaponsFreePreviewWeight + weaponsFreeStep,
+						)
+					: Math.max(
+							weaponsFreeTarget,
+							weaponsFreePreviewWeight - weaponsFreeStep,
+						)
 			applyPreviewPose(
 				rig,
 				controls.baseAnimation,
@@ -713,8 +715,7 @@ export function PilotVisualizer(): VNode {
 					measured.rayEnd.z,
 				)
 				positions.needsUpdate = true
-				const targetFocus =
-					0.5 * Math.pow(Math.abs(Math.cos(controls.yaw)), 6)
+				const targetFocus = 0.5 * Math.pow(Math.abs(Math.cos(controls.yaw)), 6)
 				cameraViewCenter
 					.copy(measured.muzzleOrigin)
 					.lerp(measured.target, targetFocus)

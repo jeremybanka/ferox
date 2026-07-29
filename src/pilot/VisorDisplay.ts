@@ -71,9 +71,7 @@ function setFrameUvs(geometry: THREE.BufferGeometry, frame: number): void {
 		(column * FACE_SIZE + EYE_SAFE_AREA.x + EYE_SAFE_AREA.width) / atlasWidth
 	const top = 1 - (row * FACE_SIZE + EYE_SAFE_AREA.y) / atlasHeight
 	const bottom =
-		1 -
-		(row * FACE_SIZE + EYE_SAFE_AREA.y + EYE_SAFE_AREA.height) /
-			atlasHeight
+		1 - (row * FACE_SIZE + EYE_SAFE_AREA.y + EYE_SAFE_AREA.height) / atlasHeight
 	const uvs = geometry.getAttribute("uv")
 	uvs.setXY(0, left, top)
 	uvs.setXY(1, right, top)
