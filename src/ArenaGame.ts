@@ -22,6 +22,11 @@ import {
 } from "./game-constants.ts"
 import type { GameHudState } from "./game-state.ts"
 import {
+	isJumpGrounded,
+	JUMP_PHYSICS,
+	stepJumpPhysics,
+} from "./JumpPhysics.ts"
+import {
 	airborneAnimationLayer,
 	DOUBLE_JUMP_BURST_SECONDS,
 	doubleJumpBurstLayer,
@@ -719,15 +724,15 @@ export class ArenaGame {
 		const eye = crouch ? CROUCH_EYE : PLAYER_EYE
 		const ground =
 			this.#heightAt(this.#player.position.x, this.#player.position.z) + eye
-		const grounded =
-			this.#player.position.y <= ground + 0.12 && this.#player.velocity.y <= 0
+		const grounded = isJumpGrounded(
+			{
+				positionY: this.#player.position.y,
+				velocityY: this.#player.velocity.y,
+			},
+			ground,
+		)
 		const speed = Math.hypot(this.#player.velocity.x, this.#player.velocity.z)
 		this.#slide = grounded && crouch && speed > 4.3
-		if (grounded) {
-			this.#player.position.y = ground
-			this.#player.velocity.y = Math.max(this.#player.velocity.y, 0)
-			this.#player.jumps = 0
-		}
 
 		const keyboardX =
 			Number(this.#keys.has("KeyD")) - Number(this.#keys.has("KeyA"))
@@ -784,36 +789,37 @@ export class ArenaGame {
 
 		const gamepadJumpPressed = gamepad.jump
 		if (gamepadJumpPressed && !this.#shotHeld) this.#jumpQueued = true
-		if (this.#jumpQueued) {
-			if (grounded) {
-				this.#player.velocity.y = 10.6
-				this.#player.jumps = 1
-			} else if (this.#player.jumps < 2) {
-				this.#player.velocity.y = 9.4
-				this.#player.jumps = 2
-			}
-			this.#jumpQueued = false
-		}
 		this.#shotHeld = gamepadJumpPressed
-		if (!grounded) this.#player.velocity.y -= 23 * delta
-		this.#player.position.addScaledVector(this.#player.velocity, delta)
 		const boundary = ARENA_SIZE * 0.47
-		this.#player.position.x = THREE.MathUtils.clamp(
-			this.#player.position.x,
+		const nextX = THREE.MathUtils.clamp(
+			this.#player.position.x + this.#player.velocity.x * delta,
 			-boundary,
 			boundary,
 		)
-		this.#player.position.z = THREE.MathUtils.clamp(
-			this.#player.position.z,
+		const nextZ = THREE.MathUtils.clamp(
+			this.#player.position.z + this.#player.velocity.z * delta,
 			-boundary,
 			boundary,
 		)
 		const nextGround =
-			this.#heightAt(this.#player.position.x, this.#player.position.z) + eye
-		if (this.#player.position.y < nextGround) {
-			this.#player.position.y = nextGround
-			this.#player.velocity.y = 0
-		}
+			this.#heightAt(nextX, nextZ) + eye
+		const jumpStep = stepJumpPhysics(
+			{
+				jumpCount: this.#player.jumps,
+				positionY: this.#player.position.y,
+				velocityY: this.#player.velocity.y,
+			},
+			{
+				delta,
+				groundAfter: nextGround,
+				groundBefore: ground,
+				jumpRequested: this.#jumpQueued,
+			},
+		)
+		this.#jumpQueued = false
+		this.#player.jumps = jumpStep.jumpCount
+		this.#player.position.set(nextX, jumpStep.positionY, nextZ)
+		this.#player.velocity.y = jumpStep.velocityY
 		const trigger = gamepad.fire || this.#keys.has("KeyF")
 		if (trigger && this.#fireCooldown <= 0) this.#fire()
 		this.#fireCooldown -= delta
@@ -1330,7 +1336,10 @@ export class ArenaGame {
 		if (this.#disposed) return
 		this.#animationFrame = requestAnimationFrame(this.#animate)
 		const now = performance.now()
-		const delta = Math.min((now - this.#lastFrame) / 1000, 0.04)
+		const delta = Math.min(
+			(now - this.#lastFrame) / 1000,
+			JUMP_PHYSICS.maximumStepSeconds,
+		)
 		this.#lastFrame = now
 		this.#updatePhysics(delta)
 		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)

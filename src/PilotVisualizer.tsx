@@ -14,6 +14,11 @@ import {
 	type SampleInterval,
 } from "./pilot-visualizer-state.ts"
 import {
+	sampleJumpTrajectory,
+	simulateDoubleJumpWindow,
+	simulateFlatGroundJump,
+} from "./JumpPhysics.ts"
+import {
 	airborneAnimationLayer,
 	DOUBLE_JUMP_BURST_SECONDS,
 	doubleJumpBurstLayer,
@@ -80,6 +85,14 @@ const BASE_ANIMATIONS: readonly BaseAnimation[] = [
 
 const OVERLAY_ANIMATIONS: readonly OverlayAnimation[] = ["weapons-free", "wave"]
 
+const JUMP_TRAJECTORY = simulateFlatGroundJump()
+const DOUBLE_JUMP_TRAJECTORY = simulateDoubleJumpWindow(
+	DOUBLE_JUMP_BURST_SECONDS,
+)
+const JUMP_RECOVERY_SECONDS = LANDING_RECOVERY_SECONDS
+const JUMP_PREVIEW_DURATION_SECONDS =
+	JUMP_TRAJECTORY.duration + JUMP_RECOVERY_SECONDS
+
 const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	backward: 1,
 	crouch: 2.4,
@@ -90,21 +103,14 @@ const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	"double-jump": DOUBLE_JUMP_BURST_SECONDS,
 	forward: 1,
 	idle: IDLE_DURATION_SECONDS,
-	jump: 1.9,
+	jump: JUMP_PREVIEW_DURATION_SECONDS,
 	left: 1,
 	right: 1,
 }
 
-const BUNNYHOP_GRAVITY = 23
-const BUNNYHOP_LAUNCH_VELOCITY = 10.6
-const BUNNYHOP_AIRTIME_SECONDS =
-	(2 * BUNNYHOP_LAUNCH_VELOCITY) / BUNNYHOP_GRAVITY
 const BUNNYHOP_GROUND_SECONDS = 0.22
 const BUNNYHOP_DURATION_SECONDS =
-	BUNNYHOP_AIRTIME_SECONDS + BUNNYHOP_GROUND_SECONDS
-const BUNNYHOP_APEX_SECONDS =
-	BUNNYHOP_LAUNCH_VELOCITY / BUNNYHOP_GRAVITY
-const JUMP_APEX_PROGRESS = (10.6 / (10.6 + 10.5)) * 0.9
+	JUMP_TRAJECTORY.duration + BUNNYHOP_GROUND_SECONDS
 
 function alignJumpMarkers(
 	progresses: readonly number[],
@@ -117,13 +123,13 @@ function alignJumpMarkers(
 
 const JUMP_PREVIEW_MARKERS = alignJumpMarkers([
 	0,
-	JUMP_APEX_PROGRESS,
-	0.9,
+	JUMP_TRAJECTORY.apexTime / JUMP_PREVIEW_DURATION_SECONDS,
+	JUMP_TRAJECTORY.duration / JUMP_PREVIEW_DURATION_SECONDS,
 ])
 const BUNNYHOP_MARKERS = alignJumpMarkers([
 	0,
-	BUNNYHOP_APEX_SECONDS / BUNNYHOP_DURATION_SECONDS,
-	BUNNYHOP_AIRTIME_SECONDS / BUNNYHOP_DURATION_SECONDS,
+	JUMP_TRAJECTORY.apexTime / BUNNYHOP_DURATION_SECONDS,
+	JUMP_TRAJECTORY.duration / BUNNYHOP_DURATION_SECONDS,
 ])
 
 const FILM_FRAME_WIDTH = 192
@@ -234,9 +240,8 @@ function applyPreviewPose(
 	const layers: PilotAnimationLayer[] = []
 	let rootHeight = 0
 	if (activeBunnyhop) {
-		if (time < BUNNYHOP_AIRTIME_SECONDS) {
-			const verticalVelocity =
-				BUNNYHOP_LAUNCH_VELOCITY - BUNNYHOP_GRAVITY * time
+		if (time < JUMP_TRAJECTORY.duration) {
+			const jumpSample = sampleJumpTrajectory(JUMP_TRAJECTORY, time)
 			const localVelocityX =
 				baseAnimation === "left" ? -7 : baseAnimation === "right" ? 7 : 0
 			const localVelocityZ =
@@ -249,22 +254,19 @@ function applyPreviewPose(
 				jumpCount: 1 as const,
 				localVelocityX,
 				localVelocityZ,
-				verticalVelocity,
+				verticalVelocity: jumpSample.velocityY,
 			}
-			rootHeight = Math.max(
-				0,
-				BUNNYHOP_LAUNCH_VELOCITY * time - 0.5 * BUNNYHOP_GRAVITY * time * time,
-			)
+			rootHeight = jumpSample.positionY
 			layers.push(airborneAnimationLayer(airborneMotion))
 			if (time < TAKEOFF_DURATION_SECONDS) {
 				layers.push(takeoffAnimationLayer(time, airborneMotion))
 			}
-			const impactTime = BUNNYHOP_AIRTIME_SECONDS - time
+			const impactTime = JUMP_TRAJECTORY.duration - time
 			if (impactTime < LANDING_PREP_SECONDS) {
 				layers.push(
 					landingPreparationLayer(
 						1 - impactTime / LANDING_PREP_SECONDS,
-						Math.max(0, -verticalVelocity),
+						Math.max(0, -jumpSample.velocityY),
 						airborneMotion,
 					),
 				)
@@ -277,8 +279,8 @@ function applyPreviewPose(
 			}
 			layers.push(
 				landingRecoveryLayer(
-					time - BUNNYHOP_AIRTIME_SECONDS,
-					BUNNYHOP_LAUNCH_VELOCITY,
+					time - JUMP_TRAJECTORY.duration,
+					JUMP_TRAJECTORY.impactVelocity,
 				),
 			)
 		}
@@ -289,23 +291,25 @@ function applyPreviewPose(
 			runAnimationLayer((progress * Math.PI * 2) / 11, 0.92, baseAnimation),
 		)
 	} else if (baseAnimation === "jump") {
-		if (progress < 0.9) {
-			const verticalVelocity = THREE.MathUtils.lerp(10.6, -10.5, progress / 0.9)
+		if (time < JUMP_TRAJECTORY.duration) {
+			const jumpSample = sampleJumpTrajectory(JUMP_TRAJECTORY, time)
 			const airborneMotion = {
 				jumpCount: 1 as const,
 				localVelocityX: 0,
 				localVelocityZ: -7.2,
-				verticalVelocity,
+				verticalVelocity: jumpSample.velocityY,
 			}
+			rootHeight = jumpSample.positionY
 			layers.push(airborneAnimationLayer(airborneMotion))
 			if (time < TAKEOFF_DURATION_SECONDS) {
 				layers.push(takeoffAnimationLayer(time, airborneMotion))
 			}
-			if (progress > 0.74) {
+			const impactTime = JUMP_TRAJECTORY.duration - time
+			if (impactTime < LANDING_PREP_SECONDS) {
 				layers.push(
 					landingPreparationLayer(
-						(progress - 0.74) / 0.16,
-						-verticalVelocity,
+						1 - impactTime / LANDING_PREP_SECONDS,
+						Math.max(0, -jumpSample.velocityY),
 						airborneMotion,
 					),
 				)
@@ -314,18 +318,20 @@ function applyPreviewPose(
 			layers.push(idleAnimationLayer(time))
 			layers.push(
 				landingRecoveryLayer(
-					((progress - 0.9) / 0.1) * LANDING_RECOVERY_SECONDS,
-					10.5,
+					time - JUMP_TRAJECTORY.duration,
+					JUMP_TRAJECTORY.impactVelocity,
 				),
 			)
 		}
 	} else if (baseAnimation === "double-jump") {
+		const jumpSample = sampleJumpTrajectory(DOUBLE_JUMP_TRAJECTORY, time)
 		const airborneMotion = {
 			jumpCount: 2 as const,
 			localVelocityX: 1.4,
 			localVelocityZ: -7.2,
-			verticalVelocity: THREE.MathUtils.lerp(9.4, -8, progress),
+			verticalVelocity: jumpSample.velocityY,
 		}
+		rootHeight = jumpSample.positionY
 		layers.push(airborneAnimationLayer(airborneMotion))
 		layers.push(
 			doubleJumpBurstLayer(
@@ -359,10 +365,10 @@ function applyPreviewPose(
 		constraints.push(pointBlasterConstraint(direction, weaponsFreeWeight))
 	}
 	applyPilotAnimationLayers(rig, layers, constraints)
-	if (baseAnimation === "jump" && progress < 0.9) {
-		rig.root.position.y += Math.sin((progress / 0.9) * Math.PI) * 1.55
+	if (baseAnimation === "jump") {
+		rig.root.position.y += rootHeight
 	} else if (baseAnimation === "double-jump") {
-		rig.root.position.y += Math.sin(progress * Math.PI) * 0.34
+		rig.root.position.y += rootHeight
 	} else if (activeBunnyhop) {
 		rig.root.position.y += rootHeight
 	}

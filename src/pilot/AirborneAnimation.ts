@@ -1,11 +1,11 @@
 import * as THREE from "three"
 
+import { JUMP_PHYSICS } from "../JumpPhysics.ts"
 import {
 	definePilotPose,
 	type PilotAnimationLayer,
 	type PilotJoint,
 	type PilotPose,
-	type PoseInfluence,
 } from "./PilotAnimation.ts"
 import { sampleJumpAnimationPose } from "./JumpAnimation.ts"
 
@@ -154,7 +154,10 @@ function addPoseRotation(
 }
 
 function jumpProgressFromMotion(motion: AirborneMotion): number {
-	const launchVelocity = motion.jumpCount === 2 ? 9.4 : 10.6
+	const launchVelocity =
+		motion.jumpCount === 2
+			? JUMP_PHYSICS.doubleJumpVelocity
+			: JUMP_PHYSICS.jumpVelocity
 	const rise = THREE.MathUtils.clamp(
 		motion.verticalVelocity / launchVelocity,
 		0,
@@ -184,7 +187,10 @@ function momentumFactors(motion?: AirborneMomentum): {
 }
 
 export function sampleAirbornePose(motion: AirborneMotion): PilotPose {
-	const launchVelocity = motion.jumpCount === 2 ? 9.4 : 10.6
+	const launchVelocity =
+		motion.jumpCount === 2
+			? JUMP_PHYSICS.doubleJumpVelocity
+			: JUMP_PHYSICS.jumpVelocity
 	const rise = THREE.MathUtils.clamp(
 		motion.verticalVelocity / launchVelocity,
 		0,
