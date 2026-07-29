@@ -14,12 +14,15 @@ import {
 	type SampleInterval,
 } from "./pilot-visualizer-state.ts"
 import {
+	JUMP_PHYSICS,
 	sampleJumpTrajectory,
 	simulateDoubleJumpWindow,
 	simulateFlatGroundJump,
 } from "./JumpPhysics.ts"
 import {
+	AIRBORNE_VELOCITY_MODEL,
 	airborneMomentumLayer,
+	airborneVelocityLayer,
 	DOUBLE_JUMP_BURST_SECONDS,
 	doubleJumpBurstLayer,
 	LANDING_PREP_SECONDS,
@@ -27,6 +30,9 @@ import {
 	landingPreparationLayer,
 	landingRecoveryLayer,
 	risingFallingAnimationLayer,
+	sampleAirbornePhase,
+	sampleAirborneVelocityResponse,
+	type AirborneMotion,
 } from "./pilot/AirborneAnimation.ts"
 import {
 	applyCrouchIdleAnimation,
@@ -136,6 +142,21 @@ const FILM_FRAME_HEIGHT = 120
 
 type StateUpdate<Value> = Value | ((current: Value) => Value)
 
+type PreviewAirborneSample = {
+	impactTime: number | null
+	momentumWeight: number
+	motion: AirborneMotion
+	rootHeight: number
+}
+
+type PoseStat = {
+	label: string
+	max: number
+	signed: boolean
+	unit: string
+	value: number
+}
+
 function resolveStateUpdate<Value>(
 	current: Value,
 	next: StateUpdate<Value>,
@@ -221,6 +242,180 @@ function formatTime(time: number): string {
 	return `${time.toFixed(isTenth ? 1 : 2)}s`
 }
 
+function getPreviewPlanarVelocity(baseAnimation: BaseAnimation): {
+	x: number
+	z: number
+} {
+	return {
+		x: baseAnimation === "left" ? -7 : baseAnimation === "right" ? 7 : 0,
+		z:
+			baseAnimation === "forward"
+				? -8
+				: baseAnimation === "backward"
+					? 6.4
+					: 0,
+	}
+}
+
+function samplePreviewAirborneMotion(
+	baseAnimation: BaseAnimation,
+	bunnyhopping: boolean,
+	time: number,
+): PreviewAirborneSample | null {
+	if (bunnyhopping && supportsBunnyhop(baseAnimation)) {
+		if (time >= JUMP_TRAJECTORY.duration) return null
+		const jumpSample = sampleJumpTrajectory(JUMP_TRAJECTORY, time)
+		const planarVelocity = getPreviewPlanarVelocity(baseAnimation)
+		const impactTime = JUMP_TRAJECTORY.duration - time
+		return {
+			impactTime,
+			momentumWeight: Math.min(1, impactTime / LANDING_PREP_SECONDS),
+			motion: {
+				jumpCount: 1,
+				localVelocityX: planarVelocity.x,
+				localVelocityZ: planarVelocity.z,
+				verticalVelocity: jumpSample.velocityY,
+			},
+			rootHeight: jumpSample.positionY,
+		}
+	}
+	if (baseAnimation === "jump") {
+		if (time >= JUMP_TRAJECTORY.duration) return null
+		const jumpSample = sampleJumpTrajectory(JUMP_TRAJECTORY, time)
+		const impactTime = JUMP_TRAJECTORY.duration - time
+		return {
+			impactTime,
+			momentumWeight: Math.min(1, impactTime / LANDING_PREP_SECONDS),
+			motion: {
+				jumpCount: 1,
+				localVelocityX: 0,
+				localVelocityZ: -7.2,
+				verticalVelocity: jumpSample.velocityY,
+			},
+			rootHeight: jumpSample.positionY,
+		}
+	}
+	if (baseAnimation === "double-jump") {
+		const jumpSample = sampleJumpTrajectory(DOUBLE_JUMP_TRAJECTORY, time)
+		return {
+			impactTime: null,
+			momentumWeight: 1,
+			motion: {
+				jumpCount: 2,
+				localVelocityX: 1.4,
+				localVelocityZ: -7.2,
+				verticalVelocity: jumpSample.velocityY,
+			},
+			rootHeight: jumpSample.positionY,
+		}
+	}
+	return null
+}
+
+function getPoseStats(sample: PreviewAirborneSample | null): readonly PoseStat[] {
+	const motion = sample?.motion
+	const phase =
+		motion === undefined
+			? { apex: 0, fall: 0, rise: 0 }
+			: sampleAirbornePhase(motion)
+	const response =
+		motion === undefined
+			? { pitch: 0, roll: 0, shoulderLift: 0 }
+			: sampleAirborneVelocityResponse(motion)
+	return [
+		{
+			label: "LOCAL X",
+			max: AIRBORNE_VELOCITY_MODEL.planarSpeedAtFullTilt,
+			signed: true,
+			unit: "m/s",
+			value: motion?.localVelocityX ?? 0,
+		},
+		{
+			label: "LOCAL Z",
+			max: AIRBORNE_VELOCITY_MODEL.planarSpeedAtFullTilt,
+			signed: true,
+			unit: "m/s",
+			value: motion?.localVelocityZ ?? 0,
+		},
+		{
+			label: "VERTICAL",
+			max: Math.max(
+				JUMP_PHYSICS.jumpVelocity,
+				AIRBORNE_VELOCITY_MODEL.verticalFallSpeedAtFullLift,
+			),
+			signed: true,
+			unit: "m/s",
+			value: motion?.verticalVelocity ?? 0,
+		},
+		{ label: "RISE", max: 1, signed: false, unit: "", value: phase.rise },
+		{ label: "APEX", max: 1, signed: false, unit: "", value: phase.apex },
+		{ label: "FALL", max: 1, signed: false, unit: "", value: phase.fall },
+		{
+			label: "PITCH",
+			max: AIRBORNE_VELOCITY_MODEL.maxPlanarTilt,
+			signed: true,
+			unit: "°",
+			value: response.pitch,
+		},
+		{
+			label: "ROLL",
+			max: AIRBORNE_VELOCITY_MODEL.maxPlanarTilt,
+			signed: true,
+			unit: "°",
+			value: response.roll,
+		},
+		{
+			label: "SHOULDER",
+			max: AIRBORNE_VELOCITY_MODEL.maxShoulderLift,
+			signed: true,
+			unit: "°",
+			value: response.shoulderLift,
+		},
+		{
+			label: "GESTURE",
+			max: 1,
+			signed: false,
+			unit: "",
+			value: sample?.momentumWeight ?? 0,
+		},
+	]
+}
+
+function PoseStatBar({ stat }: { stat: PoseStat }): VNode {
+	const normalized = THREE.MathUtils.clamp(stat.value / stat.max, -1, 1)
+	const start = stat.signed
+		? normalized < 0
+			? 50 + normalized * 50
+			: 50
+		: 0
+	const width = Math.abs(normalized) * (stat.signed ? 50 : 100)
+	const displayValue =
+		stat.unit === "°"
+			? THREE.MathUtils.radToDeg(stat.value)
+			: stat.value
+	const formattedValue =
+		stat.unit === "" ? displayValue.toFixed(2) : displayValue.toFixed(1)
+
+	return (
+		<pose-stat-bar data-negative={normalized < 0} data-signed={stat.signed}>
+			<label>{stat.label}</label>
+			<pose-stat-meter
+				role="meter"
+				aria-label={stat.label}
+				aria-valuemin={stat.signed ? -stat.max : 0}
+				aria-valuemax={stat.max}
+				aria-valuenow={stat.value}
+			>
+				<i style={`left: ${start}%; width: ${width}%`} />
+			</pose-stat-meter>
+			<output>
+				{formattedValue}
+				{stat.unit}
+			</output>
+		</pose-stat-bar>
+	)
+}
+
 function applyPreviewPose(
 	rig: ReturnType<typeof createPilotModel>,
 	baseAnimation: BaseAnimation,
@@ -239,37 +434,23 @@ function applyPreviewPose(
 	const layers: PilotAnimationLayer[] = []
 	let rootHeight = 0
 	if (activeBunnyhop) {
-		if (time < JUMP_TRAJECTORY.duration) {
-			const jumpSample = sampleJumpTrajectory(JUMP_TRAJECTORY, time)
-			const localVelocityX =
-				baseAnimation === "left" ? -7 : baseAnimation === "right" ? 7 : 0
-			const localVelocityZ =
-				baseAnimation === "forward"
-					? -8
-					: baseAnimation === "backward"
-						? 6.4
-						: 0
-			const airborneMotion = {
-				jumpCount: 1 as const,
-				localVelocityX,
-				localVelocityZ,
-				verticalVelocity: jumpSample.velocityY,
-			}
-			rootHeight = jumpSample.positionY
-			const impactTime = JUMP_TRAJECTORY.duration - time
-			layers.push(risingFallingAnimationLayer(airborneMotion))
-			layers.push(
-				airborneMomentumLayer(
-					airborneMotion,
-					Math.min(1, impactTime / LANDING_PREP_SECONDS),
-				),
-			)
-			if (impactTime < LANDING_PREP_SECONDS) {
+		const airborneSample = samplePreviewAirborneMotion(
+			baseAnimation,
+			bunnyhopping,
+			time,
+		)
+		if (airborneSample !== null) {
+			const { impactTime, momentumWeight, motion } = airborneSample
+			rootHeight = airborneSample.rootHeight
+			layers.push(risingFallingAnimationLayer(motion))
+			layers.push(airborneVelocityLayer(motion))
+			layers.push(airborneMomentumLayer(motion, momentumWeight))
+			if (impactTime !== null && impactTime < LANDING_PREP_SECONDS) {
 				layers.push(
 					landingPreparationLayer(
 						1 - impactTime / LANDING_PREP_SECONDS,
-						Math.max(0, -jumpSample.velocityY),
-						airborneMotion,
+						Math.max(0, -motion.verticalVelocity),
+						motion,
 					),
 				)
 			}
@@ -293,29 +474,23 @@ function applyPreviewPose(
 			runAnimationLayer((progress * Math.PI * 2) / 11, 0.92, baseAnimation),
 		)
 	} else if (baseAnimation === "jump") {
-		if (time < JUMP_TRAJECTORY.duration) {
-			const jumpSample = sampleJumpTrajectory(JUMP_TRAJECTORY, time)
-			const airborneMotion = {
-				jumpCount: 1 as const,
-				localVelocityX: 0,
-				localVelocityZ: -7.2,
-				verticalVelocity: jumpSample.velocityY,
-			}
-			rootHeight = jumpSample.positionY
-			const impactTime = JUMP_TRAJECTORY.duration - time
-			layers.push(risingFallingAnimationLayer(airborneMotion))
-			layers.push(
-				airborneMomentumLayer(
-					airborneMotion,
-					Math.min(1, impactTime / LANDING_PREP_SECONDS),
-				),
-			)
-			if (impactTime < LANDING_PREP_SECONDS) {
+		const airborneSample = samplePreviewAirborneMotion(
+			baseAnimation,
+			bunnyhopping,
+			time,
+		)
+		if (airborneSample !== null) {
+			const { impactTime, momentumWeight, motion } = airborneSample
+			rootHeight = airborneSample.rootHeight
+			layers.push(risingFallingAnimationLayer(motion))
+			layers.push(airborneVelocityLayer(motion))
+			layers.push(airborneMomentumLayer(motion, momentumWeight))
+			if (impactTime !== null && impactTime < LANDING_PREP_SECONDS) {
 				layers.push(
 					landingPreparationLayer(
 						1 - impactTime / LANDING_PREP_SECONDS,
-						Math.max(0, -jumpSample.velocityY),
-						airborneMotion,
+						Math.max(0, -motion.verticalVelocity),
+						motion,
 					),
 				)
 			}
@@ -329,20 +504,25 @@ function applyPreviewPose(
 			)
 		}
 	} else if (baseAnimation === "double-jump") {
-		const jumpSample = sampleJumpTrajectory(DOUBLE_JUMP_TRAJECTORY, time)
-		const airborneMotion = {
-			jumpCount: 2 as const,
-			localVelocityX: 1.4,
-			localVelocityZ: -7.2,
-			verticalVelocity: jumpSample.velocityY,
-		}
-		rootHeight = jumpSample.positionY
-		layers.push(risingFallingAnimationLayer(airborneMotion))
-		layers.push(airborneMomentumLayer(airborneMotion))
+		const airborneSample = samplePreviewAirborneMotion(
+			baseAnimation,
+			bunnyhopping,
+			time,
+		)
+		if (airborneSample === null) return
+		rootHeight = airborneSample.rootHeight
+		layers.push(risingFallingAnimationLayer(airborneSample.motion))
+		layers.push(airborneVelocityLayer(airborneSample.motion))
+		layers.push(
+			airborneMomentumLayer(
+				airborneSample.motion,
+				airborneSample.momentumWeight,
+			),
+		)
 		layers.push(
 			doubleJumpBurstLayer(
 				progress * DOUBLE_JUMP_BURST_SECONDS,
-				airborneMotion,
+				airborneSample.motion,
 			),
 		)
 	} else if (baseAnimation === "crouch") {
@@ -498,6 +678,12 @@ export function PilotVisualizer(): VNode {
 	const duration = getPreviewDuration(baseAnimation, bunnyhopping)
 	const keyframeMarkers = getAnimationMarkers(baseAnimation, bunnyhopping)
 	const sampleTimes = getSampleTimes(duration, sampleInterval)
+	const poseSample = samplePreviewAirborneMotion(
+		baseAnimation,
+		bunnyhopping,
+		Math.min(selectedTime, duration),
+	)
+	const poseStats = getPoseStats(poseSample)
 	const stackLabels = [
 		...(bunnyhopping ? ["AUTO BUNNYHOP"] : []),
 		...overlays.map((overlay) => overlay.toUpperCase()),
@@ -677,7 +863,7 @@ export function PilotVisualizer(): VNode {
 					(timelineRef.current + elapsed * controls.speed) % activeDuration
 				if (now - lastTimelineUpdate >= 75) {
 					lastTimelineUpdate = now
-					setSelectedTime(Math.round(timelineRef.current * 10) / 10)
+					setSelectedTime(Math.round(timelineRef.current * 1_000) / 1_000)
 				}
 			} else {
 				timelineRef.current = controls.selectedTime
@@ -954,6 +1140,17 @@ export function PilotVisualizer(): VNode {
 					</button>
 				</fieldset>
 			</animation-stack>
+			<pose-diagnostics data-active={poseSample !== null}>
+				<pose-diagnostics-header>
+					<strong>POSE INPUTS</strong>
+					<span>{poseSample === null ? "NO AIRBORNE SAMPLE" : "AIRBORNE LIVE"}</span>
+				</pose-diagnostics-header>
+				<section>
+					{poseStats.map((stat) => (
+						<PoseStatBar key={stat.label} stat={stat} />
+					))}
+				</section>
+			</pose-diagnostics>
 			<animation-console>
 				<control-bank>
 					<button

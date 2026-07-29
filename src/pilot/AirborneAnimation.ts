@@ -13,11 +13,30 @@ export const DOUBLE_JUMP_BURST_SECONDS = 0.46
 export const LANDING_PREP_SECONDS = 0.24
 export const LANDING_RECOVERY_SECONDS = 0.32
 
+export const AIRBORNE_VELOCITY_MODEL = {
+	maxPlanarTilt: 0.18,
+	maxShoulderLift: 0.24,
+	planarSpeedAtFullTilt: 8,
+	verticalFallSpeedAtFullLift: 12,
+} as const
+
 export type AirborneMotion = {
 	jumpCount: 1 | 2
 	localVelocityX: number
 	localVelocityZ: number
 	verticalVelocity: number
+}
+
+export type AirborneVelocityResponse = {
+	pitch: number
+	roll: number
+	shoulderLift: number
+}
+
+export type AirbornePhase = {
+	apex: number
+	fall: number
+	rise: number
 }
 
 type AirborneMomentum = Pick<
@@ -89,11 +108,7 @@ function momentumFactors(motion?: AirborneMomentum): {
 	}
 }
 
-function airbornePhase(motion: AirborneMotion): {
-	apex: number
-	fall: number
-	rise: number
-} {
+export function sampleAirbornePhase(motion: AirborneMotion): AirbornePhase {
 	const launchVelocity =
 		motion.jumpCount === 2
 			? JUMP_PHYSICS.doubleJumpVelocity
@@ -108,54 +123,66 @@ function airbornePhase(motion: AirborneMotion): {
 	return { apex, fall, rise }
 }
 
+export function sampleAirborneVelocityResponse(
+	motion: AirborneMotion,
+): AirborneVelocityResponse {
+	const launchVelocity =
+		motion.jumpCount === 2
+			? JUMP_PHYSICS.doubleJumpVelocity
+			: JUMP_PHYSICS.jumpVelocity
+	const verticalReference =
+		motion.verticalVelocity >= 0
+			? launchVelocity
+			: AIRBORNE_VELOCITY_MODEL.verticalFallSpeedAtFullLift
+
+	return {
+		pitch:
+			THREE.MathUtils.clamp(
+				motion.localVelocityZ / AIRBORNE_VELOCITY_MODEL.planarSpeedAtFullTilt,
+				-1,
+				1,
+			) * AIRBORNE_VELOCITY_MODEL.maxPlanarTilt,
+		roll:
+			-THREE.MathUtils.clamp(
+				motion.localVelocityX / AIRBORNE_VELOCITY_MODEL.planarSpeedAtFullTilt,
+				-1,
+				1,
+			) * AIRBORNE_VELOCITY_MODEL.maxPlanarTilt,
+		shoulderLift:
+			THREE.MathUtils.clamp(
+				motion.verticalVelocity / verticalReference,
+				-1,
+				1,
+			) * AIRBORNE_VELOCITY_MODEL.maxShoulderLift,
+	}
+}
+
 export function sampleRisingFallingPose(motion: AirborneMotion): PilotPose {
 	return sampleJumpAnimationPose(jumpProgressFromMotion(motion))
 }
 
-export function sampleAirborneMomentumPose(
-	motion: AirborneMotion,
-): PilotPose {
-	const { apex, fall, rise } = airbornePhase(motion)
+export function sampleAirborneMomentumPose(motion: AirborneMotion): PilotPose {
+	const { apex, fall, rise } = sampleAirbornePhase(motion)
 	const { forward, speed, strafe } = momentumFactors(motion)
 	const forwardMomentum = forward * speed
-	const leanEnvelope = 0.7 + apex * 0.15 + fall * 0.1
-	const legSweep =
-		forwardMomentum * (-rise * 0.18 - apex * 0.06 + fall * 0.14)
-	const legSplit =
-		forwardMomentum * (0.22 + apex * 0.14 + fall * 0.16)
+	const legSweep = forwardMomentum * (-rise * 0.18 - apex * 0.06 + fall * 0.14)
+	const legSplit = forwardMomentum * (0.22 + apex * 0.14 + fall * 0.16)
 	const leftLegDelta = strafe * 0.035 + legSweep + legSplit
 	const rightLegDelta = -strafe * 0.035 + legSweep - legSplit
 	const momentumTuck = Math.abs(forwardMomentum) * (0.06 + apex * 0.12)
-	const leftKneeDelta =
-		-momentumTuck - Math.abs(forwardMomentum) * fall * 0.12
+	const leftKneeDelta = -momentumTuck - Math.abs(forwardMomentum) * fall * 0.12
 	const rightKneeDelta =
-		-momentumTuck * 0.42 +
-		Math.abs(forwardMomentum) * (0.06 + apex * 0.08)
+		-momentumTuck * 0.42 + Math.abs(forwardMomentum) * (0.06 + apex * 0.08)
 	const freeArmPinwheel =
 		forwardMomentum * (-rise * 0.18 + apex * 0.08 + fall * 0.24)
 
 	return definePilotPose({
 		body: {
 			position: { z: forwardMomentum * (0.02 + apex * 0.025) },
-			rotation: {
-				x: -forwardMomentum * 0.09 * leanEnvelope,
-				y: -strafe * 0.025,
-				z: -strafe * 0.08,
-			},
+			rotation: { y: -strafe * 0.025 },
 		},
-		head: {
-			rotation: {
-				x: forwardMomentum * 0.025 * leanEnvelope,
-				z: strafe * 0.018,
-			},
-		},
-		hips: {
-			rotation: {
-				x: -forwardMomentum * 0.055 * leanEnvelope,
-				y: -strafe * 0.035,
-				z: -strafe * 0.05,
-			},
-		},
+		head: { rotation: { z: strafe * 0.018 } },
+		hips: { rotation: { y: -strafe * 0.035 } },
 		leftArm: {
 			rotation: {
 				x: -forwardMomentum * 0.08 + freeArmPinwheel,
@@ -181,12 +208,7 @@ export function sampleAirborneMomentumPose(
 				z: -freeArmPinwheel * 0.08,
 			},
 		},
-		neck: {
-			rotation: {
-				x: forwardMomentum * 0.035 * leanEnvelope,
-				z: strafe * 0.012,
-			},
-		},
+		neck: { rotation: { z: strafe * 0.012 } },
 		rightArm: { rotation: { x: -forwardMomentum * 0.07 } },
 		rightFoot: {
 			rotation: {
@@ -203,12 +225,23 @@ export function sampleAirborneMomentumPose(
 			},
 		},
 		rightShoulder: { rotation: { x: -forwardMomentum * 0.055 } },
-		root: {
-			rotation: {
-				x: -forwardMomentum * 0.025 * leanEnvelope,
-				z: -strafe * 0.035,
-			},
-		},
+	})
+}
+
+export function sampleAirborneVelocityPose(
+	motion: AirborneMotion,
+): PilotPose {
+	const { pitch, roll, shoulderLift } =
+		sampleAirborneVelocityResponse(motion)
+
+	return definePilotPose({
+		body: { rotation: { x: pitch * 1.52, z: roll * 0.5 } },
+		head: { rotation: { x: -pitch * 0.14 } },
+		hips: { rotation: { x: pitch * 0.31, z: roll * 0.3 } },
+		leftShoulder: { rotation: { z: -shoulderLift } },
+		neck: { rotation: { x: -pitch * 0.19 } },
+		rightShoulder: { rotation: { z: shoulderLift } },
+		root: { rotation: { x: pitch * 0.17, z: roll * 0.2 } },
 	})
 }
 
@@ -233,6 +266,17 @@ export function airborneMomentumLayer(
 		mode: "additive",
 		pose: sampleAirborneMomentumPose(motion),
 		weight: THREE.MathUtils.clamp(weight, 0, 1),
+	}
+}
+
+export function airborneVelocityLayer(
+	motion: AirborneMotion,
+): PilotAnimationLayer {
+	return {
+		fadeSeconds: 0.08,
+		id: "locomotion:airborne-velocity",
+		mode: "additive",
+		pose: sampleAirborneVelocityPose(motion),
 	}
 }
 

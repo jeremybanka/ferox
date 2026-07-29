@@ -28,6 +28,7 @@ import {
 } from "./JumpPhysics.ts"
 import {
 	airborneMomentumLayer,
+	airborneVelocityLayer,
 	DOUBLE_JUMP_BURST_SECONDS,
 	doubleJumpBurstLayer,
 	LANDING_PREP_SECONDS,
@@ -1162,6 +1163,7 @@ export class ArenaGame {
 						)
 					}
 				}
+				layers.push(airborneVelocityLayer(airborneMotion))
 				layers.push(airborneMomentumLayer(airborneMotion, momentumWeight))
 			} else if (model.crouching) {
 				if (horizontalSpeed > 0.35) {

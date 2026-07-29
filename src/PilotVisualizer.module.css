@@ -122,6 +122,106 @@ pilot-visualizer.class {
 		}
 	}
 
+	> pose-diagnostics {
+		position: absolute;
+		top: clamp(9rem, 16vh, 11.5rem);
+		left: clamp(1.2rem, 4vw, 4rem);
+		display: grid;
+		gap: 0.55rem;
+		width: min(23rem, calc(100% - 2.4rem));
+		padding: 0.65rem;
+		border: 1px solid rgb(109 235 215 / 0.2);
+		background: rgb(8 16 25 / 0.82);
+		font-family: var(--font-mono);
+		opacity: 0.58;
+
+		&[data-active="true"] {
+			opacity: 1;
+		}
+
+		> pose-diagnostics-header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+
+			> strong {
+				color: #e9fffa;
+				font-size: 0.58rem;
+				letter-spacing: 0.15em;
+			}
+
+			> span {
+				color: #71858b;
+				font-size: 0.42rem;
+				letter-spacing: 0.12em;
+			}
+		}
+
+		> section {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 0.38rem 0.75rem;
+
+			> pose-stat-bar {
+				display: grid;
+				grid-template-columns: 3.7rem minmax(2.5rem, 1fr) 3.35rem;
+				align-items: center;
+				gap: 0.38rem;
+
+				> label,
+				> output {
+					font-size: 0.42rem;
+					letter-spacing: 0.08em;
+				}
+
+				> label {
+					color: #809399;
+				}
+
+				> output {
+					color: #dffcf6;
+					text-align: right;
+				}
+
+				> pose-stat-meter {
+					position: relative;
+					display: block;
+					height: 0.32rem;
+					overflow: hidden;
+					background: rgb(109 235 215 / 0.09);
+
+					> i {
+						position: absolute;
+						inset-block: 0;
+						display: block;
+						background: #6debd7;
+						box-shadow: 0 0 0.5rem rgb(109 235 215 / 0.55);
+					}
+				}
+
+				&[data-signed="true"] > pose-stat-meter::after {
+					position: absolute;
+					inset-block: -0.1rem;
+					left: 50%;
+					width: 1px;
+					background: rgb(233 255 250 / 0.32);
+					content: "";
+				}
+
+				&[data-negative="true"] {
+					> output {
+						color: #ffc0a4;
+					}
+
+					> pose-stat-meter > i {
+						background: #f17b4b;
+						box-shadow: 0 0 0.5rem rgb(241 123 75 / 0.55);
+					}
+				}
+			}
+		}
+	}
+
 	> animation-console {
 		position: absolute;
 		bottom: 1.2rem;
@@ -559,6 +659,10 @@ pilot-visualizer.class {
 	}
 
 	@media (width <= 900px) {
+		> pose-diagnostics {
+			top: 8.5rem;
+		}
+
 		> animation-stack {
 			left: 1rem;
 			bottom: 18rem;
