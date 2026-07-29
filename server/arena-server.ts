@@ -5,9 +5,11 @@ import type { UserKey } from "atom.io/realtime"
 import { Server, type Socket as IoSocket } from "socket.io"
 
 import {
+	isPilotEmote,
 	isVisorExpression,
 	type CombatSnapshot,
 	type FireIntent,
+	type PilotEmote,
 	type VisorExpression,
 } from "../src/arena-protocol.ts"
 import {
@@ -20,6 +22,8 @@ import { ArenaSimulation } from "./ArenaSimulation.ts"
 type PlayerSnapshot = {
 	aimDirection: [number, number, number]
 	crouching: boolean
+	emote: PilotEmote | null
+	emoteStartedAt: number
 	freeAim: boolean
 	id: string
 	jump: 0 | 1 | 2
@@ -146,6 +150,8 @@ realtime(
 		players.set(socketId, {
 			aimDirection: [-Math.sin(spawnYaw), 0, -Math.cos(spawnYaw)],
 			crouching: false,
+			emote: null,
+			emoteStartedAt: 0,
 			freeAim: false,
 			id: socketId,
 			jump: 0,
@@ -173,6 +179,8 @@ realtime(
 				!Array.isArray(payload.rotation) ||
 				!Array.isArray(payload.velocity) ||
 				typeof payload.weaponsFree !== "boolean" ||
+				(payload.emote !== null && !isPilotEmote(payload.emote)) ||
+				!Number.isFinite(payload.emoteStartedAt) ||
 				payload.aimDirection.length !== 3 ||
 				payload.position.length !== 3 ||
 				payload.rotation.length !== 2 ||

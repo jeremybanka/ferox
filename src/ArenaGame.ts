@@ -8,6 +8,7 @@ import type {
 	FireIntent,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
+	PilotEmote,
 	VisorExpression,
 } from "./arena-protocol.ts"
 import { isVisorExpression } from "./arena-protocol.ts"
@@ -38,6 +39,7 @@ import {
 import {
 	lookTowardConstraint,
 	pointBlasterConstraint,
+	waveTowardConstraint,
 } from "./pilot/DirectionalConstraints.ts"
 import { idleAnimationLayer } from "./pilot/IdleAnimation.ts"
 import { createPilotModel, type PilotRig } from "./pilot/PilotModel.ts"
@@ -48,11 +50,17 @@ import {
 	type PilotAnimationLayer,
 } from "./pilot/PilotAnimation.ts"
 import { runAnimationLayer, type RunDirection } from "./pilot/RunAnimation.ts"
+import {
+	WAVE_DURATION_SECONDS,
+	waveAnimationLayer,
+} from "./pilot/WaveAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 
 type PlayerSnapshot = {
 	aimDirection: [number, number, number]
 	crouching: boolean
+	emote: PilotEmote | null
+	emoteStartedAt: number
 	freeAim: boolean
 	id: string
 	jump: 0 | 1 | 2
@@ -104,6 +112,9 @@ type RemotePilot = {
 	animator: PilotAnimationMixer
 	crouching: boolean
 	doubleJumpStartedAt: number
+	emote: PilotEmote | null
+	emoteSignalAt: number
+	emoteStartedAt: number
 	freeAim: boolean
 	jump: 0 | 1 | 2
 	jumpStartedAt: number
@@ -160,6 +171,7 @@ export class ArenaGame {
 	#bumperTapTargetId: number | null = null
 	#connected = false
 	#crouching = false
+	#dPadUpHeld = false
 	#disposed = false
 	#fireCooldown = 0
 	#freeAim = false
@@ -188,6 +200,8 @@ export class ArenaGame {
 	#visorExpression: VisorExpression = "boot"
 	#visorHurtUntil = 0
 	#visorStartedAt = Date.now() / 1_000
+	#waveStartedAt = 0
+	#waveUntil = 0
 	#weaponsFreeUntil = 0
 
 	constructor(options: ArenaGameOptions) {
@@ -315,6 +329,8 @@ export class ArenaGame {
 				.applyQuaternion(this.#camera.quaternion)
 				.toArray(),
 			crouching: false,
+			emote: null,
+			emoteStartedAt: 0,
 			freeAim: false,
 			jump: 0,
 			position: this.#player.position.toArray(),
@@ -349,6 +365,9 @@ export class ArenaGame {
 					animator: new PilotAnimationMixer(),
 					crouching: false,
 					doubleJumpStartedAt: -Infinity,
+					emote: null,
+					emoteSignalAt: 0,
+					emoteStartedAt: -Infinity,
 					freeAim: false,
 					jump: 0,
 					jumpStartedAt: -Infinity,
@@ -391,6 +410,15 @@ export class ArenaGame {
 			model.yaw = snapshot.rotation[0]
 			model.pitch = snapshot.rotation[1]
 			model.crouching = snapshot.crouching
+			if (
+				snapshot.emote !== null &&
+				(model.emote !== snapshot.emote ||
+					model.emoteSignalAt !== snapshot.emoteStartedAt)
+			) {
+				model.emoteStartedAt = performance.now() / 1_000
+			}
+			model.emote = snapshot.emote
+			model.emoteSignalAt = snapshot.emoteStartedAt
 			model.freeAim = snapshot.freeAim
 			model.jump = snapshot.jump
 			if (model.jump > 0 && previousJump === 0) {
@@ -440,12 +468,7 @@ export class ArenaGame {
 		const origin = new THREE.Vector3(...projectile.origin)
 		const direction = new THREE.Vector3(...projectile.direction)
 		this.#spawnMuzzleFlash(origin, direction, projectile.color)
-		this.#spawnProjectile(
-			projectile.id,
-			origin,
-			direction,
-			projectile.color,
-		)
+		this.#spawnProjectile(projectile.id, origin, direction, projectile.color)
 	}
 
 	readonly #onProjectileEnded = (ended: ProjectileEndedSnapshot): void => {
@@ -610,6 +633,7 @@ export class ArenaGame {
 		lock: boolean
 		reload: boolean
 		sprint: boolean
+		wave: boolean
 		x: number
 		y: number
 	} {
@@ -623,6 +647,7 @@ export class ArenaGame {
 				lock: false,
 				reload: false,
 				sprint: false,
+				wave: false,
 				x: 0,
 				y: 0,
 			}
@@ -639,6 +664,7 @@ export class ArenaGame {
 		const lock = gamepad.buttons[4]?.pressed ?? false
 		const reload = gamepad.buttons[5]?.pressed ?? false
 		const sprint = gamepad.buttons[10]?.pressed ?? false
+		const wave = gamepad.buttons[12]?.pressed ?? false
 		return {
 			crouch,
 			fire,
@@ -646,6 +672,7 @@ export class ArenaGame {
 			lock,
 			reload,
 			sprint,
+			wave,
 			x: deadzone(gamepad.axes[0] ?? 0),
 			y: deadzone(gamepad.axes[1] ?? 0),
 		}
@@ -653,6 +680,11 @@ export class ArenaGame {
 
 	#updatePhysics(delta: number): void {
 		const gamepad = this.#pollGamepad()
+		if (gamepad.wave && !this.#dPadUpHeld) {
+			this.#waveStartedAt = Date.now() / 1_000
+			this.#waveUntil = performance.now() / 1_000 + WAVE_DURATION_SECONDS
+		}
+		this.#dPadUpHeld = gamepad.wave
 		const freeAimPressed = gamepad.lock || this.#keys.has("KeyQ")
 		if (freeAimPressed) {
 			if (!this.#leftBumperHeld) {
@@ -861,15 +893,9 @@ export class ArenaGame {
 			opacity: 1,
 			transparent: true,
 		})
-		const mesh = new THREE.Mesh(
-			new THREE.OctahedronGeometry(1, 0),
-			material,
-		)
+		const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(1, 0), material)
 		mesh.position.copy(origin).addScaledVector(direction, 0.06)
-		mesh.quaternion.setFromUnitVectors(
-			new THREE.Vector3(0, 0, -1),
-			direction,
-		)
+		mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction)
 		mesh.scale.set(0.11, 0.11, 0.34)
 		const light = new THREE.PointLight(color, 5, 4)
 		mesh.add(light)
@@ -1114,10 +1140,7 @@ export class ArenaGame {
 					layers.push(takeoffAnimationLayer(takeoffElapsed, airborneMotion))
 				}
 				const doubleJumpElapsed = animationTime - model.doubleJumpStartedAt
-				if (
-					model.jump === 2 &&
-					doubleJumpElapsed < DOUBLE_JUMP_BURST_SECONDS
-				) {
+				if (model.jump === 2 && doubleJumpElapsed < DOUBLE_JUMP_BURST_SECONDS) {
 					layers.push(doubleJumpBurstLayer(doubleJumpElapsed, airborneMotion))
 				}
 				if (model.velocity.y < -0.1) {
@@ -1172,13 +1195,18 @@ export class ArenaGame {
 			const landingElapsed = animationTime - model.landingStartedAt
 			if (landingElapsed < LANDING_RECOVERY_SECONDS) {
 				layers.push(
-					landingRecoveryLayer(
-						landingElapsed,
-						model.landingImpactVelocity,
-					),
+					landingRecoveryLayer(landingElapsed, model.landingImpactVelocity),
 				)
 			}
 			const lookDirection = { pitch: model.pitch, yaw: 0 }
+			const waveElapsed = animationTime - model.emoteStartedAt
+			const waving =
+				model.emote === "wave" &&
+				waveElapsed >= 0 &&
+				waveElapsed < WAVE_DURATION_SECONDS
+			if (waving) {
+				layers.push(waveAnimationLayer(waveElapsed / WAVE_DURATION_SECONDS))
+			}
 			const localAimDirection = model.aimDirection
 				.clone()
 				.applyAxisAngle(new THREE.Vector3(0, 1, 0), -model.yaw)
@@ -1206,6 +1234,9 @@ export class ArenaGame {
 				)
 			}
 			const constraints = [lookTowardConstraint(lookDirection, 0.92)]
+			if (waving) {
+				constraints.push(waveTowardConstraint(lookDirection, 0.9))
+			}
 			if (model.weaponsFreeWeight > 0 && !model.sprinting) {
 				constraints.push(
 					pointBlasterConstraint(pointingDirection, model.weaponsFreeWeight),
@@ -1230,6 +1261,7 @@ export class ArenaGame {
 		if (!this.#connected || this.#snapshotElapsed < 0.05) return
 		this.#snapshotElapsed = 0
 		const now = performance.now() / 1_000
+		const waving = now < this.#waveUntil
 		const horizontalSpeed = Math.hypot(
 			this.#player.velocity.x,
 			this.#player.velocity.z,
@@ -1237,13 +1269,15 @@ export class ArenaGame {
 		const visorExpression: VisorExpression =
 			now < this.#visorHurtUntil
 				? "hurt"
-				: this.#freeAim
-					? "focus"
-					: this.#fireCooldown > 0
-						? "angry"
-						: this.#sprinting || horizontalSpeed > 6
+				: waving
+					? "happy"
+					: this.#freeAim
+						? "focus"
+						: this.#fireCooldown > 0
 							? "angry"
-							: "neutral"
+							: this.#sprinting || horizontalSpeed > 6
+								? "angry"
+								: "neutral"
 		if (visorExpression !== this.#visorExpression) {
 			this.#visorExpression = visorExpression
 			this.#visorStartedAt = Date.now() / 1_000
@@ -1251,6 +1285,8 @@ export class ArenaGame {
 		this.#socket.emit("arena:move", {
 			aimDirection: this.#getAimDirection().toArray(),
 			crouching: this.#crouching,
+			emote: waving ? "wave" : null,
+			emoteStartedAt: this.#waveStartedAt,
 			freeAim: this.#freeAim,
 			jump: this.#player.jumps,
 			position: this.#player.position.toArray(),

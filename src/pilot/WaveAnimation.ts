@@ -7,6 +7,8 @@ import {
 } from "./PilotAnimation.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
+export const WAVE_DURATION_SECONDS = 2
+
 function smoothstep(value: number): number {
 	return value * value * (3 - 2 * value)
 }
