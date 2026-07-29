@@ -26,101 +26,101 @@ type AirborneMomentum = Pick<
 	"localVelocityX" | "localVelocityZ"
 >
 
-const AIRBORNE_INFLUENCE = {
-	body: 0.78,
-	head: 0.12,
-	hips: 1,
-	leftArm: 0.18,
-	leftElbow: 0.18,
-	leftFoot: 1,
-	leftHand: 0.12,
-	leftKnee: 1,
-	leftLeg: 1,
-	leftShoulder: 0.22,
-	leftToe: 1,
-	neck: 0.16,
-	rightArm: 0.18,
-	rightElbow: 0.18,
-	rightFoot: 1,
-	rightHand: 0.12,
-	rightKnee: 1,
-	rightLeg: 1,
-	rightShoulder: 0.22,
-	rightToe: 1,
-	root: 0.4,
-} as const satisfies PoseInfluence
+// const AIRBORNE_INFLUENCE = {
+// 	body: 0.18,
+// 	head: 0.12,
+// 	hips: 0.5,
+// 	leftArm: 0.18,
+// 	leftElbow: 0.18,
+// 	leftFoot: 1,
+// 	leftHand: 0.12,
+// 	leftKnee: 1,
+// 	leftLeg: 1,
+// 	leftShoulder: 0.22,
+// 	leftToe: 1,
+// 	neck: 0.16,
+// 	rightArm: 0.18,
+// 	rightElbow: 0.18,
+// 	rightFoot: 1,
+// 	rightHand: 0.12,
+// 	rightKnee: 1,
+// 	rightLeg: 1,
+// 	rightShoulder: 0.22,
+// 	rightToe: 1,
+// 	root: 0.1,
+// } as const satisfies PoseInfluence
 
-const TAKEOFF_INFLUENCE = {
-	body: 0,
-	head: -0.35,
-	hips: 0,
-	leftArm: 2,
-	leftElbow: 1,
-	leftFoot: 1.5,
-	leftHand: 0.8,
-	leftKnee: 1.5,
-	leftLeg: 1.5,
-	leftShoulder: 1,
-	leftToe: 1.4,
-	neck: 0.4,
-	rightArm: 1,
-	rightElbow: 1,
-	rightFoot: 1.5,
-	rightHand: 0.8,
-	rightKnee: 1.5,
-	rightLeg: 1.5,
-	rightShoulder: 1,
-	rightToe: 1.4,
-	root: 1,
-} as const satisfies PoseInfluence
+// const TAKEOFF_INFLUENCE = {
+// 	body: 0,
+// 	head: -0.35,
+// 	hips: 0,
+// 	leftArm: 2,
+// 	leftElbow: 1,
+// 	leftFoot: 1.5,
+// 	leftHand: 0.8,
+// 	leftKnee: 1.5,
+// 	leftLeg: 1.5,
+// 	leftShoulder: 1,
+// 	leftToe: 1.4,
+// 	neck: 0.4,
+// 	rightArm: 1,
+// 	rightElbow: 1,
+// 	rightFoot: 1.5,
+// 	rightHand: 0.8,
+// 	rightKnee: 1.5,
+// 	rightLeg: 1.5,
+// 	rightShoulder: 1,
+// 	rightToe: 1.4,
+// 	root: 0.1,
+// } as const satisfies PoseInfluence
 
-const DOUBLE_JUMP_INFLUENCE = {
-	body: 1.2,
-	head: 0.16,
-	hips: 1.6,
-	leftArm: 0.32,
-	leftElbow: 0.32,
-	leftFoot: 1.6,
-	leftHand: 0.2,
-	leftKnee: 1.6,
-	leftLeg: 1.6,
-	leftShoulder: 0.36,
-	leftToe: 1.5,
-	neck: 0.2,
-	rightArm: 0.32,
-	rightElbow: 0.32,
-	rightFoot: 1.6,
-	rightHand: 0.2,
-	rightKnee: 1.6,
-	rightLeg: 1.6,
-	rightShoulder: 0.36,
-	rightToe: 1.5,
-	root: 0.8,
-} as const satisfies PoseInfluence
+// const DOUBLE_JUMP_INFLUENCE = {
+// 	body: 1.2,
+// 	head: 0.16,
+// 	hips: 1.6,
+// 	leftArm: 0.32,
+// 	leftElbow: 0.32,
+// 	leftFoot: 1.6,
+// 	leftHand: 0.2,
+// 	leftKnee: 1.6,
+// 	leftLeg: 1.6,
+// 	leftShoulder: 0.36,
+// 	leftToe: 1.5,
+// 	neck: 0.2,
+// 	rightArm: 0.32,
+// 	rightElbow: 0.32,
+// 	rightFoot: 1.6,
+// 	rightHand: 0.2,
+// 	rightKnee: 1.6,
+// 	rightLeg: 1.6,
+// 	rightShoulder: 0.36,
+// 	rightToe: 1.5,
+// 	root: 0.8,
+// } as const satisfies PoseInfluence
 
-const LANDING_INFLUENCE = {
-	body: 0.86,
-	head: 0.3,
-	hips: 1.7,
-	leftArm: 0.8,
-	leftElbow: 0.8,
-	leftFoot: 1.7,
-	leftHand: 0.65,
-	leftKnee: 1.7,
-	leftLeg: 1.7,
-	leftShoulder: 0.8,
-	leftToe: 1.5,
-	neck: 0.35,
-	rightArm: 0.8,
-	rightElbow: 0.8,
-	rightFoot: 1.7,
-	rightHand: 0.65,
-	rightKnee: 1.7,
-	rightLeg: 1.7,
-	rightShoulder: 0.8,
-	rightToe: 1.5,
-	root: 0.7,
-} as const satisfies PoseInfluence
+// const LANDING_INFLUENCE = {
+// 	body: 0.1,
+// 	head: 0.3,
+// 	hips: 0.2,
+// 	leftArm: 0.8,
+// 	leftElbow: 0.8,
+// 	leftFoot: 1.7,
+// 	leftHand: 0.65,
+// 	leftKnee: 1.7,
+// 	leftLeg: 1.7,
+// 	leftShoulder: 0.8,
+// 	leftToe: 1.5,
+// 	neck: 0.35,
+// 	rightArm: 0.8,
+// 	rightElbow: 0.8,
+// 	rightFoot: 1.7,
+// 	rightHand: 0.65,
+// 	rightKnee: 1.7,
+// 	rightLeg: 1.7,
+// 	rightShoulder: 0.8,
+// 	rightToe: 1.5,
+// 	root: 0.1,
+// } as const satisfies PoseInfluence
 
 function smoothstep(value: number): number {
 	const clamped = THREE.MathUtils.clamp(value, 0, 1)
@@ -162,8 +162,8 @@ function jumpProgressFromMotion(motion: AirborneMotion): number {
 	)
 	const fall = THREE.MathUtils.clamp(-motion.verticalVelocity / 12, 0, 1)
 	return rise > 0
-		? THREE.MathUtils.lerp(0.29, 0.55, 1 - rise)
-		: THREE.MathUtils.lerp(0.55, 0.76, fall)
+		? THREE.MathUtils.lerp(0, 0.5, 1 - rise)
+		: THREE.MathUtils.lerp(0.5, 1, fall)
 }
 
 function momentumFactors(motion?: AirborneMomentum): {
@@ -254,7 +254,7 @@ export function airborneAnimationLayer(
 	return {
 		fadeSeconds: 0.08,
 		id: "locomotion:airborne",
-		influence: AIRBORNE_INFLUENCE,
+		// influence: AIRBORNE_INFLUENCE,
 		mode: "override",
 		pose: sampleAirbornePose(motion),
 	}
@@ -267,7 +267,7 @@ export function takeoffAnimationLayer(
 	const progress = smoothstep(elapsed / TAKEOFF_DURATION_SECONDS)
 	const { forward, speed, strafe } = momentumFactors(motion)
 	const forwardMomentum = forward * speed
-	const pose = sampleJumpAnimationPose(progress * 0.29)
+	const pose = sampleJumpAnimationPose(progress * 0.2)
 	const leftLegDelta = -forwardMomentum * 0.14 * progress
 	const rightLegDelta = -forwardMomentum * 0.3 * progress
 	addPoseRotation(pose, "body", "x", -forwardMomentum * 0.24 * progress)
@@ -285,7 +285,7 @@ export function takeoffAnimationLayer(
 	return {
 		fadeSeconds: 0,
 		id: "transient:takeoff",
-		influence: TAKEOFF_INFLUENCE,
+		// influence: TAKEOFF_INFLUENCE,
 		mode: "override",
 		pose,
 	}
@@ -321,7 +321,7 @@ export function doubleJumpBurstLayer(
 	return {
 		fadeSeconds: 0.06,
 		id: "transient:double-jump",
-		influence: DOUBLE_JUMP_INFLUENCE,
+		// influence: DOUBLE_JUMP_INFLUENCE,
 		mode: "override",
 		pose: definePilotPose({
 			body: {
@@ -405,9 +405,7 @@ export function landingPreparationLayer(
 	const impact = THREE.MathUtils.clamp(impactVelocity / 12, 0, 1)
 	const { forward, speed, strafe } = momentumFactors(motion)
 	const forwardMomentum = forward * speed
-	const pose = sampleJumpAnimationPose(
-		THREE.MathUtils.lerp(0.76, 0.9, progress),
-	)
+	const pose = sampleJumpAnimationPose(THREE.MathUtils.lerp(0.7, 1, progress))
 	const leftLegDelta = forwardMomentum * 0.38
 	const rightLegDelta = -forwardMomentum * 0.3
 	const leftKneeDelta = -Math.abs(forwardMomentum) * 0.16
@@ -430,7 +428,7 @@ export function landingPreparationLayer(
 	return {
 		fadeSeconds: 0.04,
 		id: "transient:landing-prep",
-		influence: LANDING_INFLUENCE,
+		// influence: LANDING_INFLUENCE,
 		mode: "override",
 		pose,
 		weight: progress,
@@ -444,7 +442,7 @@ export function landingRecoveryLayer(
 	const progress = smoothstep(elapsed / LANDING_RECOVERY_SECONDS)
 	const weight = 1 - progress
 	const impact = THREE.MathUtils.clamp(impactVelocity / 12, 0, 1)
-	const pose = sampleJumpAnimationPose(THREE.MathUtils.lerp(0.9, 1, progress))
+	const pose = sampleJumpAnimationPose(1)
 	addPosePosition(pose, "body", "y", -weight * impact * 0.04)
 	addPoseRotation(pose, "body", "x", weight * impact * 0.08)
 	addPosePosition(pose, "hips", "y", -weight * impact * 0.08)
@@ -459,8 +457,9 @@ export function landingRecoveryLayer(
 	return {
 		fadeSeconds: 0,
 		id: "transient:landing-impact",
-		influence: LANDING_INFLUENCE,
+		// influence: LANDING_INFLUENCE,
 		mode: "override",
 		pose,
+		weight,
 	}
 }

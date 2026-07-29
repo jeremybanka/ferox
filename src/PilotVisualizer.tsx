@@ -104,35 +104,27 @@ const BUNNYHOP_DURATION_SECONDS =
 	BUNNYHOP_AIRTIME_SECONDS + BUNNYHOP_GROUND_SECONDS
 const BUNNYHOP_APEX_SECONDS =
 	BUNNYHOP_LAUNCH_VELOCITY / BUNNYHOP_GRAVITY
-const BUNNYHOP_ANTICIPATION_SECONDS =
-	TAKEOFF_DURATION_SECONDS * 0.4885
-const BUNNYHOP_LANDING_PREPARATION_SECONDS =
-	BUNNYHOP_AIRTIME_SECONDS - LANDING_PREP_SECONDS
-const BUNNYHOP_MARKERS: readonly AnimationMarker[] = [
-	{ label: "starting pose", progress: 0 },
-	{
-		label: "anticipation",
-		progress: BUNNYHOP_ANTICIPATION_SECONDS / BUNNYHOP_DURATION_SECONDS,
-	},
-	{
-		label: "takeoff extension",
-		progress: TAKEOFF_DURATION_SECONDS / BUNNYHOP_DURATION_SECONDS,
-	},
-	{
-		label: "hang time",
-		progress: BUNNYHOP_APEX_SECONDS / BUNNYHOP_DURATION_SECONDS,
-	},
-	{
-		label: "falling pose",
-		progress:
-			BUNNYHOP_LANDING_PREPARATION_SECONDS / BUNNYHOP_DURATION_SECONDS,
-	},
-	{
-		label: "landing contact",
-		progress: BUNNYHOP_AIRTIME_SECONDS / BUNNYHOP_DURATION_SECONDS,
-	},
-	{ label: "settle", progress: 1 },
-]
+const JUMP_APEX_PROGRESS = (10.6 / (10.6 + 10.5)) * 0.9
+
+function alignJumpMarkers(
+	progresses: readonly number[],
+): readonly AnimationMarker[] {
+	return JUMP_KEYFRAME_MARKERS.map((marker, index) => ({
+		label: marker.label,
+		progress: progresses[index] ?? marker.progress,
+	}))
+}
+
+const JUMP_PREVIEW_MARKERS = alignJumpMarkers([
+	0,
+	JUMP_APEX_PROGRESS,
+	0.9,
+])
+const BUNNYHOP_MARKERS = alignJumpMarkers([
+	0,
+	BUNNYHOP_APEX_SECONDS / BUNNYHOP_DURATION_SECONDS,
+	BUNNYHOP_AIRTIME_SECONDS / BUNNYHOP_DURATION_SECONDS,
+])
 
 const FILM_FRAME_WIDTH = 192
 const FILM_FRAME_HEIGHT = 120
@@ -202,7 +194,7 @@ function getAnimationMarkers(
 	if (getCrouchRunDirection(baseAnimation) !== null) {
 		return CROUCH_RUN_KEYFRAME_MARKERS
 	}
-	if (baseAnimation === "jump") return JUMP_KEYFRAME_MARKERS
+	if (baseAnimation === "jump") return JUMP_PREVIEW_MARKERS
 	if (baseAnimation === "double-jump") return DOUBLE_JUMP_KEYFRAME_MARKERS
 	return []
 }
