@@ -102,18 +102,36 @@ const BUNNYHOP_AIRTIME_SECONDS =
 const BUNNYHOP_GROUND_SECONDS = 0.22
 const BUNNYHOP_DURATION_SECONDS =
 	BUNNYHOP_AIRTIME_SECONDS + BUNNYHOP_GROUND_SECONDS
+const BUNNYHOP_APEX_SECONDS =
+	BUNNYHOP_LAUNCH_VELOCITY / BUNNYHOP_GRAVITY
+const BUNNYHOP_ANTICIPATION_SECONDS =
+	TAKEOFF_DURATION_SECONDS * 0.4885
+const BUNNYHOP_LANDING_PREPARATION_SECONDS =
+	BUNNYHOP_AIRTIME_SECONDS - LANDING_PREP_SECONDS
 const BUNNYHOP_MARKERS: readonly AnimationMarker[] = [
-	{ label: "takeoff", progress: 0 },
+	{ label: "starting pose", progress: 0 },
 	{
-		label: "apex",
-		progress:
-			BUNNYHOP_LAUNCH_VELOCITY / BUNNYHOP_GRAVITY / BUNNYHOP_DURATION_SECONDS,
+		label: "anticipation",
+		progress: BUNNYHOP_ANTICIPATION_SECONDS / BUNNYHOP_DURATION_SECONDS,
 	},
 	{
-		label: "land",
+		label: "takeoff extension",
+		progress: TAKEOFF_DURATION_SECONDS / BUNNYHOP_DURATION_SECONDS,
+	},
+	{
+		label: "hang time",
+		progress: BUNNYHOP_APEX_SECONDS / BUNNYHOP_DURATION_SECONDS,
+	},
+	{
+		label: "falling pose",
+		progress:
+			BUNNYHOP_LANDING_PREPARATION_SECONDS / BUNNYHOP_DURATION_SECONDS,
+	},
+	{
+		label: "landing contact",
 		progress: BUNNYHOP_AIRTIME_SECONDS / BUNNYHOP_DURATION_SECONDS,
 	},
-	{ label: "recover", progress: 1 },
+	{ label: "settle", progress: 1 },
 ]
 
 const FILM_FRAME_WIDTH = 192
@@ -1047,7 +1065,7 @@ export function PilotVisualizer(): VNode {
 						<fieldset>
 							<legend>
 								{bunnyhopping
-									? `${baseAnimation} bunnyhop events`
+									? `${baseAnimation} + bunnyhop animation keyframes`
 									: `${baseAnimation} animation keyframes`}
 							</legend>
 							{keyframeMarkers.map((marker, index) => {
