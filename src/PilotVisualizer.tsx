@@ -29,6 +29,7 @@ import {
 	LANDING_RECOVERY_SECONDS,
 	landingPreparationLayer,
 	landingRecoveryLayer,
+	limitAirborneShoulderSpread,
 	risingFallingAnimationLayer,
 	sampleAirbornePhase,
 	sampleAirborneVelocityResponse,
@@ -320,7 +321,7 @@ function getPoseStats(sample: PreviewAirborneSample | null): readonly PoseStat[]
 			: sampleAirbornePhase(motion)
 	const response =
 		motion === undefined
-			? { pitch: 0, roll: 0, shoulderLift: 0 }
+			? { pitch: 0, roll: 0, shoulderSpread: 0 }
 			: sampleAirborneVelocityResponse(motion)
 	return [
 		{
@@ -365,11 +366,11 @@ function getPoseStats(sample: PreviewAirborneSample | null): readonly PoseStat[]
 			value: response.roll,
 		},
 		{
-			label: "SHOULDER",
-			max: AIRBORNE_VELOCITY_MODEL.maxShoulderLift,
-			signed: true,
+			label: "SPREAD",
+			max: AIRBORNE_VELOCITY_MODEL.maxShoulderSpread,
+			signed: false,
 			unit: "°",
-			value: response.shoulderLift,
+			value: response.shoulderSpread,
 		},
 		{
 			label: "GESTURE",
@@ -432,6 +433,7 @@ function applyPreviewPose(
 		overlayWeights["weapons-free"] ??
 		(overlays.includes("weapons-free") ? 1 : 0)
 	const layers: PilotAnimationLayer[] = []
+	let isAirborne = false
 	let rootHeight = 0
 	if (activeBunnyhop) {
 		const airborneSample = samplePreviewAirborneMotion(
@@ -440,6 +442,7 @@ function applyPreviewPose(
 			time,
 		)
 		if (airborneSample !== null) {
+			isAirborne = true
 			const { impactTime, momentumWeight, motion } = airborneSample
 			rootHeight = airborneSample.rootHeight
 			layers.push(risingFallingAnimationLayer(motion))
@@ -480,6 +483,7 @@ function applyPreviewPose(
 			time,
 		)
 		if (airborneSample !== null) {
+			isAirborne = true
 			const { impactTime, momentumWeight, motion } = airborneSample
 			rootHeight = airborneSample.rootHeight
 			layers.push(risingFallingAnimationLayer(motion))
@@ -510,6 +514,7 @@ function applyPreviewPose(
 			time,
 		)
 		if (airborneSample === null) return
+		isAirborne = true
 		rootHeight = airborneSample.rootHeight
 		layers.push(risingFallingAnimationLayer(airborneSample.motion))
 		layers.push(airborneVelocityLayer(airborneSample.motion))
@@ -549,6 +554,9 @@ function applyPreviewPose(
 	}
 	if (weaponsFreeWeight > 0) {
 		constraints.push(pointBlasterConstraint(direction, weaponsFreeWeight))
+	}
+	if (isAirborne) {
+		constraints.push(limitAirborneShoulderSpread)
 	}
 	applyPilotAnimationLayers(rig, layers, constraints)
 	if (baseAnimation === "jump") {

@@ -4,6 +4,7 @@ import { JUMP_PHYSICS } from "../JumpPhysics.ts"
 import {
 	definePilotPose,
 	type PilotAnimationLayer,
+	type PilotAnimationConstraint,
 	type PilotJoint,
 	type PilotPose,
 } from "./PilotAnimation.ts"
@@ -15,8 +16,9 @@ export const LANDING_RECOVERY_SECONDS = 0.32
 
 export const AIRBORNE_VELOCITY_MODEL = {
 	maxPlanarTilt: 0.18,
-	maxShoulderLift: 0.24,
+	maxShoulderSpread: 1.5,
 	planarSpeedAtFullTilt: 8,
+	shoulderRotationLimit: 1.5,
 	verticalFallSpeedAtFullLift: 12,
 } as const
 
@@ -30,7 +32,7 @@ export type AirborneMotion = {
 export type AirborneVelocityResponse = {
 	pitch: number
 	roll: number
-	shoulderLift: number
+	shoulderSpread: number
 }
 
 export type AirbornePhase = {
@@ -126,15 +128,6 @@ export function sampleAirbornePhase(motion: AirborneMotion): AirbornePhase {
 export function sampleAirborneVelocityResponse(
 	motion: AirborneMotion,
 ): AirborneVelocityResponse {
-	const launchVelocity =
-		motion.jumpCount === 2
-			? JUMP_PHYSICS.doubleJumpVelocity
-			: JUMP_PHYSICS.jumpVelocity
-	const verticalReference =
-		motion.verticalVelocity >= 0
-			? launchVelocity
-			: AIRBORNE_VELOCITY_MODEL.verticalFallSpeedAtFullLift
-
 	return {
 		pitch:
 			THREE.MathUtils.clamp(
@@ -148,13 +141,22 @@ export function sampleAirborneVelocityResponse(
 				-1,
 				1,
 			) * AIRBORNE_VELOCITY_MODEL.maxPlanarTilt,
-		shoulderLift:
-			THREE.MathUtils.clamp(
-				motion.verticalVelocity / verticalReference,
-				-1,
-				1,
-			) * AIRBORNE_VELOCITY_MODEL.maxShoulderLift,
+		shoulderSpread: AIRBORNE_VELOCITY_MODEL.maxShoulderSpread,
 	}
+}
+
+export const limitAirborneShoulderSpread: PilotAnimationConstraint = (rig) => {
+	const limit = AIRBORNE_VELOCITY_MODEL.shoulderRotationLimit
+	rig.leftShoulder.rotation.z = THREE.MathUtils.clamp(
+		rig.leftShoulder.rotation.z,
+		-limit,
+		limit,
+	)
+	rig.rightShoulder.rotation.z = THREE.MathUtils.clamp(
+		rig.rightShoulder.rotation.z,
+		-limit,
+		limit,
+	)
 }
 
 export function sampleRisingFallingPose(motion: AirborneMotion): PilotPose {
@@ -228,19 +230,16 @@ export function sampleAirborneMomentumPose(motion: AirborneMotion): PilotPose {
 	})
 }
 
-export function sampleAirborneVelocityPose(
-	motion: AirborneMotion,
-): PilotPose {
-	const { pitch, roll, shoulderLift } =
-		sampleAirborneVelocityResponse(motion)
+export function sampleAirborneVelocityPose(motion: AirborneMotion): PilotPose {
+	const { pitch, roll, shoulderSpread } = sampleAirborneVelocityResponse(motion)
 
 	return definePilotPose({
 		body: { rotation: { x: pitch * 1.52, z: roll * 0.5 } },
 		head: { rotation: { x: -pitch * 0.14 } },
 		hips: { rotation: { x: pitch * 0.31, z: roll * 0.3 } },
-		leftShoulder: { rotation: { z: -shoulderLift } },
+		leftShoulder: { rotation: { z: -shoulderSpread } },
 		neck: { rotation: { x: -pitch * 0.19 } },
-		rightShoulder: { rotation: { z: shoulderLift } },
+		rightShoulder: { rotation: { z: shoulderSpread } },
 		root: { rotation: { x: pitch * 0.17, z: roll * 0.2 } },
 	})
 }
@@ -345,11 +344,11 @@ export function doubleJumpBurstLayer(
 			leftShoulder: {
 				rotation: {
 					x:
-						-0.18 -
+						-1.18 -
 						amount * 0.55 -
 						forwardMomentum * 0.14 +
 						freeArmPinwheel * 0.72,
-					z: -0.8 - freeArmPinwheel * 0.12,
+					z: -1.8 - freeArmPinwheel * 0.12,
 				},
 			},
 			leftToe: { rotation: { x: 0.06 + amount * 0.28 } },

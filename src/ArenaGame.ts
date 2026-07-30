@@ -35,6 +35,7 @@ import {
 	LANDING_RECOVERY_SECONDS,
 	landingPreparationLayer,
 	landingRecoveryLayer,
+	limitAirborneShoulderSpread,
 	risingFallingAnimationLayer,
 } from "./pilot/AirborneAnimation.ts"
 import {
@@ -1245,6 +1246,9 @@ export class ArenaGame {
 				constraints.push(
 					pointBlasterConstraint(pointingDirection, model.weaponsFreeWeight),
 				)
+			}
+			if (model.jump > 0) {
+				constraints.push(limitAirborneShoulderSpread)
 			}
 			model.animator.update(model.rig, layers, delta, constraints)
 			const visorTime = Date.now() / 1_000
