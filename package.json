@@ -13,6 +13,7 @@
 		"lint": "vp lint && eslint . && lasertag check",
 		"preview": "vite preview",
 		"spellcheck": "cspell .",
+		"test": "node --test server/*.test.ts",
 		"visor:generate": "node scripts/generate-visor-atlas.ts",
 		"visor:watch": "node scripts/watch-visor-atlas.ts"
 	},
