@@ -24,10 +24,10 @@ import {
 	GRENADE_BOUNCE_DAMPING,
 	GRENADE_FUSE_SECONDS,
 	GRENADE_GRAVITY,
-	GRENADE_MAX_DAMAGE,
 	GRENADE_RADIUS,
 	GRENADE_RESTITUTION,
 	GRENADE_THROW_SPEED,
+	grenadeDamageAtDistance,
 } from "../src/game-constants.ts"
 
 export type SimulationPlayer = {
@@ -528,7 +528,7 @@ export class ArenaSimulation {
 		for (let index = this.#drones.length - 1; index >= 0; index -= 1) {
 			const drone = this.#drones[index]
 			if (drone === undefined) continue
-			const damage = this.#explosionDamage(
+			const damage = grenadeDamageAtDistance(
 				grenade.position.distanceTo(drone.position),
 			)
 			if (damage > 0) this.#damageDrone(drone, damage, grenade.ownerId)
@@ -539,7 +539,7 @@ export class ArenaSimulation {
 				: PLAYER_EYE_HEIGHT
 			const bodyCenter = new THREE.Vector3(...player.position)
 			bodyCenter.y -= eyeHeight * 0.5
-			const damage = this.#explosionDamage(
+			const damage = grenadeDamageAtDistance(
 				grenade.position.distanceTo(bodyCenter),
 			)
 			if (damage > 0) this.#onPlayerDamage(player.id, damage)
@@ -549,13 +549,6 @@ export class ArenaSimulation {
 			position: grenade.position.toArray(),
 			radius: GRENADE_BLAST_RADIUS,
 		})
-	}
-
-	#explosionDamage(distance: number): number {
-		if (distance >= GRENADE_BLAST_RADIUS) return 0
-		return Math.round(
-			GRENADE_MAX_DAMAGE * (1 - distance / GRENADE_BLAST_RADIUS),
-		)
 	}
 
 	#damageDrone(

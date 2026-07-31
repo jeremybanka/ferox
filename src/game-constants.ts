@@ -5,14 +5,22 @@ export const DRONE_VISION_DISTANCE = 28
 export const DRONE_VISION_HALF_ANGLE = Math.PI / 5
 export const DRONE_AUDITORY_RADIUS = 14
 
-export const GRENADE_BLAST_RADIUS = 7.5
-export const GRENADE_BOUNCE_DAMPING = 0.72
-export const GRENADE_FUSE_SECONDS = 2.2
+export const GRENADE_BLAST_RADIUS = 6
+export const GRENADE_BOUNCE_DAMPING = 0.8
+export const GRENADE_DAMAGE_STEP = 20
+export const GRENADE_DAMAGE_STEP_DISTANCE = 1
+export const GRENADE_FUSE_SECONDS = 1.6
 export const GRENADE_GRAVITY = 18
-export const GRENADE_MAX_DAMAGE = 68
+export const GRENADE_MAX_DAMAGE = 120
 export const GRENADE_RADIUS = 0.18
-export const GRENADE_RESTITUTION = 0.42
+export const GRENADE_RESTITUTION = 0.56
 export const GRENADE_THROW_SPEED = 17
+
+export function grenadeDamageAtDistance(distance: number): number {
+	if (distance >= GRENADE_BLAST_RADIUS) return 0
+	const step = Math.floor(Math.max(0, distance) / GRENADE_DAMAGE_STEP_DISTANCE)
+	return Math.max(0, GRENADE_MAX_DAMAGE - step * GRENADE_DAMAGE_STEP)
+}
 
 export type PlayerSpawnPoint = readonly [x: number, z: number, yaw: number]
 

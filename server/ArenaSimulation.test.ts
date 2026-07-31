@@ -6,6 +6,7 @@ import type {
 	GrenadeSnapshot,
 	ProjectileEndedSnapshot,
 } from "../src/arena-protocol.ts"
+import { grenadeDamageAtDistance } from "../src/game-constants.ts"
 import { ArenaSimulation, type SimulationPlayer } from "./ArenaSimulation.ts"
 
 function makeSimulation(
@@ -112,7 +113,14 @@ test("grenades broadcast their flight and damage pilots when they explode", () =
 		"target",
 		"thrower",
 	])
-	assert.ok(damage.every(({ damage: amount }) => amount > 0 && amount <= 68))
+	assert.ok(damage.every(({ damage: amount }) => amount > 0 && amount <= 120))
+})
+
+test("grenade damage drops by 20 for every meter from the blast center", () => {
+	assert.deepEqual(
+		[0, 0.99, 1, 1.99, 2, 3, 4, 5, 5.99, 6].map(grenadeDamageAtDistance),
+		[120, 120, 100, 100, 80, 60, 40, 20, 20, 0],
+	)
 })
 
 test("player projectiles cannot damage their owner", () => {
