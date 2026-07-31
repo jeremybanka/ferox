@@ -48,9 +48,13 @@ import {
 	HIT_MARKER_DURATION_SECONDS,
 	MINI_MISSILE_PICKUP_POSITION,
 	MINI_MISSILE_PICKUP_RADIUS,
+	PLAYER_SLIDE_DUST_BUDGET,
+	PLAYER_SLIDE_DUST_LIFETIME_SECONDS,
+	PLAYER_SLIDE_SPEED_THRESHOLD,
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
+	WEAPON_RELOAD_DURATION_SECONDS,
 } from "./game-constants.ts"
 import {
 	contextualRightBumperAction,
@@ -112,6 +116,14 @@ import {
 	PILOT_STANDING_EYE_HEIGHT,
 } from "./pilot-targeting.ts"
 import {
+	cancelReload,
+	initialReloadState,
+	reloadProgress,
+	startReload,
+	type ReloadState,
+} from "./ReloadState.ts"
+import { stepSlideDust } from "./SlideDustState.ts"
+import {
 	airborneMomentumLayer,
 	airborneVelocityLayer,
 	DOUBLE_JUMP_BURST_SECONDS,
@@ -132,6 +144,7 @@ import {
 	pointBlasterConstraint,
 	waveTowardConstraint,
 } from "./pilot/DirectionalConstraints.ts"
+import { deathAnimationLayer } from "./pilot/DeathAnimation.ts"
 import { idleAnimationLayer } from "./pilot/IdleAnimation.ts"
 import { PILOT_MODEL_SCALE } from "./pilot/PilotDimensions.ts"
 import {
@@ -147,6 +160,8 @@ import {
 	type PilotAnimationLayer,
 } from "./pilot/PilotAnimation.ts"
 import { runAnimationLayer, type RunDirection } from "./pilot/RunAnimation.ts"
+import { reloadAnimationLayer } from "./pilot/ReloadAnimation.ts"
+import { slideAnimationLayer } from "./pilot/SlideAnimation.ts"
 import {
 	WAVE_DURATION_SECONDS,
 	waveAnimationLayer,
@@ -210,6 +225,11 @@ type MuzzleFlash = {
 	mesh: THREE.Mesh
 }
 
+type DustParticle = {
+	life: number
+	mesh: THREE.Mesh
+}
+
 type TargetingState =
 	| "acquired"
 	| "escaping"
@@ -222,6 +242,10 @@ type RemotePilot = {
 	aimDirection: THREE.Vector3
 	animator: PilotAnimationMixer
 	crouching: boolean
+	dead: boolean
+	deathStartedAt: number | null
+	dustActive: boolean
+	dustElapsed: number
 	doubleJumpStartedAt: number
 	damageDirection: THREE.Vector3
 	damageTracker: DamageFeedbackTracker
@@ -238,6 +262,9 @@ type RemotePilot = {
 	recoilSequence: number
 	recoilState: RemoteRecoilState
 	rig: PilotRig
+	reloading: boolean
+	reloadStartedAt: number
+	sliding: boolean
 	sprinting: boolean
 	target: THREE.Vector3
 	velocity: THREE.Vector3
@@ -262,6 +289,14 @@ export class ArenaGame {
 	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 280)
 	readonly #drones: DroneBotSystem
 	readonly #damageEffects = new BoundedDamageEffects<DamageParticleBurst>()
+	readonly #dustGeometry = new THREE.SphereGeometry(0.18, 5, 4)
+	readonly #dustMaterial = new THREE.MeshBasicMaterial({
+		color: "#bfa987",
+		depthWrite: false,
+		opacity: 0.34,
+		transparent: true,
+	})
+	readonly #dustParticles: DustParticle[] = []
 	readonly #grenadeExplosions: GrenadeExplosion[] = []
 	readonly #grenades: Grenade[] = []
 	readonly #keys = new Set<string>()
@@ -292,6 +327,8 @@ export class ArenaGame {
 	#bumperTapTargetId: SmartTargetRef | null = null
 	#connected = false
 	#crouching = false
+	#dead = false
+	#deathStartedAt: number | null = null
 	#dPadUpHeld = false
 	#disposed = false
 	#fireCooldown = 0
@@ -320,6 +357,12 @@ export class ArenaGame {
 	#recoilPulse = 0
 	#recoilState: RecoilSpreadState = initialRecoilSpreadState()
 	#rightBumperHeld = false
+	#reload: ReloadState = initialReloadState()
+	#reloadConfirmed = false
+	#reloadRequestedRevision = -1
+	#reloadSlot: WeaponSlotIndex | null = null
+	#reloadWeapon: WeaponKind | null = null
+	#respawnAt: number | null = null
 	#score = 0
 	#shotSequence = 0
 	#missileSequence = 0
@@ -333,6 +376,9 @@ export class ArenaGame {
 	#lastWheelEventAt: number | null = null
 	#shotHeld = false
 	#slide = false
+	#slideDustElapsed = 0
+	#slidePoseWeight = 0
+	#wasSliding = false
 	#snapshotElapsed = 0
 	#sprinting = false
 	#standardLockReported = false
@@ -392,6 +438,7 @@ export class ArenaGame {
 
 	dispose(): void {
 		this.#disposed = true
+		this.#reload = cancelReload(this.#reload)
 		cancelAnimationFrame(this.#animationFrame)
 		window.removeEventListener("keydown", this.#onKeyDown)
 		window.removeEventListener("keyup", this.#onKeyUp)
@@ -442,10 +489,17 @@ export class ArenaGame {
 			disposePilotModel(model.rig)
 		}
 		this.#remotePlayers.clear()
+		for (const particle of this.#dustParticles) {
+			this.#scene.remove(particle.mesh)
+		}
+		this.#dustParticles.length = 0
+		this.#dustGeometry.dispose()
+		this.#dustMaterial.dispose()
 		this.#renderer.dispose()
 	}
 
 	readonly #onKeyDown = (event: KeyboardEvent): void => {
+		if (this.#dead) return
 		this.#keys.add(event.code)
 		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
 		if (event.code === "KeyR" && !event.repeat) this.#requestReload()
@@ -459,6 +513,7 @@ export class ArenaGame {
 	}
 
 	readonly #onMouseMove = (event: MouseEvent): void => {
+		if (this.#dead) return
 		if (document.pointerLockElement !== this.#canvas) return
 		const sensitivity = this.#freeAim ? 0.000_85 : 0.0018
 		this.#player.yaw -= event.movementX * sensitivity
@@ -512,6 +567,7 @@ export class ArenaGame {
 		this.#pickupHoldState = IDLE_HOLD_INPUT_STATE
 		this.#pickupProgress = 0
 		this.#equipmentRevision = -1
+		this.#cancelReloadPresentation()
 		this.#drones.reset()
 		for (const projectile of this.#projectiles) {
 			this.#scene.remove(projectile.mesh)
@@ -552,6 +608,11 @@ export class ArenaGame {
 		this.#player.velocity.set(0, 0, 0)
 		this.#player.yaw = spawn.yaw
 		this.#player.pitch = -0.04
+		this.#dead = false
+		this.#deathStartedAt = null
+		this.#respawnAt = null
+		this.#cancelReloadPresentation()
+		this.#resetTransientState()
 		this.#camera.position.copy(this.#player.position)
 		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
 		this.#localDamageTracker = initialDamageFeedbackTracker(
@@ -569,6 +630,7 @@ export class ArenaGame {
 			jump: 0,
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
+			sliding: false,
 			sprinting: false,
 			velocity: [0, 0, 0],
 			visorExpression: this.#visorExpression,
@@ -601,6 +663,10 @@ export class ArenaGame {
 					crouching: false,
 					damageDirection: new THREE.Vector3(0, 0, -1),
 					damageTracker: initialDamageFeedbackTracker(),
+					dead: false,
+					deathStartedAt: null,
+					dustActive: false,
+					dustElapsed: 0,
 					doubleJumpStartedAt: -Infinity,
 					emote: null,
 					emoteSignalAt: 0,
@@ -618,6 +684,9 @@ export class ArenaGame {
 						.sequence,
 					recoilState: initialRemoteRecoilState(),
 					rig,
+					reloading: false,
+					reloadStartedAt: 0,
+					sliding: false,
 					sprinting: false,
 					target: new THREE.Vector3(),
 					velocity: new THREE.Vector3(),
@@ -655,6 +724,8 @@ export class ArenaGame {
 			model.yaw = snapshot.rotation[0]
 			model.pitch = snapshot.rotation[1]
 			model.crouching = snapshot.crouching
+			model.dead = snapshot.dead === true
+			model.deathStartedAt = snapshot.deathStartedAt
 			if (
 				snapshot.emote !== null &&
 				(model.emote !== snapshot.emote ||
@@ -700,6 +771,9 @@ export class ArenaGame {
 				model.landingImpactVelocity = Math.max(0, -previousVerticalVelocity)
 			}
 			model.sprinting = snapshot.sprinting
+			model.reloading = snapshot.reloading === true && !model.dead
+			model.reloadStartedAt = snapshot.reloadStartedAt
+			model.sliding = snapshot.sliding === true && !model.dead
 			model.weaponsFree = snapshot.weaponsFree === true
 			model.weapon = snapshot.equippedWeapon
 			setPilotGun(model.rig, model.weapon)
@@ -722,10 +796,22 @@ export class ArenaGame {
 	}
 
 	readonly #onCombat = (combat: CombatSnapshot): void => {
-		if (!Number.isFinite(combat.health) || !Number.isFinite(combat.score))
+		if (
+			!Number.isFinite(combat.health) ||
+			!Number.isFinite(combat.score) ||
+			typeof combat.dead !== "boolean"
+		)
 			return
 		this.#health = combat.health
 		this.#score = combat.score
+		this.#deathStartedAt = combat.deathStartedAt
+		this.#respawnAt = combat.respawnAt
+		if (combat.dead && !this.#dead) {
+			this.#dead = true
+			this.#cancelReloadPresentation()
+			this.#resetTransientState()
+		}
+		if (!combat.dead) this.#dead = false
 	}
 
 	readonly #onDirectHit = (result: DirectHitResult): void => {
@@ -806,13 +892,28 @@ export class ArenaGame {
 
 	readonly #onEquipment = (equipment: unknown): void => {
 		if (!isNewEquipmentSnapshot(equipment, this.#equipmentRevision)) return
+		const previousAmmo = this.#ammo
+		const active = activeEquipmentSlot(equipment)
+		if (this.#reload.reloading) {
+			const matchesRequestedSlot =
+				equipment.activeSlot === this.#reloadSlot &&
+				active.weapon === this.#reloadWeapon
+			if (!matchesRequestedSlot) {
+				this.#cancelReloadPresentation()
+			} else if (
+				equipment.revision > this.#reloadRequestedRevision &&
+				active.ammo > previousAmmo &&
+				active.ammo >= gunDefinition(active.weapon).magazineSize
+			) {
+				this.#reloadConfirmed = true
+			}
+		}
 		this.#equipmentRevision = equipment.revision
 		this.#activeSlot = equipment.activeSlot
 		this.#equipmentSlots = [
 			{ ...equipment.slots[0] },
 			equipment.slots[1] === null ? null : { ...equipment.slots[1] },
 		]
-		const active = activeEquipmentSlot(equipment)
 		this.#weaponKind = active.weapon
 		this.#ammo = active.ammo
 		this.#setLocalGunModel(active.weapon)
@@ -1062,6 +1163,39 @@ export class ArenaGame {
 		applyGunPresentation(this.#weapon, gunId, "firstPerson")
 	}
 
+	#cancelReloadPresentation(): void {
+		this.#reload = cancelReload(this.#reload)
+		this.#reloadConfirmed = false
+		this.#reloadRequestedRevision = -1
+		this.#reloadSlot = null
+		this.#reloadWeapon = null
+	}
+
+	#resetTransientState(): void {
+		this.#keys.clear()
+		this.#player.velocity.set(0, 0, 0)
+		this.#player.jumps = 0
+		this.#crouching = false
+		this.#slide = false
+		this.#slidePoseWeight = 0
+		this.#wasSliding = false
+		this.#slideDustElapsed = 0
+		this.#sprinting = false
+		this.#freeAim = false
+		this.#leftBumperHeld = false
+		this.#rightBumperHeld = false
+		this.#shotHeld = false
+		this.#grenadeHeld = false
+		this.#jumpQueued = false
+		this.#weaponsFreeUntil = 0
+		this.#waveUntil = 0
+		this.#acquiredTargetId = null
+		this.#lockedTargetId = null
+		this.#targetingState = "idle"
+		this.#reticleX = 0.5
+		this.#reticleY = 0.5
+	}
+
 	#pollGamepad(): {
 		crouch: boolean
 		fire: boolean
@@ -1127,6 +1261,19 @@ export class ArenaGame {
 	}
 
 	#updatePhysics(delta: number): void {
+		if (
+			this.#reload.reloading &&
+			this.#reloadConfirmed &&
+			reloadProgress(this.#reload, Date.now() / 1_000) >= 1
+		) {
+			this.#cancelReloadPresentation()
+		}
+		if (this.#dead) {
+			this.#player.velocity.set(0, 0, 0)
+			this.#fireCooldown = Math.max(0, this.#fireCooldown - delta)
+			this.#grenadeCooldown = Math.max(0, this.#grenadeCooldown - delta)
+			return
+		}
 		const gamepad = this.#pollGamepad()
 		const switchEdge = inputEdge(gamepad.switchWeapon, this.#switchHeld)
 		this.#switchHeld = switchEdge.held
@@ -1200,7 +1347,8 @@ export class ArenaGame {
 			ground,
 		)
 		const speed = Math.hypot(this.#player.velocity.x, this.#player.velocity.z)
-		this.#slide = grounded && crouch && speed > 4.3
+		this.#slide = grounded && crouch && speed > PLAYER_SLIDE_SPEED_THRESHOLD
+		this.#updateLocalSlideDust(delta)
 
 		const keyboardX =
 			Number(this.#keys.has("KeyD")) - Number(this.#keys.has("KeyA"))
@@ -1310,7 +1458,7 @@ export class ArenaGame {
 	}
 
 	#requestPickup(): void {
-		if (!this.#connected) return
+		if (!this.#connected || this.#dead) return
 		this.#socket.emit("arena:inventory-action", {
 			clientActionId: this.#nextInventoryActionId(),
 			type: "collect",
@@ -1318,7 +1466,8 @@ export class ArenaGame {
 	}
 
 	#requestSwitch(direction: -1 | 1): void {
-		if (!this.#connected || this.#equipmentSlots[1] === null) return
+		if (!this.#connected || this.#dead || this.#equipmentSlots[1] === null)
+			return
 		this.#socket.emit("arena:inventory-action", {
 			clientActionId: this.#nextInventoryActionId(),
 			direction,
@@ -1327,7 +1476,8 @@ export class ArenaGame {
 	}
 
 	#requestDrop(): void {
-		if (!this.#connected || this.#equipmentSlots[1] === null) return
+		if (!this.#connected || this.#dead || this.#equipmentSlots[1] === null)
+			return
 		this.#socket.emit("arena:inventory-action", {
 			clientActionId: this.#nextInventoryActionId(),
 			type: "drop-mini-missile",
@@ -1338,10 +1488,20 @@ export class ArenaGame {
 		const gun = gunDefinition(this.#weaponKind)
 		if (
 			!this.#connected ||
+			this.#dead ||
+			this.#reload.reloading ||
 			!gun.capabilities.reload ||
 			this.#ammo >= gun.magazineSize
 		)
 			return
+		this.#reload = startReload(
+			initialReloadState(this.#ammo),
+			Date.now() / 1_000,
+		)
+		this.#reloadConfirmed = false
+		this.#reloadRequestedRevision = this.#equipmentRevision
+		this.#reloadSlot = this.#activeSlot
+		this.#reloadWeapon = this.#weaponKind
 		this.#socket.emit("arena:inventory-action", {
 			clientActionId: this.#nextInventoryActionId(),
 			type: "reload",
@@ -1349,7 +1509,13 @@ export class ArenaGame {
 	}
 
 	#fire(): void {
-		if (this.#fireCooldown > 0 || this.#ammo === 0) return
+		if (
+			this.#dead ||
+			this.#reload.reloading ||
+			this.#fireCooldown > 0 ||
+			this.#ammo === 0
+		)
+			return
 		if (this.#sprinting) return
 		if (
 			this.#lockedTargetId !== null &&
@@ -1400,7 +1566,7 @@ export class ArenaGame {
 	}
 
 	#throwGrenade(): void {
-		if (this.#grenadeCooldown > 0) return
+		if (this.#dead || this.#grenadeCooldown > 0) return
 		this.#grenadeCooldown = 1
 		const direction = new THREE.Vector3(0, 0, -1).applyEuler(
 			new THREE.Euler(this.#player.pitch, this.#player.yaw, 0, "YXZ"),
@@ -1700,6 +1866,58 @@ export class ArenaGame {
 		}
 	}
 
+	#emitDustAt(x: number, z: number): void {
+		for (let index = 0; index < 2; index += 1) {
+			if (this.#dustParticles.length >= PLAYER_SLIDE_DUST_BUDGET) {
+				const oldest = this.#dustParticles.shift()
+				if (oldest !== undefined) this.#scene.remove(oldest.mesh)
+			}
+			const mesh = new THREE.Mesh(this.#dustGeometry, this.#dustMaterial)
+			const angle = Math.random() * Math.PI * 2
+			const radius = 0.16 + Math.random() * 0.3
+			const particleX = x + Math.cos(angle) * radius
+			const particleZ = z + Math.sin(angle) * radius
+			mesh.position.set(
+				particleX,
+				this.#heightAt(particleX, particleZ) + 0.09,
+				particleZ,
+			)
+			mesh.scale.setScalar(0.65 + Math.random() * 0.45)
+			this.#scene.add(mesh)
+			this.#dustParticles.push({
+				life: PLAYER_SLIDE_DUST_LIFETIME_SECONDS,
+				mesh,
+			})
+		}
+	}
+
+	#updateLocalSlideDust(delta: number): void {
+		const step = stepSlideDust(
+			{ active: this.#wasSliding, elapsed: this.#slideDustElapsed },
+			this.#slide,
+			delta,
+		)
+		this.#wasSliding = step.state.active
+		this.#slideDustElapsed = step.state.elapsed
+		for (let index = 0; index < step.emissions; index += 1) {
+			this.#emitDustAt(this.#player.position.x, this.#player.position.z)
+		}
+	}
+
+	#updateDustParticles(delta: number): void {
+		for (let index = this.#dustParticles.length - 1; index >= 0; index -= 1) {
+			const particle = this.#dustParticles[index]
+			if (particle === undefined) continue
+			particle.life -= delta
+			particle.mesh.position.y += delta * 0.22
+			particle.mesh.scale.multiplyScalar(1 + delta * 1.8)
+			if (particle.life <= 0) {
+				this.#scene.remove(particle.mesh)
+				this.#dustParticles.splice(index, 1)
+			}
+		}
+	}
+
 	#updateProjectiles(delta: number): void {
 		for (let index = this.#projectiles.length - 1; index >= 0; index -= 1) {
 			const projectile = this.#projectiles[index]
@@ -1718,21 +1936,44 @@ export class ArenaGame {
 	}
 
 	#updateCamera(delta: number): void {
+		this.#slidePoseWeight = THREE.MathUtils.lerp(
+			this.#slidePoseWeight,
+			this.#slide && !this.#dead ? 1 : 0,
+			Math.min(1, delta * (this.#slide ? 12 : 6)),
+		)
 		this.#camera.position.copy(this.#player.position)
-		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
+		const deathElapsed =
+			this.#dead && this.#deathStartedAt !== null
+				? Math.max(0, Date.now() / 1_000 - this.#deathStartedAt / 1_000)
+				: 0
+		const deathProgress = THREE.MathUtils.smoothstep(deathElapsed, 0, 0.75)
+		this.#camera.position.y -= deathProgress * 0.82
+		this.#camera.rotation.set(
+			this.#player.pitch + deathProgress * 0.24,
+			this.#player.yaw,
+			deathProgress * 0.2 + this.#slidePoseWeight * 0.055,
+			"YXZ",
+		)
 		const speed = Math.hypot(this.#player.velocity.x, this.#player.velocity.z)
 		const bob =
 			Math.sin(performance.now() * 0.012) * Math.min(speed * 0.002, 0.025)
 		const presentation = gunPresentation(this.#weaponKind, "firstPerson")
+		const progress = reloadProgress(this.#reload, Date.now() / 1_000)
+		const reloadArc = Math.sin(progress * Math.PI)
 		this.#weapon.position.y = THREE.MathUtils.lerp(
 			this.#weapon.position.y,
-			presentation.position[1] + bob,
+			presentation.position[1] + bob - reloadArc * 0.24 + deathProgress * 0.38,
 			delta * 8,
 		)
 		this.#weapon.position.z = THREE.MathUtils.lerp(
 			this.#weapon.position.z,
-			presentation.position[2],
+			presentation.position[2] + reloadArc * 0.12 + deathProgress * 0.5,
 			delta * 18,
+		)
+		this.#weapon.position.x = THREE.MathUtils.lerp(
+			this.#weapon.position.x,
+			presentation.position[0] + this.#slidePoseWeight * 0.09,
+			delta * 9,
 		)
 		const targetFov = speed > 10 ? 83 : 76
 		this.#camera.fov = THREE.MathUtils.lerp(
@@ -1745,6 +1986,12 @@ export class ArenaGame {
 	}
 
 	#updateTargeting(delta: number): void {
+		if (this.#dead) {
+			this.#targetingState = "idle"
+			this.#reticleX = 0.5
+			this.#reticleY = 0.5
+			return
+		}
 		if (this.#freeAim) {
 			this.#targetingState = "free"
 			this.#acquiredTargetId = null
@@ -1913,7 +2160,23 @@ export class ArenaGame {
 			this.#acquiredTargetId === null
 				? null
 				: this.#getSmartTargetPosition(this.#acquiredTargetId)
-		if (this.#sprinting) {
+		if (this.#dead) {
+			desired.multiply(
+				new THREE.Quaternion().setFromEuler(new THREE.Euler(0.8, 0, 0.5)),
+			)
+		} else if (this.#reload.reloading) {
+			const progress = reloadProgress(this.#reload, Date.now() / 1_000)
+			const arc = Math.sin(progress * Math.PI)
+			desired.multiply(
+				new THREE.Quaternion().setFromEuler(
+					new THREE.Euler(0.58 * arc, -0.28 * arc, 0.46 * arc),
+				),
+			)
+		} else if (this.#slide) {
+			desired.multiply(
+				new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.08, 0, 0.13)),
+			)
+		} else if (this.#sprinting) {
 			desired.multiply(
 				new THREE.Quaternion().setFromEuler(new THREE.Euler(1.05, 0, 0)),
 			)
@@ -1947,7 +2210,13 @@ export class ArenaGame {
 			}
 			const animationTime = performance.now() / 1_000
 			const layers: PilotAnimationLayer[] = []
-			if (model.jump > 0) {
+			const deathElapsed =
+				model.deathStartedAt === null
+					? 0
+					: Math.max(0, Date.now() / 1_000 - model.deathStartedAt / 1_000)
+			if (model.dead) {
+				layers.push(deathAnimationLayer(deathElapsed))
+			} else if (model.jump > 0) {
 				const airborneMotion = {
 					jumpCount: model.jump === 2 ? (2 as const) : (1 as const),
 					localVelocityX: localVelocity.x,
@@ -1981,6 +2250,8 @@ export class ArenaGame {
 				}
 				layers.push(airborneVelocityLayer(airborneMotion))
 				layers.push(airborneMomentumLayer(airborneMotion, momentumWeight))
+			} else if (model.sliding) {
+				layers.push(slideAnimationLayer())
 			} else if (model.crouching) {
 				if (horizontalSpeed > 0.35) {
 					layers.push(
@@ -2013,7 +2284,7 @@ export class ArenaGame {
 				layers.push(idleAnimationLayer(animationTime))
 			}
 			const landingElapsed = animationTime - model.landingStartedAt
-			if (landingElapsed < LANDING_RECOVERY_SECONDS) {
+			if (!model.dead && landingElapsed < LANDING_RECOVERY_SECONDS) {
 				layers.push(
 					landingRecoveryLayer(landingElapsed, model.landingImpactVelocity),
 				)
@@ -2024,8 +2295,17 @@ export class ArenaGame {
 				model.emote === "wave" &&
 				waveElapsed >= 0 &&
 				waveElapsed < WAVE_DURATION_SECONDS
-			if (waving) {
+			if (waving && !model.dead) {
 				layers.push(waveAnimationLayer(waveElapsed / WAVE_DURATION_SECONDS))
+			}
+			if (model.reloading && !model.dead) {
+				const progress = THREE.MathUtils.clamp(
+					(Date.now() / 1_000 - model.reloadStartedAt) /
+						WEAPON_RELOAD_DURATION_SECONDS,
+					0,
+					1,
+				)
+				layers.push(reloadAnimationLayer(progress))
 			}
 			const localAimDirection = model.aimDirection
 				.clone()
@@ -2048,7 +2328,7 @@ export class ArenaGame {
 							weaponsFreeTarget,
 							model.weaponsFreeWeight - weaponsFreeStep,
 						)
-			if (model.weaponsFree) {
+			if (model.weaponsFree && !model.reloading && !model.dead) {
 				layers.push(
 					weaponsFreeLayer(pointingDirection.pitch, pointingDirection.yaw),
 				)
@@ -2068,35 +2348,63 @@ export class ArenaGame {
 					),
 				)
 			}
-			const constraints = [lookTowardConstraint(lookDirection, 0.92)]
+			const constraints = model.dead
+				? []
+				: [lookTowardConstraint(lookDirection, 0.92)]
 			if (waving) {
 				constraints.push(waveTowardConstraint(lookDirection, 0.9))
 			}
-			if (model.weaponsFreeWeight > 0 && !model.sprinting) {
+			if (
+				model.weaponsFreeWeight > 0 &&
+				!model.sprinting &&
+				!model.reloading &&
+				!model.dead
+			) {
 				constraints.push(
 					pointBlasterConstraint(pointingDirection, model.weaponsFreeWeight),
 				)
 			}
-			if (model.jump > 0) {
+			if (model.jump > 0 && !model.dead) {
 				constraints.push(limitAirborneShoulderSpread)
 			}
 			model.animator.update(model.rig, layers, delta, constraints)
 			const visorTime = Date.now() / 1_000
-			model.rig.visorDisplay.setSignal(
-				"combat",
-				model.visorExpression,
-				model.visorStartedAt,
-			)
+			if (model.dead) {
+				model.rig.visorDisplay.setSignal(
+					"defeated",
+					"defeated",
+					model.deathStartedAt === null
+						? visorTime
+						: model.deathStartedAt / 1_000,
+				)
+			} else {
+				model.rig.visorDisplay.clearSignal("defeated")
+				model.rig.visorDisplay.setSignal(
+					"combat",
+					model.visorExpression,
+					model.visorStartedAt,
+				)
+			}
 			model.rig.visorDisplay.update(visorTime)
 			const poseOffset = model.rig.root.position.clone()
 			model.rig.root.position.copy(model.position).add(poseOffset)
 			model.rig.root.rotation.y += model.yaw
+			const dustStep = stepSlideDust(
+				{ active: model.dustActive, elapsed: model.dustElapsed },
+				model.sliding && !model.dead,
+				delta,
+			)
+			model.dustActive = dustStep.state.active
+			model.dustElapsed = dustStep.state.elapsed
+			for (let index = 0; index < dustStep.emissions; index += 1) {
+				this.#emitDustAt(model.position.x, model.position.z)
+			}
 		}
 	}
 
 	#sendSnapshot(delta: number): void {
 		this.#snapshotElapsed += delta
-		if (!this.#connected || this.#snapshotElapsed < 0.05) return
+		if (!this.#connected || this.#dead || this.#snapshotElapsed < 0.05) return
 		this.#snapshotElapsed = 0
 		const now = performance.now() / 1_000
 		const waving = now < this.#waveUntil
@@ -2129,6 +2437,7 @@ export class ArenaGame {
 			jump: this.#player.jumps,
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
+			sliding: this.#slide,
 			sprinting: this.#sprinting,
 			velocity: this.#player.velocity.toArray(),
 			visorExpression: this.#visorExpression,
@@ -2150,7 +2459,8 @@ export class ArenaGame {
 				: this.#socket.active
 					? "connecting"
 					: "offline",
-			health: this.#health,
+			dead: this.#dead,
+			health: Math.round(this.#health),
 			hitMarkerClassification: this.#hitMarkerClassification,
 			hitMarkerSequence: this.#hitMarkerSequence,
 			hitMarkerVisible: performance.now() / 1_000 < this.#hitMarkerUntil,
@@ -2173,6 +2483,12 @@ export class ArenaGame {
 			reticleY: this.#reticleY,
 			recoilPulse: this.#recoilPulse,
 			recoilSpread: normalizedRecoilSpread(this.#recoilState),
+			reloading: this.#reload.reloading,
+			reloadProgress: reloadProgress(this.#reload, Date.now() / 1_000),
+			respawnRemaining:
+				this.#dead && this.#respawnAt !== null
+					? Math.max(0, Math.ceil((this.#respawnAt - Date.now()) / 1_000))
+					: 0,
 			score: this.#score,
 			sliding: this.#slide,
 			speed: Math.round(
@@ -2211,6 +2527,7 @@ export class ArenaGame {
 		this.#updateProjectiles(delta)
 		this.#updateGrenades(delta)
 		this.#updateMiniMissiles(delta)
+		this.#updateDustParticles(delta)
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)
 		this.#updateTargeting(delta)

@@ -77,7 +77,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 		<app-shell className={css.class} data-deployed={deployed}>
 			<canvas ref={canvasRef} tabIndex={-1} aria-label="FEROX 3D arena" />
 			<game-vignette aria-hidden="true" />
-			<game-hud aria-label="Arena heads-up display">
+			<game-hud aria-label="Arena heads-up display" data-dead={hud.dead}>
 				<game-header>
 					<brand-mark>
 						<mark>W//</mark>
@@ -251,14 +251,16 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>/ {String(gun.magazineSize).padStart(2, "0")}</span>
 					</ammo-count>
 					<em>
-						{gun.fire.type === "guided-missile"
+						{hud.reloading
+							? `RELOADING ${Math.round(hud.reloadProgress * 100)}%`
+							: gun.fire.type === "guided-missile"
 							? hud.ammo === 0
 								? "LAUNCHER EMPTY • 1 / Y / WHEEL TO SWITCH • X TO DROP"
 								: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH • X TO DROP"
-							: hud.ammo === 0
-								? "PRESS RB / R TO RELOAD"
-								: hud.pickup === "nearby"
-									? "HOLD E / RB TO PICK UP"
+							: hud.pickup === "nearby"
+								? "HOLD E / RB TO PICK UP"
+								: hud.ammo === 0
+									? "PRESS RB / R TO RELOAD"
 									: hud.pickup === "available"
 										? "MINI-MISSILE AVAILABLE"
 										: hud.pickup === "carried"
@@ -266,6 +268,14 @@ export function AppShell({ socket }: AppShellProps): VNode {
 											: "MINI-MISSILE RESPAWNING"}
 					</em>
 				</weapon-status>
+
+				{hud.dead && (
+					<respawn-status role="status" aria-live="assertive">
+						<small>PILOT DOWN</small>
+						<strong>{hud.respawnRemaining}</strong>
+						<span>RESPAWNING</span>
+					</respawn-status>
+				)}
 
 				<game-footer>
 					<control-hint>
@@ -290,6 +300,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>GRENADE</span>
 						<kbd>HOLD E / RB</kbd>
 						<span>PICK UP</span>
+						<kbd>R / RB</kbd>
+						<span>RELOAD</span>
 						<kbd>D-PAD ↑</kbd>
 						<span>WAVE</span>
 						<kbd>◉</kbd>

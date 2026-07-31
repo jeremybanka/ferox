@@ -33,6 +33,8 @@ export function isPilotEmote(value: unknown): value is PilotEmote {
 export type PlayerSnapshot = {
 	aimDirection: Vector3Tuple
 	crouching: boolean
+	dead: boolean
+	deathStartedAt: number | null
 	emote: PilotEmote | null
 	emoteStartedAt: number
 	equippedWeapon: WeaponKind
@@ -43,7 +45,11 @@ export type PlayerSnapshot = {
 	position: Vector3Tuple
 	recoilSequence: number
 	recoilStartedAt: number
+	reloading: boolean
+	reloadStartedAt: number
+	respawnAt: number | null
 	rotation: [number, number]
+	sliding: boolean
 	sprinting: boolean
 	velocity: Vector3Tuple
 	visorExpression: VisorExpression
@@ -53,11 +59,16 @@ export type PlayerSnapshot = {
 
 export type PlayerMoveSnapshot = Omit<
 	PlayerSnapshot,
+	| "dead"
+	| "deathStartedAt"
 	| "equippedWeapon"
 	| "id"
 	| "lifeSequence"
 	| "recoilSequence"
 	| "recoilStartedAt"
+	| "reloading"
+	| "reloadStartedAt"
+	| "respawnAt"
 >
 
 export function nextAcceptedRecoilSignal(
@@ -360,6 +371,9 @@ export type DroneDestroyedSnapshot = {
 }
 
 export type CombatSnapshot = {
+	dead: boolean
+	deathStartedAt: number | null
 	health: number
+	respawnAt: number | null
 	score: number
 }

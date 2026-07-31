@@ -68,6 +68,14 @@ export function grenadeDamageAtDistance(distance: number): number {
 export type PlayerSpawnPoint = readonly [x: number, z: number, yaw: number]
 
 export const PLAYER_POPULATION_CAP = 12
+export const PLAYER_RESPAWN_DELAY_MS = 5_000
+export const PLAYER_SLIDE_DUST_CADENCE_SECONDS = 0.14
+export const PLAYER_SLIDE_DUST_LIFETIME_SECONDS = 0.52
+export const PLAYER_SLIDE_DUST_BUDGET = 24
+export const PLAYER_SLIDE_SPEED_THRESHOLD = 4.3
+export const WEAPON_MAGAZINE_SIZE = 28
+export const WEAPON_RELOAD_DURATION_SECONDS = 1.65
+export const WEAPON_RELOAD_REFILL_PROGRESS = 0.72
 export const PLAYER_SPAWN_POINTS: readonly PlayerSpawnPoint[] = Array.from(
 	{ length: PLAYER_POPULATION_CAP },
 	(_, index) => {
