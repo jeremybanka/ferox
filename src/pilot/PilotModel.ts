@@ -1,5 +1,15 @@
 import * as THREE from "three"
 
+import {
+	PILOT_RIG_HEAD_OFFSET,
+	PILOT_RIG_NECK_HEIGHT,
+	PILOT_RIG_STANDING_HIPS_HEIGHT,
+	PILOT_RIG_TORSO_CENTER_Z,
+	PILOT_RIG_TORSO_HALF_DEPTH,
+	PILOT_RIG_TORSO_HALF_HEIGHT,
+	PILOT_RIG_TORSO_PLATE_OFFSET_Y,
+	PILOT_RIG_TORSO_SHELL_HEIGHT,
+} from "./PilotDimensions.ts"
 import { VisorDisplay } from "./VisorDisplay.ts"
 
 export type PilotTheme = {
@@ -263,7 +273,7 @@ export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
 	root.name = "FEROX pilot"
 
 	const hips = new THREE.Group()
-	hips.position.y = 1.72
+	hips.position.y = PILOT_RIG_STANDING_HIPS_HEIGHT
 	const pelvis = box(0.32, 0.45, 0.56, materials.armorDark)
 	const belt = box(0.98, 0.18, 0.62, materials.accent)
 	belt.position.y = 0.18
@@ -272,10 +282,19 @@ export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
 
 	const body = new THREE.Group()
 	const chestShell = new THREE.Group()
-	chestShell.position.y = 0.8
+	chestShell.position.y = PILOT_RIG_TORSO_SHELL_HEIGHT
 	const core = box(0.9, 1.05, 0.58, materials.undersuit)
-	const chest = box(1.2, 0.72, 0.72, materials.armor)
-	chest.position.set(0, 0.14, -0.03)
+	const chest = box(
+		1.2,
+		PILOT_RIG_TORSO_HALF_HEIGHT * 2,
+		PILOT_RIG_TORSO_HALF_DEPTH * 2,
+		materials.armor,
+	)
+	chest.position.set(
+		0,
+		PILOT_RIG_TORSO_PLATE_OFFSET_Y,
+		PILOT_RIG_TORSO_CENTER_Z,
+	)
 	const chestInset = box(0.56, 0.38, 0.75, materials.armorDark)
 	chestInset.position.set(0, 0.12, -0.02)
 	const sternum = box(0.2, 0.44, 0.78, materials.accent)
@@ -298,12 +317,12 @@ export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
 	body.add(backpack)
 
 	const neck = new THREE.Group()
-	neck.position.y = 1.45
+	neck.position.y = PILOT_RIG_NECK_HEIGHT
 	const neckJoint = joint(0.24, materials)
 	neck.add(neckJoint)
 	body.add(neck)
 	const head = new THREE.Group()
-	head.position.y = 0.29
+	head.position.y = PILOT_RIG_HEAD_OFFSET
 	const helmet = new THREE.Mesh(
 		new THREE.DodecahedronGeometry(0.48, 0),
 		materials.armor,
@@ -386,7 +405,7 @@ export function resetPilotPose(rig: PilotRig): void {
 	rig.root.rotation.set(0, 0, 0)
 	rig.body.position.set(0, 0, 0)
 	rig.body.rotation.set(0, 0, 0)
-	rig.hips.position.set(0, 1.72, 0)
+	rig.hips.position.set(0, PILOT_RIG_STANDING_HIPS_HEIGHT, 0)
 	rig.hips.rotation.set(0, 0, 0)
 	rig.head.rotation.set(0, 0, 0)
 	rig.neck.rotation.set(0, 0, 0)

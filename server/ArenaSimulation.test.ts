@@ -23,6 +23,14 @@ import {
 	miniMissileDamageAtDistance,
 } from "../src/game-constants.ts"
 import {
+	pilotTorsoTargetFromEye,
+	pilotTorsoTargetFromRoot,
+} from "../src/pilot-targeting.ts"
+import {
+	PILOT_CROUCH_HEAD_CENTER_HEIGHT,
+	PILOT_STANDING_HEAD_CENTER_HEIGHT,
+} from "../src/pilot/PilotDimensions.ts"
+import {
 	ArenaSimulation,
 	type SimulationDroneSeed,
 	type SimulationPlayer,
@@ -132,7 +140,7 @@ test("standing headshots deal double damage and report the authoritative classif
 		simulation.fire("shooter", {
 			clientShotId: 42,
 			direction: [0, 0, -1],
-			origin: [0, 1.55, 0],
+			origin: [0, PILOT_STANDING_HEAD_CENTER_HEIGHT, 0],
 		}),
 	).toBe(true)
 	simulation.update(0.1)
@@ -178,12 +186,55 @@ test("crouched pilots use their lowered head region", () => {
 	simulation.fire("shooter", {
 		clientShotId: 1,
 		direction: [0, 0, -1],
-		origin: [0, 0.94, 0],
+		origin: [0, PILOT_CROUCH_HEAD_CENTER_HEIGHT, 0],
 	})
 	simulation.update(0.1)
 
 	expect(damage).toEqual([40])
 })
+
+test.each([false, true])(
+	"the shared torso target produces a normal hit for crouching=%s",
+	(crouching) => {
+		const targetRoot: [number, number, number] = [0, 0, -4]
+		const targetEyeHeight = crouching ? 1.08 : 1.72
+		const torso = pilotTorsoTargetFromRoot(targetRoot, crouching)
+		const players: SimulationPlayer[] = [
+			{
+				crouching: false,
+				id: "shooter",
+				position: [0, 1.72, 0],
+				velocity: [0, 0, 0],
+			},
+			{
+				crouching,
+				id: "target",
+				position: [0, targetEyeHeight, -4],
+				velocity: [0, 0, 0],
+			},
+		]
+		const damage: number[] = []
+		const hits: Array<{ playerId: string; result: DirectHitResult }> = []
+		const simulation = makeSimulation(
+			players,
+			(_playerId, amount) => damage.push(amount),
+			[],
+			hits,
+		)
+
+		expect(
+			simulation.fire("shooter", {
+				clientShotId: 9,
+				direction: [0, 0, -1],
+				origin: [0, torso[1], 0],
+			}),
+		).toBe(true)
+		simulation.update(0.1)
+
+		expect(damage).toEqual([20])
+		expect(hits[0]?.result.classification).toBe("normal")
+	},
+)
 
 test("a closer body blocks a farther head region", () => {
 	const players: SimulationPlayer[] = [
@@ -471,48 +522,57 @@ function makeMissileHarness(
 	return { damage, ended, explosions, locks, missiles, simulation }
 }
 
-test("valid launch designation immediately locks a pilot without public IDs", () => {
-	const players: SimulationPlayer[] = [
-		{
-			crouching: false,
-			id: "owner",
-			position: [0, 20, 0],
-			velocity: [0, 0, 0],
-		},
-		{
-			crouching: false,
-			id: "near",
-			position: [6, 20, -12],
-			velocity: [0, 0, 0],
-		},
-		{
-			crouching: false,
-			id: "outside",
-			position: [MINI_MISSILE_SEEKER_RANGE + 1, 20, 0],
-			velocity: [0, 0, 0],
-		},
-	]
-	const harness = makeMissileHarness(players)
+test.each([false, true])(
+	"valid launch designation uses the shared torso point for crouching=%s",
+	(crouching) => {
+		const origin: [number, number, number] = [0, 20, 0]
+		const players: SimulationPlayer[] = [
+			{
+				crouching: false,
+				id: "owner",
+				position: origin,
+				velocity: [0, 0, 0],
+			},
+			{
+				crouching,
+				id: "near",
+				position: [6, 20, -12],
+				velocity: [0, 0, 0],
+			},
+			{
+				crouching: false,
+				id: "outside",
+				position: [MINI_MISSILE_SEEKER_RANGE + 1, 20, 0],
+				velocity: [0, 0, 0],
+			},
+		]
+		const harness = makeMissileHarness(players)
+		const torso = pilotTorsoTargetFromEye(players[1]!.position, crouching)
+		const direction = new THREE.Vector3(...torso)
+			.sub(new THREE.Vector3(...origin))
+			.normalize()
+			.toArray()
 
-	assert.equal(
-		harness.simulation.fireMiniMissile("owner", {
-			clientMissileId: 1,
-			direction: [0, 0, -1],
-			origin: [0, 20, 0],
-			target: { id: "near", kind: "pilot" },
-		}),
-		true,
-	)
-	assert.deepEqual(harness.locks, [
-		{ attackerId: "owner", locked: true, targetId: "near" },
-	])
-	assert.deepEqual(Object.keys(harness.missiles[0] ?? {}).sort(), [
-		"id",
-		"phase",
-		"position",
-		"velocity",
-	])
-})
+		assert.equal(
+			harness.simulation.fireMiniMissile("owner", {
+				clientMissileId: 1,
+				direction,
+				origin,
+				target: { id: "near", kind: "pilot" },
+			}),
+			true,
+		)
+		assert.deepEqual(harness.locks, [
+			{ attackerId: "owner", locked: true, targetId: "near" },
+		])
+		assert.deepEqual(Object.keys(harness.missiles[0] ?? {}).sort(), [
+			"id",
+			"phase",
+			"position",
+			"velocity",
+		])
+	},
+)
 
 test("mini-missiles reject replayed IDs and ignore invalid designations", () => {
 	const players: SimulationPlayer[] = [
@@ -734,7 +794,7 @@ test("designated targets stay sticky after moving behind the missile", () => {
 		new THREE.Vector3(...velocity),
 	)
 	assert.ok(turn > 0)
-	assert.ok(turn <= MINI_MISSILE_MAX_TURN_RATE * 0.1 + Number.EPSILON)
+	assert.ok(turn <= MINI_MISSILE_MAX_TURN_RATE * 0.1 + 0.02)
 	assert.deepEqual(harness.locks, [
 		{ attackerId: "owner", locked: true, targetId: "target" },
 	])

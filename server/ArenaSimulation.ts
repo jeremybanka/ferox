@@ -48,7 +48,14 @@ import {
 	MINI_MISSILE_SPEED,
 	miniMissileDamageAtDistance,
 } from "../src/game-constants.ts"
-import { pilotChestAnchorFromEye } from "../src/pilot-targeting.ts"
+import { pilotTorsoTargetFromEye } from "../src/pilot-targeting.ts"
+import {
+	PILOT_CROUCH_BODY_HIT_BOUNDS,
+	PILOT_CROUCH_HEAD_CENTER_HEIGHT,
+	PILOT_HEAD_HIT_RADIUS,
+	PILOT_STANDING_BODY_HIT_BOUNDS,
+	PILOT_STANDING_HEAD_CENTER_HEIGHT,
+} from "../src/pilot/PilotDimensions.ts"
 import {
 	sameMiniMissileTarget,
 	selectMiniMissileSeekerTarget,
@@ -159,13 +166,6 @@ const SAFE_DISTANCE = 27
 const PLAYER_EYE_HEIGHT = 1.72
 const PLAYER_CROUCH_EYE_HEIGHT = 1.08
 const PLAYER_BODY_HIT_RADIUS = 0.46
-const PLAYER_HEAD_HIT_RADIUS = 0.3
-const PLAYER_STANDING_HIT_BOTTOM = 0.45
-const PLAYER_STANDING_HIT_TOP = 1.25
-const PLAYER_CROUCH_HIT_BOTTOM = 0.4
-const PLAYER_CROUCH_HIT_TOP = 0.72
-const PLAYER_STANDING_HEAD_HEIGHT = 1.55
-const PLAYER_CROUCH_HEAD_HEIGHT = 0.94
 const TMP_A = new THREE.Vector3()
 const TMP_B = new THREE.Vector3()
 
@@ -644,7 +644,7 @@ export class ArenaSimulation {
 		for (const player of players) {
 			if (player.id === ownerId) continue
 			candidates.push({
-				position: pilotChestAnchorFromEye(player.position, player.crouching),
+				position: pilotTorsoTargetFromEye(player.position, player.crouching),
 				ref: { id: player.id, kind: "pilot" },
 			})
 		}
@@ -669,7 +669,7 @@ export class ArenaSimulation {
 			return player === undefined
 				? null
 				: {
-						position: pilotChestAnchorFromEye(
+						position: pilotTorsoTargetFromEye(
 							player.position,
 							player.crouching,
 						),
@@ -1149,28 +1149,25 @@ export class ArenaSimulation {
 			const eyeHeight = player.crouching
 				? PLAYER_CROUCH_EYE_HEIGHT
 				: PLAYER_EYE_HEIGHT
-			const bottomHeight = player.crouching
-				? PLAYER_CROUCH_HIT_BOTTOM
-				: PLAYER_STANDING_HIT_BOTTOM
-			const topHeight = player.crouching
-				? PLAYER_CROUCH_HIT_TOP
-				: PLAYER_STANDING_HIT_TOP
+			const bodyBounds = player.crouching
+				? PILOT_CROUCH_BODY_HIT_BOUNDS
+				: PILOT_STANDING_BODY_HIT_BOUNDS
 			const groundY = player.position[1] - eyeHeight
 			const headCenter = new THREE.Vector3(
 				player.position[0],
 				groundY +
 					(player.crouching
-						? PLAYER_CROUCH_HEAD_HEIGHT
-						: PLAYER_STANDING_HEAD_HEIGHT),
+						? PILOT_CROUCH_HEAD_CENTER_HEIGHT
+						: PILOT_STANDING_HEAD_CENTER_HEIGHT),
 				player.position[2],
 			)
 			const capsuleBottom = new THREE.Vector3(
 				player.position[0],
-				groundY + bottomHeight,
+				groundY + bodyBounds.bottom,
 				player.position[2],
 			)
 			const capsuleTop = capsuleBottom.clone()
-			capsuleTop.y = groundY + topHeight
+			capsuleTop.y = groundY + bodyBounds.top
 			const bodyCollision = this.#segmentDistanceSquared(
 				start,
 				end,
@@ -1188,7 +1185,7 @@ export class ArenaSimulation {
 				PLAYER_BODY_HIT_RADIUS * PLAYER_BODY_HIT_RADIUS
 			const hitsHead =
 				headCollision.distanceSquared <
-				PLAYER_HEAD_HIT_RADIUS * PLAYER_HEAD_HIT_RADIUS
+				PILOT_HEAD_HIT_RADIUS * PILOT_HEAD_HIT_RADIUS
 			if (!hitsBody && !hitsHead) continue
 			const hitsHeadFirst =
 				hitsHead &&

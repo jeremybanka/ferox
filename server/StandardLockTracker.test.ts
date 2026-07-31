@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest"
 
 import type { Vector3Tuple } from "../src/arena-protocol.ts"
+import { pilotTorsoTargetFromEye } from "../src/pilot-targeting.ts"
 import {
 	StandardLockTracker,
 	type StandardLockPilotState,
@@ -24,7 +25,37 @@ function pilot(
 	}
 }
 
+function direction(from: Vector3Tuple, to: Vector3Tuple): Vector3Tuple {
+	const delta = [to[0] - from[0], to[1] - from[1], to[2] - from[2]] as const
+	const length = Math.hypot(...delta)
+	return [delta[0] / length, delta[1] / length, delta[2] / length]
+}
+
 describe("authoritative standard lock tracking", () => {
+	test.each([false, true])(
+		"validates the exact shared torso target for crouching=%s",
+		(crouching) => {
+			const tracker = new StandardLockTracker()
+			const attackerEye: Vector3Tuple = [0, 1.72, 0]
+			const victimEye: Vector3Tuple = [3, crouching ? 1.08 : 1.72, -12]
+			const attacker = pilot("attacker", attackerEye)
+			const victim = pilot("victim", victimEye, [0, 0, 1], { crouching })
+			attacker.aimDirection = direction(
+				attackerEye,
+				pilotTorsoTargetFromEye(victimEye, crouching),
+			)
+			const pilots = new Map([
+				[attacker.id, attacker],
+				[victim.id, victim],
+			])
+
+			tracker.acceptIntent("attacker", { active: true, clientLockId: 1 })
+			expect(tracker.reconcile(pilots)).toEqual([
+				{ playerId: "victim", snapshot: { attackers: 1 } },
+			])
+		},
+	)
+
 	test("requires a targetless transition and derives the victim from aim", () => {
 		const tracker = new StandardLockTracker()
 		const pilots = new Map([

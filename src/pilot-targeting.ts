@@ -1,30 +1,34 @@
 import type { Vector3Tuple } from "./arena-protocol.ts"
+import {
+	PILOT_CROUCH_TORSO_CENTER_HEIGHT,
+	PILOT_STANDING_TORSO_CENTER_HEIGHT,
+} from "./pilot/PilotDimensions.ts"
 
 export const PILOT_STANDING_EYE_HEIGHT = 1.72
 export const PILOT_CROUCH_EYE_HEIGHT = 1.08
-export const PILOT_STANDING_CHEST_HEIGHT = 1.05
-export const PILOT_CROUCH_CHEST_HEIGHT = 0.78
 
-export function pilotChestAnchor(
-	groundPosition: Vector3Tuple,
+export function pilotTorsoTargetFromRoot(
+	rootPosition: Vector3Tuple,
 	crouching: boolean,
 ): Vector3Tuple {
 	return [
-		groundPosition[0],
-		groundPosition[1] +
-			(crouching ? PILOT_CROUCH_CHEST_HEIGHT : PILOT_STANDING_CHEST_HEIGHT),
-		groundPosition[2],
+		rootPosition[0],
+		rootPosition[1] +
+			(crouching
+				? PILOT_CROUCH_TORSO_CENTER_HEIGHT
+				: PILOT_STANDING_TORSO_CENTER_HEIGHT),
+		rootPosition[2],
 	]
 }
 
-export function pilotChestAnchorFromEye(
+export function pilotTorsoTargetFromEye(
 	eyePosition: Vector3Tuple,
 	crouching: boolean,
 ): Vector3Tuple {
 	const eyeHeight = crouching
 		? PILOT_CROUCH_EYE_HEIGHT
 		: PILOT_STANDING_EYE_HEIGHT
-	return pilotChestAnchor(
+	return pilotTorsoTargetFromRoot(
 		[eyePosition[0], eyePosition[1] - eyeHeight, eyePosition[2]],
 		crouching,
 	)

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest"
 
+import { pilotTorsoTargetFromRoot } from "./pilot-targeting.ts"
 import {
 	pilotSmartTargetCandidate,
+	pilotSmartTargetCandidateFromRoot,
 	sameSmartTarget,
 	selectBestSmartTarget,
 	type SmartTargetCandidate,
@@ -46,6 +48,22 @@ describe("smart target selection", () => {
 			ref: { id: "other", kind: "pilot" },
 		})
 	})
+
+	test.each([false, true])(
+		"projects the exact shared torso target for crouching=%s",
+		(crouching) => {
+			const root: [number, number, number] = [1, 2, 3]
+			expect(
+				pilotSmartTargetCandidateFromRoot("self", "other", root, crouching),
+			).toEqual({
+				position: pilotTorsoTargetFromRoot(root, crouching),
+				ref: { id: "other", kind: "pilot" },
+			})
+			expect(
+				pilotSmartTargetCandidateFromRoot("self", "self", root, crouching),
+			).toBeNull()
+		},
+	)
 
 	test("compares discriminated IDs without colliding drone and pilot keys", () => {
 		expect(

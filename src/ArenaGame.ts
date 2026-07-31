@@ -79,7 +79,7 @@ import {
 	type RemoteRecoilState,
 } from "./pilot/RecoilAnimation.ts"
 import {
-	pilotChestAnchor,
+	pilotTorsoTargetFromRoot,
 	PILOT_CROUCH_EYE_HEIGHT,
 	PILOT_STANDING_EYE_HEIGHT,
 } from "./pilot-targeting.ts"
@@ -105,6 +105,7 @@ import {
 	waveTowardConstraint,
 } from "./pilot/DirectionalConstraints.ts"
 import { idleAnimationLayer } from "./pilot/IdleAnimation.ts"
+import { PILOT_MODEL_SCALE } from "./pilot/PilotDimensions.ts"
 import { createPilotModel, type PilotRig } from "./pilot/PilotModel.ts"
 import {
 	FULL_BODY_INFLUENCE,
@@ -119,7 +120,7 @@ import {
 } from "./pilot/WaveAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 import {
-	pilotSmartTargetCandidate,
+	pilotSmartTargetCandidateFromRoot,
 	selectBestSmartTarget,
 	type SmartTargetCandidate,
 	type SmartTargetRef,
@@ -522,7 +523,7 @@ export class ArenaGame {
 			let isNew = false
 			if (model === undefined) {
 				const rig = createPilotModel()
-				rig.root.scale.setScalar(0.54)
+				rig.root.scale.setScalar(PILOT_MODEL_SCALE)
 				const marker = new THREE.Mesh(
 					REMOTE_MARKER_GEOMETRY,
 					REMOTE_MARKER_MATERIAL,
@@ -1714,11 +1715,12 @@ export class ArenaGame {
 				ref: { id: candidate.id, kind: "drone" },
 			}))
 		for (const [id, pilot] of this.#remotePlayers) {
-			const position = pilotChestAnchor(
+			const candidate = pilotSmartTargetCandidateFromRoot(
+				this.#socket.id,
+				id,
 				pilot.position.toArray(),
 				pilot.crouching,
 			)
-			const candidate = pilotSmartTargetCandidate(this.#socket.id, id, position)
 			if (candidate !== null) candidates.push(candidate)
 		}
 		return candidates
@@ -1732,7 +1734,10 @@ export class ArenaGame {
 		return pilot === undefined
 			? null
 			: new THREE.Vector3(
-					...pilotChestAnchor(pilot.position.toArray(), pilot.crouching),
+					...pilotTorsoTargetFromRoot(
+						pilot.position.toArray(),
+						pilot.crouching,
+					),
 				)
 	}
 

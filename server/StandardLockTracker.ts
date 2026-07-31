@@ -7,7 +7,7 @@ import {
 	STANDARD_LOCK_DIRECTION_COSINE,
 	STANDARD_LOCK_MAX_RANGE,
 } from "../src/game-constants.ts"
-import { pilotChestAnchorFromEye } from "../src/pilot-targeting.ts"
+import { pilotTorsoTargetFromEye } from "../src/pilot-targeting.ts"
 
 export type StandardLockPilotState = {
 	aimDirection: Vector3Tuple
@@ -47,11 +47,11 @@ export function selectValidatedStandardLockTarget(
 	let best: { cosine: number; distance: number; id: string } | null = null
 	for (const [id, target] of pilots) {
 		if (id === attacker.id) continue
-		const chest = pilotChestAnchorFromEye(target.position, target.crouching)
+		const torso = pilotTorsoTargetFromEye(target.position, target.crouching)
 		const offset: Vector3Tuple = [
-			chest[0] - attacker.position[0],
-			chest[1] - attacker.position[1],
-			chest[2] - attacker.position[2],
+			torso[0] - attacker.position[0],
+			torso[1] - attacker.position[1],
+			torso[2] - attacker.position[2],
 		]
 		const distance = vectorLength(offset)
 		if (distance <= 0 || distance > STANDARD_LOCK_MAX_RANGE) continue

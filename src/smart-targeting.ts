@@ -1,4 +1,5 @@
 import type { MiniMissileTargetRef, Vector3Tuple } from "./arena-protocol.ts"
+import { pilotTorsoTargetFromRoot } from "./pilot-targeting.ts"
 
 export type SmartTargetRef = MiniMissileTargetRef
 
@@ -20,6 +21,19 @@ export function pilotSmartTargetCandidate(
 ): SmartTargetCandidate | null {
 	if (localPlayerId === pilotId) return null
 	return { position, ref: { id: pilotId, kind: "pilot" } }
+}
+
+export function pilotSmartTargetCandidateFromRoot(
+	localPlayerId: string | undefined,
+	pilotId: string,
+	rootPosition: Vector3Tuple,
+	crouching: boolean,
+): SmartTargetCandidate | null {
+	return pilotSmartTargetCandidate(
+		localPlayerId,
+		pilotId,
+		pilotTorsoTargetFromRoot(rootPosition, crouching),
+	)
 }
 
 export function sameSmartTarget(
