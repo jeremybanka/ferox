@@ -47,6 +47,25 @@ export type FireIntent = {
 	origin: Vector3Tuple
 }
 
+export type GrenadeIntent = {
+	clientGrenadeId: number
+	direction: Vector3Tuple
+	origin: Vector3Tuple
+}
+
+export type GrenadeSnapshot = {
+	id: number
+	origin: Vector3Tuple
+	ownerId: string
+	velocity: Vector3Tuple
+}
+
+export type GrenadeExplodedSnapshot = {
+	id: number
+	position: Vector3Tuple
+	radius: number
+}
+
 export type ProjectileSnapshot = {
 	color: string
 	damage: number

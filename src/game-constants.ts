@@ -5,6 +5,15 @@ export const DRONE_VISION_DISTANCE = 28
 export const DRONE_VISION_HALF_ANGLE = Math.PI / 5
 export const DRONE_AUDITORY_RADIUS = 14
 
+export const GRENADE_BLAST_RADIUS = 7.5
+export const GRENADE_BOUNCE_DAMPING = 0.72
+export const GRENADE_FUSE_SECONDS = 2.2
+export const GRENADE_GRAVITY = 18
+export const GRENADE_MAX_DAMAGE = 68
+export const GRENADE_RADIUS = 0.18
+export const GRENADE_RESTITUTION = 0.42
+export const GRENADE_THROW_SPEED = 17
+
 export type PlayerSpawnPoint = readonly [x: number, z: number, yaw: number]
 
 export const PLAYER_POPULATION_CAP = 12

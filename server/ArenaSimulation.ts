@@ -7,6 +7,9 @@ import type {
 	DronePersonality,
 	DroneSnapshot,
 	FireIntent,
+	GrenadeExplodedSnapshot,
+	GrenadeIntent,
+	GrenadeSnapshot,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
 	Vector3Tuple,
@@ -17,6 +20,14 @@ import {
 	DRONE_POPULATION_CAP,
 	DRONE_VISION_DISTANCE,
 	DRONE_VISION_HALF_ANGLE,
+	GRENADE_BLAST_RADIUS,
+	GRENADE_BOUNCE_DAMPING,
+	GRENADE_FUSE_SECONDS,
+	GRENADE_GRAVITY,
+	GRENADE_MAX_DAMAGE,
+	GRENADE_RADIUS,
+	GRENADE_RESTITUTION,
+	GRENADE_THROW_SPEED,
 } from "../src/game-constants.ts"
 
 export type SimulationPlayer = {
@@ -56,8 +67,18 @@ type ProjectileState = {
 	velocity: THREE.Vector3
 }
 
+type GrenadeState = {
+	id: number
+	life: number
+	ownerId: string
+	position: THREE.Vector3
+	velocity: THREE.Vector3
+}
+
 type ArenaSimulationOptions = {
 	emitDroneDestroyed: (snapshot: DroneDestroyedSnapshot) => void
+	emitGrenade: (snapshot: GrenadeSnapshot) => void
+	emitGrenadeExploded: (snapshot: GrenadeExplodedSnapshot) => void
 	emitProjectile: (snapshot: ProjectileSnapshot) => void
 	emitProjectileEnded: (snapshot: ProjectileEndedSnapshot) => void
 	getPlayers: () => SimulationPlayer[]
@@ -90,9 +111,12 @@ const TMP_B = new THREE.Vector3()
 export class ArenaSimulation {
 	readonly #drones: DroneState[] = []
 	readonly #emitDroneDestroyed: ArenaSimulationOptions["emitDroneDestroyed"]
+	readonly #emitGrenade: ArenaSimulationOptions["emitGrenade"]
+	readonly #emitGrenadeExploded: ArenaSimulationOptions["emitGrenadeExploded"]
 	readonly #emitProjectile: ArenaSimulationOptions["emitProjectile"]
 	readonly #emitProjectileEnded: ArenaSimulationOptions["emitProjectileEnded"]
 	readonly #getPlayers: ArenaSimulationOptions["getPlayers"]
+	readonly #grenades: GrenadeState[] = []
 	readonly #onDroneKilled: ArenaSimulationOptions["onDroneKilled"]
 	readonly #onPlayerDamage: ArenaSimulationOptions["onPlayerDamage"]
 	readonly #projectiles: ProjectileState[] = []
@@ -100,6 +124,7 @@ export class ArenaSimulation {
 	readonly #seed: number
 	#elapsed = 0
 	#nextDroneId = 1
+	#nextGrenadeId = 1
 	#nextProjectileId = 1
 	#nextSpawn = 1.2
 	#sequence = 0
@@ -107,6 +132,8 @@ export class ArenaSimulation {
 
 	constructor(options: ArenaSimulationOptions) {
 		this.#emitDroneDestroyed = options.emitDroneDestroyed
+		this.#emitGrenade = options.emitGrenade
+		this.#emitGrenadeExploded = options.emitGrenadeExploded
 		this.#emitProjectile = options.emitProjectile
 		this.#emitProjectileEnded = options.emitProjectileEnded
 		this.#getPlayers = options.getPlayers
@@ -148,6 +175,47 @@ export class ArenaSimulation {
 		return true
 	}
 
+	throwGrenade(playerId: string, intent: GrenadeIntent): boolean {
+		const player = this.#getPlayers().find(
+			(candidate) => candidate.id === playerId,
+		)
+		if (player === undefined) return false
+		if (
+			!this.#isVector(intent.origin) ||
+			!this.#isVector(intent.direction) ||
+			!Number.isSafeInteger(intent.clientGrenadeId)
+		) {
+			return false
+		}
+		const origin = new THREE.Vector3(...intent.origin)
+		const playerPosition = new THREE.Vector3(...player.position)
+		if (origin.distanceTo(playerPosition) > 3) return false
+		const direction = new THREE.Vector3(...intent.direction)
+		if (direction.lengthSq() < 0.8 || direction.lengthSq() > 1.2) return false
+
+		const id = this.#nextGrenadeId
+		this.#nextGrenadeId += 1
+		const velocity = direction
+			.normalize()
+			.multiplyScalar(GRENADE_THROW_SPEED)
+			.addScaledVector(new THREE.Vector3(...player.velocity), 0.35)
+		this.#grenades.push({
+			id,
+			life: GRENADE_FUSE_SECONDS,
+			ownerId: playerId,
+			position: origin.clone(),
+			velocity,
+		})
+		this.#playerNoiseUntil.set(playerId, this.#elapsed + 0.85)
+		this.#emitGrenade({
+			id,
+			origin: origin.toArray(),
+			ownerId: playerId,
+			velocity: velocity.toArray(),
+		})
+		return true
+	}
+
 	snapshot(): ArenaSnapshot {
 		this.#sequence += 1
 		return {
@@ -167,6 +235,7 @@ export class ArenaSimulation {
 			if (drone !== undefined) this.#updateDrone(drone, delta, players)
 		}
 		this.#updateProjectiles(delta, players)
+		this.#updateGrenades(delta, players)
 	}
 
 	#updateSpawning(delta: number, players: SimulationPlayer[]): void {
@@ -427,6 +496,88 @@ export class ArenaSimulation {
 		})
 	}
 
+	#updateGrenades(delta: number, players: readonly SimulationPlayer[]): void {
+		for (let index = this.#grenades.length - 1; index >= 0; index -= 1) {
+			const grenade = this.#grenades[index]
+			if (grenade === undefined) continue
+			grenade.life -= delta
+			grenade.velocity.y -= GRENADE_GRAVITY * delta
+			grenade.position.addScaledVector(grenade.velocity, delta)
+			const ground =
+				arenaHeightAt(this.#seed, grenade.position.x, grenade.position.z) +
+				GRENADE_RADIUS
+			if (grenade.position.y <= ground) {
+				grenade.position.y = ground
+				if (grenade.velocity.y < 0) {
+					grenade.velocity.y *= -GRENADE_RESTITUTION
+					grenade.velocity.x *= GRENADE_BOUNCE_DAMPING
+					grenade.velocity.z *= GRENADE_BOUNCE_DAMPING
+				}
+				if (Math.abs(grenade.velocity.y) < 0.6) grenade.velocity.y = 0
+			}
+			if (grenade.life > 0) continue
+			this.#grenades.splice(index, 1)
+			this.#explodeGrenade(grenade, players)
+		}
+	}
+
+	#explodeGrenade(
+		grenade: GrenadeState,
+		players: readonly SimulationPlayer[],
+	): void {
+		for (let index = this.#drones.length - 1; index >= 0; index -= 1) {
+			const drone = this.#drones[index]
+			if (drone === undefined) continue
+			const damage = this.#explosionDamage(
+				grenade.position.distanceTo(drone.position),
+			)
+			if (damage > 0) this.#damageDrone(drone, damage, grenade.ownerId)
+		}
+		for (const player of players) {
+			const eyeHeight = player.crouching
+				? PLAYER_CROUCH_EYE_HEIGHT
+				: PLAYER_EYE_HEIGHT
+			const bodyCenter = new THREE.Vector3(...player.position)
+			bodyCenter.y -= eyeHeight * 0.5
+			const damage = this.#explosionDamage(
+				grenade.position.distanceTo(bodyCenter),
+			)
+			if (damage > 0) this.#onPlayerDamage(player.id, damage)
+		}
+		this.#emitGrenadeExploded({
+			id: grenade.id,
+			position: grenade.position.toArray(),
+			radius: GRENADE_BLAST_RADIUS,
+		})
+	}
+
+	#explosionDamage(distance: number): number {
+		if (distance >= GRENADE_BLAST_RADIUS) return 0
+		return Math.round(
+			GRENADE_MAX_DAMAGE * (1 - distance / GRENADE_BLAST_RADIUS),
+		)
+	}
+
+	#damageDrone(
+		drone: DroneState,
+		damage: number,
+		ownerId: string | null,
+	): void {
+		drone.health -= damage
+		if (ownerId !== null) {
+			drone.threat.set(ownerId, (drone.threat.get(ownerId) ?? 0) + 100)
+			if (
+				drone.targetPlayerId === null ||
+				(drone.threat.get(ownerId) ?? 0) >
+					(drone.threat.get(drone.targetPlayerId) ?? 0) + 5
+			) {
+				drone.targetPlayerId = ownerId
+				this.#setMood(drone)
+			}
+		}
+		if (drone.health <= 0) this.#destroyDrone(drone, false, ownerId)
+	}
+
 	#updateProjectiles(
 		delta: number,
 		players: readonly SimulationPlayer[],
@@ -456,24 +607,7 @@ export class ArenaSimulation {
 						droneHit.travelFraction <= playerHit.travelFraction)
 				) {
 					const drone = droneHit.target
-					drone.health -= projectile.damage
-					if (projectile.ownerId !== null) {
-						drone.threat.set(
-							projectile.ownerId,
-							(drone.threat.get(projectile.ownerId) ?? 0) + 100,
-						)
-						if (
-							drone.targetPlayerId === null ||
-							(drone.threat.get(projectile.ownerId) ?? 0) >
-								(drone.threat.get(drone.targetPlayerId) ?? 0) + 5
-						) {
-							drone.targetPlayerId = projectile.ownerId
-							this.#setMood(drone)
-						}
-					}
-					if (drone.health <= 0) {
-						this.#destroyDrone(drone, false, projectile.ownerId)
-					}
+					this.#damageDrone(drone, projectile.damage, projectile.ownerId)
 					hit = true
 				} else if (playerHit !== undefined) {
 					this.#onPlayerDamage(playerHit.target.id, projectile.damage)

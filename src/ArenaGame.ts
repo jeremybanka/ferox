@@ -6,6 +6,9 @@ import type {
 	CombatSnapshot,
 	DroneDestroyedSnapshot,
 	FireIntent,
+	GrenadeExplodedSnapshot,
+	GrenadeIntent,
+	GrenadeSnapshot,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
 	VisorExpression,
@@ -15,6 +18,11 @@ import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
 import {
 	FREE_AIM_TAP_THRESHOLD_MS,
+	GRENADE_BOUNCE_DAMPING,
+	GRENADE_FUSE_SECONDS,
+	GRENADE_GRAVITY,
+	GRENADE_RADIUS,
+	GRENADE_RESTITUTION,
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
@@ -66,6 +74,21 @@ type Projectile = {
 	velocity: THREE.Vector3
 }
 
+type Grenade = {
+	id: number
+	life: number
+	mesh: THREE.Group
+	velocity: THREE.Vector3
+}
+
+type GrenadeExplosion = {
+	life: number
+	light: THREE.PointLight
+	material: THREE.MeshBasicMaterial
+	mesh: THREE.Mesh
+	radius: number
+}
+
 type TargetingState =
 	| "acquired"
 	| "escaping"
@@ -102,6 +125,8 @@ export class ArenaGame {
 	readonly #canvas: HTMLCanvasElement
 	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 280)
 	readonly #drones: DroneBotSystem
+	readonly #grenadeExplosions: GrenadeExplosion[] = []
+	readonly #grenades: Grenade[] = []
 	readonly #keys = new Set<string>()
 	readonly #onHud: (state: GameHudState) => void
 	readonly #player = {
@@ -127,6 +152,9 @@ export class ArenaGame {
 	#disposed = false
 	#fireCooldown = 0
 	#freeAim = false
+	#grenadeCooldown = 0
+	#grenadeHeld = false
+	#grenadeSequence = 0
 	#health = 100
 	#hudElapsed = 0
 	#jumpQueued = false
@@ -193,6 +221,7 @@ export class ArenaGame {
 		window.removeEventListener("keyup", this.#onKeyUp)
 		window.removeEventListener("mousemove", this.#onMouseMove)
 		window.removeEventListener("mousedown", this.#onMouseDown)
+		window.removeEventListener("contextmenu", this.#onContextMenu)
 		window.removeEventListener("resize", this.#resize)
 		this.#socket.off("connect", this.#onConnect)
 		this.#socket.off("disconnect", this.#onDisconnect)
@@ -200,6 +229,8 @@ export class ArenaGame {
 		this.#socket.off("arena:spawn", this.#onSpawn)
 		this.#socket.off("arena:combat", this.#onCombat)
 		this.#socket.off("arena:drone-destroyed", this.#onDroneDestroyed)
+		this.#socket.off("arena:grenade", this.#onGrenade)
+		this.#socket.off("arena:grenade-exploded", this.#onGrenadeExploded)
 		this.#socket.off("arena:projectile", this.#onProjectile)
 		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
@@ -234,6 +265,11 @@ export class ArenaGame {
 			return
 		}
 		if (event.button === 0) this.#fire()
+		if (event.button === 2) this.#throwGrenade()
+	}
+
+	readonly #onContextMenu = (event: MouseEvent): void => {
+		if (event.target === this.#canvas) event.preventDefault()
 	}
 
 	readonly #resize = (): void => {
@@ -256,6 +292,12 @@ export class ArenaGame {
 			this.#scene.remove(projectile.mesh)
 		}
 		this.#projectiles.length = 0
+		for (const grenade of this.#grenades) this.#scene.remove(grenade.mesh)
+		this.#grenades.length = 0
+		for (const explosion of this.#grenadeExplosions) {
+			this.#scene.remove(explosion.mesh)
+		}
+		this.#grenadeExplosions.length = 0
 	}
 
 	readonly #onSpawn = (spawn: SpawnSnapshot): void => {
@@ -359,6 +401,22 @@ export class ArenaGame {
 		this.#drones.showDestroyed(destroyed)
 	}
 
+	readonly #onGrenade = (grenade: GrenadeSnapshot): void => {
+		this.#spawnGrenade(grenade)
+	}
+
+	readonly #onGrenadeExploded = (explosion: GrenadeExplodedSnapshot): void => {
+		const grenadeIndex = this.#grenades.findIndex(
+			(grenade) => grenade.id === explosion.id,
+		)
+		if (grenadeIndex >= 0) {
+			const grenade = this.#grenades[grenadeIndex]
+			if (grenade !== undefined) this.#scene.remove(grenade.mesh)
+			this.#grenades.splice(grenadeIndex, 1)
+		}
+		this.#spawnGrenadeExplosion(explosion)
+	}
+
 	readonly #onProjectile = (projectile: ProjectileSnapshot): void => {
 		this.#spawnProjectile(
 			projectile.id,
@@ -387,6 +445,7 @@ export class ArenaGame {
 		window.addEventListener("keyup", this.#onKeyUp)
 		window.addEventListener("mousemove", this.#onMouseMove)
 		window.addEventListener("mousedown", this.#onMouseDown)
+		window.addEventListener("contextmenu", this.#onContextMenu)
 		window.addEventListener("resize", this.#resize)
 		this.#socket.on("connect", this.#onConnect)
 		this.#socket.on("disconnect", this.#onDisconnect)
@@ -394,6 +453,8 @@ export class ArenaGame {
 		this.#socket.on("arena:spawn", this.#onSpawn)
 		this.#socket.on("arena:combat", this.#onCombat)
 		this.#socket.on("arena:drone-destroyed", this.#onDroneDestroyed)
+		this.#socket.on("arena:grenade", this.#onGrenade)
+		this.#socket.on("arena:grenade-exploded", this.#onGrenadeExploded)
 		this.#socket.on("arena:projectile", this.#onProjectile)
 		this.#socket.on("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.on("arena:snapshot", this.#onSnapshot)
@@ -524,6 +585,7 @@ export class ArenaGame {
 	#pollGamepad(): {
 		crouch: boolean
 		fire: boolean
+		grenade: boolean
 		jump: boolean
 		lock: boolean
 		reload: boolean
@@ -537,6 +599,7 @@ export class ArenaGame {
 			return {
 				crouch: false,
 				fire: false,
+				grenade: false,
 				jump: false,
 				lock: false,
 				reload: false,
@@ -554,12 +617,14 @@ export class ArenaGame {
 		const jump = gamepad.buttons[0]?.pressed ?? false
 		const crouch = gamepad.buttons[1]?.pressed ?? false
 		const fire = (gamepad.buttons[7]?.value ?? 0) > 0.25
+		const grenade = (gamepad.buttons[6]?.value ?? 0) > 0.25
 		const lock = gamepad.buttons[4]?.pressed ?? false
 		const reload = gamepad.buttons[5]?.pressed ?? false
 		const sprint = gamepad.buttons[10]?.pressed ?? false
 		return {
 			crouch,
 			fire,
+			grenade,
 			jump,
 			lock,
 			reload,
@@ -702,7 +767,10 @@ export class ArenaGame {
 		}
 		const trigger = gamepad.fire || this.#keys.has("KeyF")
 		if (trigger && this.#fireCooldown <= 0) this.#fire()
+		if (gamepad.grenade && !this.#grenadeHeld) this.#throwGrenade()
+		this.#grenadeHeld = gamepad.grenade
 		this.#fireCooldown -= delta
+		this.#grenadeCooldown -= delta
 	}
 
 	#fire(): void {
@@ -736,6 +804,127 @@ export class ArenaGame {
 			direction: direction.toArray(),
 			origin: origin.toArray(),
 		} satisfies FireIntent)
+	}
+
+	#throwGrenade(): void {
+		if (this.#grenadeCooldown > 0) return
+		this.#grenadeCooldown = 1
+		const direction = new THREE.Vector3(0, 0, -1).applyEuler(
+			new THREE.Euler(this.#player.pitch, this.#player.yaw, 0, "YXZ"),
+		)
+		direction.y += 0.22
+		direction.normalize()
+		const origin = this.#player.position.clone().addScaledVector(direction, 0.7)
+		this.#grenadeSequence += 1
+		this.#noiseTimer = 0.85
+		this.#socket.emit("arena:throw-grenade", {
+			clientGrenadeId: this.#grenadeSequence,
+			direction: direction.toArray(),
+			origin: origin.toArray(),
+		} satisfies GrenadeIntent)
+	}
+
+	#spawnGrenade(grenade: GrenadeSnapshot): void {
+		if (this.#grenades.some((candidate) => candidate.id === grenade.id)) return
+		const mesh = new THREE.Group()
+		const shell = new THREE.Mesh(
+			new THREE.IcosahedronGeometry(GRENADE_RADIUS, 1),
+			new THREE.MeshStandardMaterial({
+				color: "#283936",
+				emissive: "#173a32",
+				emissiveIntensity: 0.8,
+				metalness: 0.72,
+				roughness: 0.28,
+			}),
+		)
+		const band = new THREE.Mesh(
+			new THREE.TorusGeometry(GRENADE_RADIUS * 0.72, 0.035, 6, 12),
+			new THREE.MeshBasicMaterial({ color: "#ff7b43" }),
+		)
+		band.rotation.x = Math.PI / 2
+		const light = new THREE.PointLight("#ff7b43", 2.4, 3.5)
+		mesh.add(shell, band, light)
+		mesh.position.set(...grenade.origin)
+		this.#scene.add(mesh)
+		this.#grenades.push({
+			id: grenade.id,
+			life: GRENADE_FUSE_SECONDS + 1,
+			mesh,
+			velocity: new THREE.Vector3(...grenade.velocity),
+		})
+	}
+
+	#spawnGrenadeExplosion(explosion: GrenadeExplodedSnapshot): void {
+		const material = new THREE.MeshBasicMaterial({
+			blending: THREE.AdditiveBlending,
+			color: "#ff8a46",
+			depthWrite: false,
+			opacity: 0.65,
+			side: THREE.DoubleSide,
+			transparent: true,
+			wireframe: true,
+		})
+		const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 12), material)
+		const light = new THREE.PointLight("#ff6b32", 18, explosion.radius * 2)
+		mesh.add(light)
+		mesh.position.set(...explosion.position)
+		mesh.scale.setScalar(0.15)
+		this.#scene.add(mesh)
+		this.#grenadeExplosions.push({
+			life: 0.48,
+			light,
+			material,
+			mesh,
+			radius: explosion.radius,
+		})
+	}
+
+	#updateGrenades(delta: number): void {
+		for (let index = this.#grenades.length - 1; index >= 0; index -= 1) {
+			const grenade = this.#grenades[index]
+			if (grenade === undefined) continue
+			grenade.life -= delta
+			grenade.velocity.y -= GRENADE_GRAVITY * delta
+			grenade.mesh.position.addScaledVector(grenade.velocity, delta)
+			grenade.mesh.rotation.x += delta * 7.5
+			grenade.mesh.rotation.z += delta * 4.5
+			const ground =
+				this.#heightAt(grenade.mesh.position.x, grenade.mesh.position.z) +
+				GRENADE_RADIUS
+			if (grenade.mesh.position.y <= ground) {
+				grenade.mesh.position.y = ground
+				if (grenade.velocity.y < 0) {
+					grenade.velocity.y *= -GRENADE_RESTITUTION
+					grenade.velocity.x *= GRENADE_BOUNCE_DAMPING
+					grenade.velocity.z *= GRENADE_BOUNCE_DAMPING
+				}
+				if (Math.abs(grenade.velocity.y) < 0.6) grenade.velocity.y = 0
+			}
+			if (grenade.life > 0) continue
+			this.#scene.remove(grenade.mesh)
+			this.#grenades.splice(index, 1)
+		}
+
+		for (
+			let index = this.#grenadeExplosions.length - 1;
+			index >= 0;
+			index -= 1
+		) {
+			const explosion = this.#grenadeExplosions[index]
+			if (explosion === undefined) continue
+			explosion.life -= delta
+			const progress = THREE.MathUtils.clamp(1 - explosion.life / 0.48, 0, 1)
+			explosion.mesh.scale.setScalar(
+				explosion.radius * THREE.MathUtils.lerp(0.08, 1, progress),
+			)
+			explosion.material.opacity = (1 - progress) * 0.65
+			explosion.light.intensity = (1 - progress) * 18
+			if (explosion.life > 0) continue
+			this.#scene.remove(explosion.mesh)
+			explosion.mesh.geometry.dispose()
+			explosion.material.dispose()
+			this.#grenadeExplosions.splice(index, 1)
+		}
 	}
 
 	#spawnProjectile(
@@ -1077,6 +1266,7 @@ export class ArenaGame {
 		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)
 		this.#drones.update(delta)
 		this.#updateProjectiles(delta)
+		this.#updateGrenades(delta)
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)
 		this.#updateTargeting(delta)

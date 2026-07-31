@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import type { ProjectileEndedSnapshot } from "../src/arena-protocol.ts"
+import type {
+	GrenadeExplodedSnapshot,
+	GrenadeSnapshot,
+	ProjectileEndedSnapshot,
+} from "../src/arena-protocol.ts"
 import { ArenaSimulation, type SimulationPlayer } from "./ArenaSimulation.ts"
 
 function makeSimulation(
@@ -11,6 +15,8 @@ function makeSimulation(
 ): ArenaSimulation {
 	return new ArenaSimulation({
 		emitDroneDestroyed: () => undefined,
+		emitGrenade: () => undefined,
+		emitGrenadeExploded: () => undefined,
 		emitProjectile: () => undefined,
 		emitProjectileEnded: (snapshot) => endedProjectiles.push(snapshot),
 		getPlayers: () => players,
@@ -55,6 +61,58 @@ test("player projectiles damage another pilot across a simulation tick", () => {
 
 	assert.deepEqual(damage, [{ damage: 20, playerId: "target" }])
 	assert.deepEqual(endedProjectiles, [{ id: 1 }])
+})
+
+test("grenades broadcast their flight and damage pilots when they explode", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "thrower",
+			position: [0, -0.88, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [1.5, -0.88, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const damage: Array<{ damage: number; playerId: string }> = []
+	const grenadeSnapshots: GrenadeSnapshot[] = []
+	const explosions: GrenadeExplodedSnapshot[] = []
+	const simulation = new ArenaSimulation({
+		emitDroneDestroyed: () => undefined,
+		emitGrenade: (snapshot) => grenadeSnapshots.push(snapshot),
+		emitGrenadeExploded: (snapshot) => explosions.push(snapshot),
+		emitProjectile: () => undefined,
+		emitProjectileEnded: () => undefined,
+		getPlayers: () => players,
+		onDroneKilled: () => undefined,
+		onPlayerDamage: (playerId, amount) =>
+			damage.push({ damage: amount, playerId }),
+		seed: 7_431_905,
+	})
+
+	assert.equal(
+		simulation.throwGrenade("thrower", {
+			clientGrenadeId: 1,
+			direction: [0, 1, 0],
+			origin: [0, -0.88, 0],
+		}),
+		true,
+	)
+	for (let index = 0; index < 23; index += 1) simulation.update(0.1)
+
+	assert.equal(grenadeSnapshots.length, 1)
+	assert.equal(grenadeSnapshots[0]?.ownerId, "thrower")
+	assert.equal(explosions.length, 1)
+	assert.equal(explosions[0]?.id, grenadeSnapshots[0]?.id)
+	assert.deepEqual(damage.map(({ playerId }) => playerId).sort(), [
+		"target",
+		"thrower",
+	])
+	assert.ok(damage.every(({ damage: amount }) => amount > 0 && amount <= 68))
 })
 
 test("player projectiles cannot damage their owner", () => {

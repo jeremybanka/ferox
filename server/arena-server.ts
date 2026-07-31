@@ -8,6 +8,7 @@ import {
 	isVisorExpression,
 	type CombatSnapshot,
 	type FireIntent,
+	type GrenadeIntent,
 	type VisorExpression,
 } from "../src/arena-protocol.ts"
 import {
@@ -55,6 +56,7 @@ const playerSpawnSlots = new Map<string, number>()
 const playerHealth = new Map<string, number>()
 const playerScores = new Map<string, number>()
 const lastPlayerFire = new Map<string, number>()
+const lastPlayerGrenade = new Map<string, number>()
 
 const combatSnapshot = (playerId: string): CombatSnapshot => ({
 	health: playerHealth.get(playerId) ?? 100,
@@ -64,6 +66,12 @@ const combatSnapshot = (playerId: string): CombatSnapshot => ({
 const simulation = new ArenaSimulation({
 	emitDroneDestroyed: (snapshot) => {
 		io.emit("arena:drone-destroyed", snapshot)
+	},
+	emitGrenade: (snapshot) => {
+		io.emit("arena:grenade", snapshot)
+	},
+	emitGrenadeExploded: (snapshot) => {
+		io.emit("arena:grenade-exploded", snapshot)
 	},
 	emitProjectile: (snapshot) => {
 		io.emit("arena:projectile", snapshot)
@@ -186,8 +194,18 @@ realtime(
 			if (now - previous < 110) return
 			if (simulation.fire(socketId, payload)) lastPlayerFire.set(socketId, now)
 		}
+		const onThrowGrenade = (payload: GrenadeIntent): void => {
+			const now = performance.now()
+			const previous =
+				lastPlayerGrenade.get(socketId) ?? Number.NEGATIVE_INFINITY
+			if (now - previous < 900) return
+			if (simulation.throwGrenade(socketId, payload)) {
+				lastPlayerGrenade.set(socketId, now)
+			}
+		}
 		gameSocket.on("arena:move", onMove)
 		gameSocket.on("arena:fire", onFire)
+		gameSocket.on("arena:throw-grenade", onThrowGrenade)
 
 		return () => {
 			players.delete(socketId)
@@ -195,10 +213,12 @@ realtime(
 			playerHealth.delete(socketId)
 			playerScores.delete(socketId)
 			lastPlayerFire.delete(socketId)
+			lastPlayerGrenade.delete(socketId)
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)
 			gameSocket.off("arena:move", onMove)
 			gameSocket.off("arena:fire", onFire)
+			gameSocket.off("arena:throw-grenade", onThrowGrenade)
 		}
 	},
 )
