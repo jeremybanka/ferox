@@ -254,18 +254,18 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						{hud.reloading
 							? `RELOADING ${Math.round(hud.reloadProgress * 100)}%`
 							: gun.fire.type === "guided-missile"
-							? hud.ammo === 0
-								? "LAUNCHER EMPTY • 1 / Y / WHEEL TO SWITCH • X TO DROP"
-								: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH • X TO DROP"
-							: hud.pickup === "nearby"
-								? "HOLD E / RB TO PICK UP"
-								: hud.ammo === 0
-									? "PRESS RB / R TO RELOAD"
-									: hud.pickup === "available"
-										? "MINI-MISSILE AVAILABLE"
-										: hud.pickup === "carried"
-											? "MINI-MISSILE CARRIED"
-											: "MINI-MISSILE RESPAWNING"}
+								? hud.ammo === 0
+									? "LAUNCHER EMPTY • 1 / Y / WHEEL TO SWITCH • X TO DROP"
+									: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH • X TO DROP"
+								: hud.pickup === "nearby"
+									? "HOLD E / RB TO PICK UP"
+									: hud.ammo === 0
+										? "PRESS RB / R TO RELOAD"
+										: hud.pickup === "available"
+											? "MINI-MISSILE AVAILABLE"
+											: hud.pickup === "carried"
+												? "MINI-MISSILE CARRIED"
+												: "MINI-MISSILE RESPAWNING"}
 					</em>
 				</weapon-status>
 

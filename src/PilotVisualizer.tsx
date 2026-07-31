@@ -16,6 +16,7 @@ import {
 	type OverlayAnimation,
 	type PilotVisualizerControls,
 	type SampleInterval,
+	type SlideAnimation,
 } from "./pilot-visualizer-state.ts"
 import {
 	JUMP_PHYSICS,
@@ -95,7 +96,12 @@ import {
 	type RunDirection,
 } from "./pilot/RunAnimation.ts"
 import { reloadAnimationLayer } from "./pilot/ReloadAnimation.ts"
-import { slideAnimationLayer } from "./pilot/SlideAnimation.ts"
+import {
+	slideAnimationLayer,
+	SLIDE_DURATION_SECONDS,
+	SLIDE_KEYFRAME_MARKERS,
+	type SlideMotion,
+} from "./pilot/SlideAnimation.ts"
 import { waveAnimationLayer } from "./pilot/WaveAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 
@@ -112,7 +118,10 @@ const BASE_ANIMATIONS: readonly BaseAnimation[] = [
 	"right",
 	"jump",
 	"double-jump",
-	"slide",
+	"slide-forward",
+	"slide-left",
+	"slide-backward",
+	"slide-right",
 	"reload",
 	"death",
 	"crouch",
@@ -152,16 +161,12 @@ const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	left: 1,
 	reload: WEAPON_RELOAD_DURATION_SECONDS,
 	right: 1,
-	slide: 1.4,
+	slide: SLIDE_DURATION_SECONDS,
+	"slide-backward": SLIDE_DURATION_SECONDS,
+	"slide-forward": SLIDE_DURATION_SECONDS,
+	"slide-left": SLIDE_DURATION_SECONDS,
+	"slide-right": SLIDE_DURATION_SECONDS,
 }
-
-const SLIDE_PREVIEW_MARKERS: readonly AnimationMarker[] = [
-	{ label: "enter", progress: 0 },
-	{ label: "low silhouette", progress: 0.18 },
-	{ label: "dust cadence", progress: 0.5 },
-	{ label: "exit", progress: 0.82 },
-	{ label: "neutral", progress: 1 },
-]
 
 const RELOAD_PREVIEW_MARKERS: readonly AnimationMarker[] = [
 	{ label: "start", progress: 0 },
@@ -259,6 +264,30 @@ function getCrouchRunDirection(
 	}
 }
 
+function getSlideDirection(baseAnimation: BaseAnimation): RunDirection | null {
+	switch (baseAnimation) {
+		case "slide":
+		case "slide-forward":
+			return "forward"
+		case "slide-backward":
+			return "backward"
+		case "slide-left":
+			return "left"
+		case "slide-right":
+			return "right"
+		default:
+			return null
+	}
+}
+
+function slidePreviewMotion(direction: RunDirection): SlideMotion {
+	return {
+		localVelocityX: direction === "left" ? -8 : direction === "right" ? 8 : 0,
+		localVelocityZ:
+			direction === "forward" ? -8 : direction === "backward" ? 8 : 0,
+	}
+}
+
 function supportsBunnyhop(baseAnimation: BaseAnimation): boolean {
 	return baseAnimation === "idle" || isRunDirection(baseAnimation)
 }
@@ -272,11 +301,11 @@ function supportsOverlay(
 
 function isLifecycleAnimation(
 	baseAnimation: BaseAnimation,
-): baseAnimation is "death" | "reload" | "slide" {
+): baseAnimation is "death" | "reload" | "slide" | SlideAnimation {
 	return (
 		baseAnimation === "death" ||
 		baseAnimation === "reload" ||
-		baseAnimation === "slide"
+		getSlideDirection(baseAnimation) !== null
 	)
 }
 
@@ -312,7 +341,7 @@ function getAnimationMarkers(
 	}
 	if (baseAnimation === "jump") return JUMP_PREVIEW_MARKERS
 	if (baseAnimation === "double-jump") return DOUBLE_JUMP_KEYFRAME_MARKERS
-	if (baseAnimation === "slide") return SLIDE_PREVIEW_MARKERS
+	if (getSlideDirection(baseAnimation) !== null) return SLIDE_KEYFRAME_MARKERS
 	if (baseAnimation === "reload") return RELOAD_PREVIEW_MARKERS
 	if (baseAnimation === "death") return DEATH_PREVIEW_MARKERS
 	return []
@@ -479,8 +508,10 @@ function getLifecyclePoseStats(
 	if (!isLifecycleAnimation(baseAnimation)) return null
 	const duration = BASE_DURATION_SECONDS[baseAnimation]
 	const progress = THREE.MathUtils.clamp(time / duration, 0, 1)
-	if (baseAnimation === "slide") {
+	const slideDirection = getSlideDirection(baseAnimation)
+	if (slideDirection !== null) {
 		const weight = slidePreviewWeight(progress)
+		const motion = slidePreviewMotion(slideDirection)
 		return [
 			{ label: "TIMELINE", max: 1, signed: false, unit: "", value: progress },
 			{ label: "POSE", max: 1, signed: false, unit: "", value: weight },
@@ -490,6 +521,20 @@ function getLifecyclePoseStats(
 				signed: false,
 				unit: "",
 				value: weight >= 0.95 ? 1 : 0,
+			},
+			{
+				label: "LATERAL",
+				max: 8,
+				signed: true,
+				unit: "m/s",
+				value: motion.localVelocityX,
+			},
+			{
+				label: "FORWARD",
+				max: 8,
+				signed: true,
+				unit: "m/s",
+				value: -motion.localVelocityZ,
 			},
 		]
 	}
@@ -585,10 +630,11 @@ function applyPreviewPose(
 	} else if (baseAnimation === "reload") {
 		layers.push(idleAnimationLayer(time))
 		layers.push(reloadAnimationLayer(progress))
-	} else if (baseAnimation === "slide") {
+	} else if (getSlideDirection(baseAnimation) !== null) {
+		const slideDirection = getSlideDirection(baseAnimation) ?? "forward"
 		layers.push(idleAnimationLayer(time))
 		layers.push({
-			...slideAnimationLayer(),
+			...slideAnimationLayer(slidePreviewMotion(slideDirection)),
 			fadeSeconds: 0,
 			weight: slidePreviewWeight(progress),
 		})
@@ -768,13 +814,8 @@ function applyPreviewVisor(
 	overlays: readonly OverlayAnimation[],
 	now: number,
 ): void {
-	let source:
-		| "combat"
-		| "damage"
-		| "defeated"
-		| "emote"
-		| "movement"
-		| null = null
+	let source: "combat" | "damage" | "defeated" | "emote" | "movement" | null =
+		null
 	let expression:
 		| "alarm"
 		| "angry"
@@ -802,7 +843,7 @@ function applyPreviewVisor(
 		source = "movement"
 		expression = "alarm"
 	} else if (
-		baseAnimation === "slide" ||
+		getSlideDirection(baseAnimation) !== null ||
 		baseAnimation === "crouch" ||
 		getCrouchRunDirection(baseAnimation) !== null
 	) {

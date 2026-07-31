@@ -8,8 +8,19 @@ import {
 	type PilotPose,
 } from "./PilotAnimation.ts"
 import type { PilotRig } from "./PilotModel.ts"
+import {
+	movementDirectionFromLocalVelocity,
+	type MovementDirection,
+} from "./MovementDirection.ts"
 
-export type RunDirection = "backward" | "forward" | "left" | "right"
+export type RunDirection = MovementDirection
+
+export function runDirectionFromLocalVelocity(
+	velocity: { x: number; z: number },
+	fallback: RunDirection = "forward",
+): RunDirection {
+	return movementDirectionFromLocalVelocity(velocity, fallback)
+}
 
 type ArmPose = {
 	elbow: number

@@ -1,9 +1,13 @@
-import { PLAYER_CROUCH_BASE_SPEED_LIMIT } from "./game-constants.ts"
+import {
+	PLAYER_CROUCH_BASE_SPEED_LIMIT,
+	PLAYER_RUN_SPEED_LIMIT,
+	PLAYER_SPRINT_SPEED_LIMIT,
+} from "./game-constants.ts"
 
 export const SLIDE_PHYSICS = {
 	flatFriction: 1.05,
 	gravity: 23,
-	maximumSpeed: 14.8,
+	maximumSpeed: PLAYER_SPRINT_SPEED_LIMIT,
 	minimumSlopeGrade: 0.015,
 	exitSpeed: PLAYER_CROUCH_BASE_SPEED_LIMIT * 0.5,
 	terrainSampleDistance: 0.4,
@@ -23,9 +27,45 @@ export type SlidePhysicsState = PlanarVelocity & {
 	sliding: boolean
 }
 
+export type MovementState = "airborne" | "crouching" | "running" | "sliding"
+
 export type SlidePhysicsStep = SlidePhysicsState & {
 	downhillAcceleration: PlanarVelocity
+	movementState: MovementState
 	slopeGrade: number
+}
+
+export function resolveMovementState(options: {
+	crouching: boolean
+	grounded: boolean
+	planarSpeed: number
+	slopeGrade: number
+	wasSliding: boolean
+}): MovementState {
+	if (!options.grounded) return "airborne"
+	if (!options.crouching) return "running"
+	if (
+		options.slopeGrade >= SLIDE_PHYSICS.minimumSlopeGrade ||
+		options.planarSpeed > PLAYER_CROUCH_BASE_SPEED_LIMIT ||
+		(options.wasSliding && options.planarSpeed > SLIDE_PHYSICS.exitSpeed)
+	) {
+		return "sliding"
+	}
+	return "crouching"
+}
+
+export function movementSpeedLimit(options: {
+	crouching: boolean
+	grounded: boolean
+	sliding: boolean
+	sprinting: boolean
+}): number {
+	if (!options.grounded || options.sliding || options.sprinting) {
+		return PLAYER_SPRINT_SPEED_LIMIT
+	}
+	return options.crouching
+		? PLAYER_CROUCH_BASE_SPEED_LIMIT
+		: PLAYER_RUN_SPEED_LIMIT
 }
 
 export function sampleTerrainGradient(
@@ -57,16 +97,19 @@ export function stepSlidePhysics(
 	)
 	const speed = Math.hypot(state.x, state.z)
 	const slopeCanInitiate = slopeGrade >= SLIDE_PHYSICS.minimumSlopeGrade
-	const hasEntryMomentum = speed > PLAYER_CROUCH_BASE_SPEED_LIMIT
-	const hasExitMomentum = state.sliding && speed > SLIDE_PHYSICS.exitSpeed
-	const sliding =
-		options.grounded &&
-		options.crouching &&
-		(slopeCanInitiate || hasEntryMomentum || hasExitMomentum)
+	const movementState = resolveMovementState({
+		crouching: options.crouching,
+		grounded: options.grounded,
+		planarSpeed: speed,
+		slopeGrade,
+		wasSliding: state.sliding,
+	})
+	const sliding = movementState === "sliding"
 
 	if (!sliding) {
 		return {
 			downhillAcceleration: { x: 0, z: 0 },
+			movementState,
 			slopeGrade,
 			sliding: false,
 			x: state.x,
@@ -78,6 +121,7 @@ export function stepSlidePhysics(
 		const damping = Math.exp(-SLIDE_PHYSICS.flatFriction * delta)
 		return limitSlideSpeed({
 			downhillAcceleration: { x: 0, z: 0 },
+			movementState,
 			slopeGrade,
 			sliding: true,
 			x: state.x * damping,
@@ -105,6 +149,7 @@ export function stepSlidePhysics(
 
 	return limitSlideSpeed({
 		downhillAcceleration,
+		movementState,
 		slopeGrade,
 		sliding: true,
 		x: directionX * downhillSpeed + crossSlopeX * crossSlopeDamping,

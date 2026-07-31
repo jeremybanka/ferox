@@ -48,7 +48,6 @@ import {
 	HIT_MARKER_DURATION_SECONDS,
 	MINI_MISSILE_PICKUP_POSITION,
 	MINI_MISSILE_PICKUP_RADIUS,
-	PLAYER_CROUCH_BASE_SPEED_LIMIT,
 	PLAYER_SLIDE_DUST_BUDGET,
 	PLAYER_SLIDE_DUST_LIFETIME_SECONDS,
 	SMART_TARGET_RADIUS_SCREEN,
@@ -123,7 +122,11 @@ import {
 	type ReloadState,
 } from "./ReloadState.ts"
 import { stepSlideDust } from "./SlideDustState.ts"
-import { sampleTerrainGradient, stepSlidePhysics } from "./SlidePhysics.ts"
+import {
+	movementSpeedLimit,
+	sampleTerrainGradient,
+	stepSlidePhysics,
+} from "./SlidePhysics.ts"
 import {
 	airborneMomentumLayer,
 	airborneVelocityLayer,
@@ -160,7 +163,10 @@ import {
 	sampleDraftAnimation,
 	type PilotAnimationLayer,
 } from "./pilot/PilotAnimation.ts"
-import { runAnimationLayer, type RunDirection } from "./pilot/RunAnimation.ts"
+import {
+	runAnimationLayer,
+	runDirectionFromLocalVelocity,
+} from "./pilot/RunAnimation.ts"
 import { reloadAnimationLayer } from "./pilot/ReloadAnimation.ts"
 import { slideAnimationLayer } from "./pilot/SlideAnimation.ts"
 import {
@@ -1429,13 +1435,12 @@ export class ArenaGame {
 		const damping = Math.exp(-friction * delta)
 		this.#player.velocity.x *= damping
 		this.#player.velocity.z *= damping
-		const cap = this.#slide
-			? 14.8
-			: crouch
-				? PLAYER_CROUCH_BASE_SPEED_LIMIT
-				: this.#sprinting
-					? 14.8
-					: 9.2
+		const cap = movementSpeedLimit({
+			crouching: crouch,
+			grounded,
+			sliding: this.#slide,
+			sprinting: this.#sprinting,
+		})
 		const horizontalSpeed = Math.hypot(
 			this.#player.velocity.x,
 			this.#player.velocity.z,
@@ -1460,6 +1465,11 @@ export class ArenaGame {
 			-boundary,
 			boundary,
 		)
+		const midpointGround =
+			this.#heightAt(
+				(this.#player.position.x + nextX) * 0.5,
+				(this.#player.position.z + nextZ) * 0.5,
+			) + eye
 		const nextGround = this.#heightAt(nextX, nextZ) + eye
 		const jumpStep = stepJumpPhysics(
 			{
@@ -1471,12 +1481,33 @@ export class ArenaGame {
 				delta,
 				groundAfter: nextGround,
 				groundBefore: ground,
+				groundMidpoint: midpointGround,
 				jumpRequested: this.#jumpQueued,
 			},
 		)
 		this.#jumpQueued = false
 		this.#player.jumps = jumpStep.jumpCount
-		if (jumpStep.impulse !== null) this.#slide = false
+		if (jumpStep.impulse !== null || jumpStep.departedGround) {
+			this.#slide = false
+		} else if (jumpStep.landed && crouch) {
+			this.#slide = stepSlidePhysics(
+				{
+					sliding: false,
+					x: this.#player.velocity.x,
+					z: this.#player.velocity.z,
+				},
+				{
+					crouching: true,
+					delta: 0,
+					grounded: true,
+					terrainGradient: sampleTerrainGradient(
+						(x, z) => this.#heightAt(x, z),
+						nextX,
+						nextZ,
+					),
+				},
+			).sliding
+		}
 		this.#updateLocalSlideDust(delta)
 		this.#player.position.set(nextX, jumpStep.positionY, nextZ)
 		this.#player.velocity.y = jumpStep.velocityY
@@ -2247,12 +2278,7 @@ export class ArenaGame {
 			const localVelocity = model.velocity
 				.clone()
 				.applyAxisAngle(new THREE.Vector3(0, 1, 0), -model.yaw)
-			let direction: RunDirection
-			if (Math.abs(localVelocity.x) > Math.abs(localVelocity.z)) {
-				direction = localVelocity.x > 0 ? "right" : "left"
-			} else {
-				direction = localVelocity.z < 0 ? "forward" : "backward"
-			}
+			const direction = runDirectionFromLocalVelocity(localVelocity)
 			const animationTime = performance.now() / 1_000
 			const layers: PilotAnimationLayer[] = []
 			const deathElapsed =
@@ -2296,7 +2322,12 @@ export class ArenaGame {
 				layers.push(airborneVelocityLayer(airborneMotion))
 				layers.push(airborneMomentumLayer(airborneMotion, momentumWeight))
 			} else if (model.sliding) {
-				layers.push(slideAnimationLayer())
+				layers.push(
+					slideAnimationLayer({
+						localVelocityX: localVelocity.x,
+						localVelocityZ: localVelocity.z,
+					}),
+				)
 			} else if (model.crouching) {
 				if (horizontalSpeed > 0.35) {
 					layers.push(

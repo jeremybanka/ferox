@@ -2,8 +2,14 @@ import assert from "node:assert/strict"
 import { test } from "vitest"
 
 import { arenaHeightAt } from "./arena-terrain.ts"
-import { ARENA_SEED, PLAYER_CROUCH_BASE_SPEED_LIMIT } from "./game-constants.ts"
 import {
+	ARENA_SEED,
+	PLAYER_CROUCH_BASE_SPEED_LIMIT,
+	PLAYER_SPRINT_SPEED_LIMIT,
+} from "./game-constants.ts"
+import { stepJumpPhysics } from "./JumpPhysics.ts"
+import {
+	movementSpeedLimit,
 	sampleTerrainGradient,
 	SLIDE_PHYSICS,
 	stepSlidePhysics,
@@ -130,4 +136,113 @@ test("arena terrain sampling drives a resting crouch downhill", () => {
 
 	assert.equal(step.sliding, true)
 	assert.ok(heightAt(x + step.x * 0.1, z + step.z * 0.1) < heightAt(x, z))
+})
+
+test("run to crouch transfers above-limit momentum directly into slide", () => {
+	const velocity = { x: 7.5, z: -2.25 }
+	const step = stepSlidePhysics(
+		{ ...velocity, sliding: false },
+		{
+			crouching: true,
+			delta: 0,
+			grounded: true,
+			terrainGradient: flatGradient,
+		},
+	)
+
+	assert.equal(step.movementState, "sliding")
+	assert.equal(step.x, velocity.x)
+	assert.equal(step.z, velocity.z)
+})
+
+test("a crouched high-speed landing resolves slide without losing momentum", () => {
+	const velocity = { x: -3.5, z: -6.5 }
+	const landing = stepJumpPhysics(
+		{ jumpCount: 1, positionY: 4.4, velocityY: -8 },
+		{
+			delta: 0.04,
+			groundAfter: 4.2,
+			groundBefore: 4.2,
+			jumpRequested: false,
+		},
+	)
+	const slide = stepSlidePhysics(
+		{ ...velocity, sliding: false },
+		{
+			crouching: true,
+			delta: 0,
+			grounded: landing.landed,
+			terrainGradient: flatGradient,
+		},
+	)
+
+	assert.equal(landing.landed, true)
+	assert.equal(slide.movementState, "sliding")
+	assert.equal(slide.x, velocity.x)
+	assert.equal(slide.z, velocity.z)
+})
+
+test("slide jump and airborne transitions retain planar momentum", () => {
+	const velocity = { x: 4.25, z: -8.5 }
+	const jump = stepJumpPhysics(
+		{ jumpCount: 0, positionY: 3, velocityY: 0 },
+		{
+			delta: 0.04,
+			groundAfter: 3,
+			groundBefore: 3,
+			jumpRequested: true,
+		},
+	)
+	const airborne = stepSlidePhysics(
+		{ ...velocity, sliding: true },
+		{
+			crouching: true,
+			delta: 0,
+			grounded: false,
+			terrainGradient: flatGradient,
+		},
+	)
+
+	assert.equal(jump.impulse, 1)
+	assert.equal(airborne.movementState, "airborne")
+	assert.equal(airborne.x, velocity.x)
+	assert.equal(airborne.z, velocity.z)
+	assert.equal(
+		movementSpeedLimit({
+			crouching: true,
+			grounded: false,
+			sliding: false,
+			sprinting: false,
+		}),
+		PLAYER_SPRINT_SPEED_LIMIT,
+	)
+})
+
+test("ledge departure retains planar slide velocity while gravity takes over", () => {
+	const velocity = { x: 10, z: 1.5 }
+	const departure = stepJumpPhysics(
+		{ jumpCount: 0, positionY: 6, velocityY: 0 },
+		{
+			delta: 0.04,
+			groundAfter: 2,
+			groundBefore: 6,
+			groundMidpoint: 6,
+			jumpRequested: false,
+		},
+	)
+	const airborne = stepSlidePhysics(
+		{ ...velocity, sliding: true },
+		{
+			crouching: true,
+			delta: 0,
+			grounded: !departure.departedGround,
+			terrainGradient: flatGradient,
+		},
+	)
+
+	assert.equal(departure.departedGround, true)
+	assert.ok(departure.velocityY < 0)
+	assert.equal(airborne.movementState, "airborne")
+	assert.equal(airborne.x, velocity.x)
+	assert.equal(airborne.z, velocity.z)
 })

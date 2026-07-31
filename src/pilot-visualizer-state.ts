@@ -5,6 +5,7 @@ import { DEFAULT_GUN_ID, type GunId } from "./guns/GunDefinitions.ts"
 import type { RunDirection } from "./pilot/RunAnimation.ts"
 
 export type CrouchRunAnimation = `crouch-run-${RunDirection}`
+export type SlideAnimation = `slide-${RunDirection}`
 
 export type BaseAnimation =
 	| RunDirection
@@ -16,6 +17,7 @@ export type BaseAnimation =
 	| "reload"
 	| "slide"
 	| CrouchRunAnimation
+	| SlideAnimation
 
 export type OverlayAnimation = "flinch" | "recoil" | "wave" | "weapons-free"
 
