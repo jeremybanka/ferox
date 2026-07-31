@@ -5,6 +5,7 @@ import type {
 	GrenadeExplodedSnapshot,
 	GrenadeSnapshot,
 	DirectHitResult,
+	PlayerDamageImpact,
 	ProjectileEndedSnapshot,
 } from "../src/arena-protocol.ts"
 import { grenadeDamageAtDistance } from "../src/game-constants.ts"
@@ -12,7 +13,11 @@ import { ArenaSimulation, type SimulationPlayer } from "./ArenaSimulation.ts"
 
 function makeSimulation(
 	players: SimulationPlayer[],
-	onPlayerDamage: (playerId: string, damage: number) => void,
+	onPlayerDamage: (
+		playerId: string,
+		damage: number,
+		impact: PlayerDamageImpact,
+	) => void,
 	endedProjectiles: ProjectileEndedSnapshot[],
 	directHits: Array<{ playerId: string; result: DirectHitResult }> = [],
 ): ArenaSimulation {
@@ -45,11 +50,16 @@ test("player projectiles damage another pilot across a simulation tick", () => {
 			velocity: [0, 0, 0],
 		},
 	]
-	const damage: Array<{ damage: number; playerId: string }> = []
+	const damage: Array<{
+		damage: number
+		impact: PlayerDamageImpact
+		playerId: string
+	}> = []
 	const endedProjectiles: ProjectileEndedSnapshot[] = []
 	const simulation = makeSimulation(
 		players,
-		(playerId, amount) => damage.push({ damage: amount, playerId }),
+		(playerId, amount, impact) =>
+			damage.push({ damage: amount, impact, playerId }),
 		endedProjectiles,
 	)
 
@@ -62,7 +72,13 @@ test("player projectiles damage another pilot across a simulation tick", () => {
 	).toBe(true)
 	simulation.update(0.1)
 
-	expect(damage).toEqual([{ damage: 20, playerId: "target" }])
+	expect(damage).toHaveLength(1)
+	expect(damage[0]?.damage).toBe(20)
+	expect(damage[0]?.playerId).toBe("target")
+	expect(damage[0]?.impact.direction).toEqual([0, 0, -1])
+	expect(damage[0]?.impact.position[0]).toBe(0)
+	expect(damage[0]?.impact.position[1]).toBe(1)
+	expect(damage[0]?.impact.position[2]).toBe(-4)
 	expect(endedProjectiles).toEqual([{ id: 1 }])
 })
 

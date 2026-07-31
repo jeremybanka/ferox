@@ -11,6 +11,7 @@ import type {
 	GrenadeIntent,
 	GrenadeSnapshot,
 	PlayerMoveSnapshot,
+	PlayerDamageSnapshot,
 	PlayerSnapshot,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
@@ -19,6 +20,7 @@ import type {
 } from "./arena-protocol.ts"
 import { isVisorExpression } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
+import { DamageParticleBurst } from "./DamageParticles.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
 import {
 	FREE_AIM_TAP_THRESHOLD_MS,
@@ -42,6 +44,14 @@ import {
 	spreadDirection,
 	type RecoilSpreadState,
 } from "./RecoilSpread.ts"
+import {
+	BoundedDamageEffects,
+	damageFlinchAnimationLayer,
+	initialDamageFeedbackTracker,
+	observeDamageFeedback,
+	stepDamageFlinch,
+	type DamageFeedbackTracker,
+} from "./pilot/DamageFeedback.ts"
 import {
 	initialRemoteRecoilState,
 	initialRemoteRecoilTracker,
@@ -87,6 +97,7 @@ import {
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 
 type SpawnSnapshot = {
+	damageSequence: number
 	position: [number, number]
 	yaw: number
 }
@@ -140,6 +151,8 @@ type RemotePilot = {
 	animator: PilotAnimationMixer
 	crouching: boolean
 	doubleJumpStartedAt: number
+	damageDirection: THREE.Vector3
+	damageTracker: DamageFeedbackTracker
 	emote: PilotEmote | null
 	emoteSignalAt: number
 	emoteStartedAt: number
@@ -147,6 +160,7 @@ type RemotePilot = {
 	jump: 0 | 1 | 2
 	landingImpactVelocity: number
 	landingStartedAt: number
+	lifeSequence: number
 	pitch: number
 	position: THREE.Vector3
 	recoilSequence: number
@@ -176,6 +190,7 @@ export class ArenaGame {
 	readonly #canvas: HTMLCanvasElement
 	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 280)
 	readonly #drones: DroneBotSystem
+	readonly #damageEffects = new BoundedDamageEffects<DamageParticleBurst>()
 	readonly #grenadeExplosions: GrenadeExplosion[] = []
 	readonly #grenades: Grenade[] = []
 	readonly #keys = new Set<string>()
@@ -211,6 +226,7 @@ export class ArenaGame {
 	#grenadeHeld = false
 	#grenadeSequence = 0
 	#health = 100
+	#localDamageTracker = initialDamageFeedbackTracker()
 	#hitMarkerClassification: DirectHitResult["classification"] = "normal"
 	#hitMarkerSequence = 0
 	#hitMarkerUntil = 0
@@ -292,6 +308,7 @@ export class ArenaGame {
 		this.#socket.off("arena:spawn", this.#onSpawn)
 		this.#socket.off("arena:combat", this.#onCombat)
 		this.#socket.off("arena:direct-hit", this.#onDirectHit)
+		this.#socket.off("arena:player-damaged", this.#onPlayerDamaged)
 		this.#socket.off("arena:drone-destroyed", this.#onDroneDestroyed)
 		this.#socket.off("arena:grenade", this.#onGrenade)
 		this.#socket.off("arena:grenade-exploded", this.#onGrenadeExploded)
@@ -299,6 +316,7 @@ export class ArenaGame {
 		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
+		this.#damageEffects.clear()
 		for (const flash of this.#muzzleFlashes) {
 			this.#scene.remove(flash.mesh)
 			flash.mesh.geometry.dispose()
@@ -368,17 +386,30 @@ export class ArenaGame {
 			this.#scene.remove(explosion.mesh)
 		}
 		this.#grenadeExplosions.length = 0
+		this.#damageEffects.clear()
+		for (const model of this.#remotePlayers.values()) {
+			this.#scene.remove(model.rig.root)
+		}
+		this.#remotePlayers.clear()
 	}
 
 	readonly #onSpawn = (spawn: SpawnSnapshot): void => {
 		const [x, z] = spawn.position
-		if (![x, z, spawn.yaw].every(Number.isFinite)) return
+		if (
+			![x, z, spawn.yaw].every(Number.isFinite) ||
+			!Number.isSafeInteger(spawn.damageSequence)
+		)
+			return
 		this.#player.position.set(x, this.#heightAt(x, z) + PLAYER_EYE, z)
 		this.#player.velocity.set(0, 0, 0)
 		this.#player.yaw = spawn.yaw
 		this.#player.pitch = -0.04
 		this.#camera.position.copy(this.#player.position)
 		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
+		this.#localDamageTracker = initialDamageFeedbackTracker(
+			spawn.damageSequence,
+		)
+		this.#clearDamageEffects(this.#socket.id)
 		this.#socket.emit("arena:move", {
 			aimDirection: new THREE.Vector3(0, 0, -1)
 				.applyQuaternion(this.#camera.quaternion)
@@ -419,6 +450,8 @@ export class ArenaGame {
 					aimDirection: new THREE.Vector3(0, 0, -1),
 					animator: new PilotAnimationMixer(),
 					crouching: false,
+					damageDirection: new THREE.Vector3(0, 0, -1),
+					damageTracker: initialDamageFeedbackTracker(),
 					doubleJumpStartedAt: -Infinity,
 					emote: null,
 					emoteSignalAt: 0,
@@ -427,6 +460,9 @@ export class ArenaGame {
 					jump: 0,
 					landingImpactVelocity: 0,
 					landingStartedAt: -Infinity,
+					lifeSequence: Number.isSafeInteger(snapshot.lifeSequence)
+						? snapshot.lifeSequence
+						: 0,
 					pitch: 0,
 					position: new THREE.Vector3(),
 					recoilSequence: initialRemoteRecoilTracker(snapshot.recoilSequence)
@@ -477,6 +513,19 @@ export class ArenaGame {
 			model.emote = snapshot.emote
 			model.emoteSignalAt = snapshot.emoteStartedAt
 			model.freeAim = snapshot.freeAim
+			if (
+				Number.isSafeInteger(snapshot.lifeSequence) &&
+				snapshot.lifeSequence !== model.lifeSequence
+			) {
+				model.lifeSequence = snapshot.lifeSequence
+				model.damageTracker = {
+					...model.damageTracker,
+					state: initialDamageFeedbackTracker().state,
+				}
+				model.recoilState = initialRemoteRecoilState()
+				model.position.copy(model.target)
+				this.#clearDamageEffects(snapshot.id)
+			}
 			const recoil = observeRemoteRecoilEvent(
 				{
 					sequence: model.recoilSequence,
@@ -510,6 +559,7 @@ export class ArenaGame {
 		}
 		for (const [id, model] of this.#remotePlayers) {
 			if (!active.has(id)) {
+				this.#clearDamageEffects(id)
 				this.#scene.remove(model.rig.root)
 				this.#remotePlayers.delete(id)
 			}
@@ -519,9 +569,6 @@ export class ArenaGame {
 	readonly #onCombat = (combat: CombatSnapshot): void => {
 		if (!Number.isFinite(combat.health) || !Number.isFinite(combat.score))
 			return
-		if (combat.health < this.#health) {
-			this.#visorHurtUntil = performance.now() / 1_000 + 0.45
-		}
 		this.#health = combat.health
 		this.#score = combat.score
 	}
@@ -540,6 +587,46 @@ export class ArenaGame {
 		this.#hitMarkerSequence += 1
 		this.#hitMarkerUntil =
 			performance.now() / 1_000 + HIT_MARKER_DURATION_SECONDS
+	}
+
+	readonly #onPlayerDamaged = (event: PlayerDamageSnapshot): void => {
+		const observedAt = Date.now() / 1_000
+		if (event.playerId === this.#socket.id) {
+			const observed = observeDamageFeedback(
+				this.#localDamageTracker,
+				event,
+				observedAt,
+			)
+			this.#localDamageTracker = observed.tracker
+			if (!observed.accepted) return
+			this.#visorHurtUntil = performance.now() / 1_000 + 0.45
+			const localEffectPosition = this.#camera.position
+				.clone()
+				.addScaledVector(
+					new THREE.Vector3(0, 0, -1).applyQuaternion(this.#camera.quaternion),
+					0.72,
+				)
+				.add(new THREE.Vector3(0, -0.18, 0))
+			this.#damageEffects.add(
+				new DamageParticleBurst(
+					this.#scene,
+					event,
+					localEffectPosition.toArray(),
+				),
+			)
+			return
+		}
+		const model = this.#remotePlayers.get(event.playerId)
+		if (model === undefined) return
+		const observed = observeDamageFeedback(
+			model.damageTracker,
+			event,
+			observedAt,
+		)
+		model.damageTracker = observed.tracker
+		if (!observed.accepted) return
+		model.damageDirection.set(...observed.direction).normalize()
+		this.#damageEffects.add(new DamageParticleBurst(this.#scene, event))
 	}
 
 	readonly #onDroneDestroyed = (destroyed: DroneDestroyedSnapshot): void => {
@@ -596,6 +683,7 @@ export class ArenaGame {
 		this.#socket.on("arena:spawn", this.#onSpawn)
 		this.#socket.on("arena:combat", this.#onCombat)
 		this.#socket.on("arena:direct-hit", this.#onDirectHit)
+		this.#socket.on("arena:player-damaged", this.#onPlayerDamaged)
 		this.#socket.on("arena:drone-destroyed", this.#onDroneDestroyed)
 		this.#socket.on("arena:grenade", this.#onGrenade)
 		this.#socket.on("arena:grenade-exploded", this.#onGrenadeExploded)
@@ -607,6 +695,11 @@ export class ArenaGame {
 
 	#heightAt(x: number, z: number): number {
 		return arenaHeightAt(this.#seed, x, z)
+	}
+
+	#clearDamageEffects(playerId: string | undefined): void {
+		if (playerId === undefined) return
+		this.#damageEffects.remove((effect) => effect.playerId === playerId)
 	}
 
 	#buildWorld(): void {
@@ -1353,6 +1446,10 @@ export class ArenaGame {
 
 	#updateRemotePlayers(delta: number): void {
 		for (const model of this.#remotePlayers.values()) {
+			model.damageTracker = {
+				...model.damageTracker,
+				state: stepDamageFlinch(model.damageTracker.state, delta),
+			}
 			model.recoilState = stepRemoteRecoil(model.recoilState, delta)
 			model.position.lerp(model.target, Math.min(1, delta * 12))
 			const horizontalSpeed = Math.hypot(model.velocity.x, model.velocity.z)
@@ -1476,6 +1573,18 @@ export class ArenaGame {
 			if (model.recoilState.intensity > 0) {
 				layers.push(recoilAnimationLayer(model.recoilState.intensity))
 			}
+			if (model.damageTracker.state.intensity > 0) {
+				const localDamageDirection = model.damageDirection
+					.clone()
+					.applyAxisAngle(new THREE.Vector3(0, 1, 0), -model.yaw)
+					.toArray()
+				layers.push(
+					damageFlinchAnimationLayer(
+						model.damageTracker.state.intensity,
+						localDamageDirection,
+					),
+				)
+			}
 			const constraints = [lookTowardConstraint(lookDirection, 0.92)]
 			if (waving) {
 				constraints.push(waveTowardConstraint(lookDirection, 0.9))
@@ -1588,9 +1697,14 @@ export class ArenaGame {
 		this.#lastFrame = now
 		this.#updatePhysics(delta)
 		this.#recoilState = recoverRecoilSpread(this.#recoilState, delta)
+		this.#localDamageTracker = {
+			...this.#localDamageTracker,
+			state: stepDamageFlinch(this.#localDamageTracker.state, delta),
+		}
 		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)
 		this.#drones.update(delta)
 		this.#updateMuzzleFlashes(delta)
+		this.#damageEffects.update(delta)
 		this.#updateProjectiles(delta)
 		this.#updateGrenades(delta)
 		this.#updateRemotePlayers(delta)

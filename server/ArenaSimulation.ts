@@ -12,6 +12,7 @@ import type {
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
 	GrenadeSnapshot,
+	PlayerDamageImpact,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
 	Vector3Tuple,
@@ -89,7 +90,11 @@ type ArenaSimulationOptions = {
 	getPlayers: () => SimulationPlayer[]
 	onDirectHit: (playerId: string, result: DirectHitResult) => void
 	onDroneKilled: (playerId: string) => void
-	onPlayerDamage: (playerId: string, damage: number) => void
+	onPlayerDamage: (
+		playerId: string,
+		damage: number,
+		impact: PlayerDamageImpact,
+	) => void
 	seed: number
 }
 
@@ -403,7 +408,14 @@ export class ArenaSimulation {
 					34,
 					THREE.MathUtils.clamp(distance / 3.3, 0, 1),
 				)
-				this.#onPlayerDamage(target.id, damage)
+				const impactPosition = targetPosition.clone()
+				impactPosition.y -=
+					(target.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT) *
+					0.5
+				this.#onPlayerDamage(target.id, damage, {
+					direction: direction.toArray(),
+					position: impactPosition.toArray(),
+				})
 				this.#destroyDrone(drone, true, null)
 				return
 			}
@@ -556,7 +568,14 @@ export class ArenaSimulation {
 			const damage = grenadeDamageAtDistance(
 				grenade.position.distanceTo(bodyCenter),
 			)
-			if (damage > 0) this.#onPlayerDamage(player.id, damage)
+			if (damage > 0) {
+				const direction = bodyCenter.clone().sub(grenade.position)
+				if (direction.lengthSq() < Number.EPSILON) direction.set(0, 1, 0)
+				this.#onPlayerDamage(player.id, damage, {
+					direction: direction.normalize().toArray(),
+					position: bodyCenter.toArray(),
+				})
+			}
 		}
 		this.#emitGrenadeExploded({
 			id: grenade.id,
@@ -627,7 +646,13 @@ export class ArenaSimulation {
 						playerHit.classification === "headshot"
 							? projectile.damage * PLAYER_HEADSHOT_MULTIPLIER
 							: projectile.damage
-					this.#onPlayerDamage(playerHit.target.id, damage)
+					this.#onPlayerDamage(playerHit.target.id, damage, {
+						direction: projectile.velocity.clone().normalize().toArray(),
+						position: previousPosition
+							.clone()
+							.lerp(projectile.position, playerHit.travelFraction)
+							.toArray(),
+					})
 					this.#reportDirectHit(projectile, {
 						classification: playerHit.classification,
 						damage,
@@ -644,7 +669,13 @@ export class ArenaSimulation {
 					null,
 				)
 				if (playerHit !== undefined) {
-					this.#onPlayerDamage(playerHit.target.id, projectile.damage)
+					this.#onPlayerDamage(playerHit.target.id, projectile.damage, {
+						direction: projectile.velocity.clone().normalize().toArray(),
+						position: previousPosition
+							.clone()
+							.lerp(projectile.position, playerHit.travelFraction)
+							.toArray(),
+					})
 					hit = true
 				}
 			}

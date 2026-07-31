@@ -62,6 +62,12 @@ import {
 } from "./pilot/PilotAnimation.ts"
 import { createPilotModel } from "./pilot/PilotModel.ts"
 import {
+	damageFlinchAnimationLayer,
+	DAMAGE_PREVIEW_CYCLE_SECONDS,
+	DAMAGE_PREVIEW_HITS,
+	sampleDamageFlinchIntensity,
+} from "./pilot/DamageFeedback.ts"
+import {
 	recoilAnimationLayer,
 	REMOTE_RECOIL_PREVIEW_CYCLE_SECONDS,
 	REMOTE_RECOIL_PREVIEW_SHOTS,
@@ -98,6 +104,7 @@ const BASE_ANIMATIONS: readonly BaseAnimation[] = [
 const OVERLAY_ANIMATIONS: readonly OverlayAnimation[] = [
 	"weapons-free",
 	"recoil",
+	"flinch",
 	"wave",
 ]
 
@@ -558,6 +565,18 @@ function applyPreviewPose(
 			),
 		)
 	}
+	if (overlays.includes("flinch")) {
+		const damageTime = THREE.MathUtils.euclideanModulo(
+			time,
+			DAMAGE_PREVIEW_CYCLE_SECONDS,
+		)
+		layers.push(
+			damageFlinchAnimationLayer(
+				sampleDamageFlinchIntensity(damageTime, DAMAGE_PREVIEW_HITS),
+				[0.55, 0, -1],
+			),
+		)
+	}
 	if (overlays.includes("wave")) {
 		layers.push(waveAnimationLayer(progress))
 	}
@@ -600,9 +619,12 @@ function applyPreviewVisor(
 	overlays: readonly OverlayAnimation[],
 	now: number,
 ): void {
-	let source: "combat" | "emote" | "movement" | null = null
-	let expression: "alarm" | "angry" | "focus" | "happy" | null = null
-	if (overlays.includes("wave")) {
+	let source: "combat" | "damage" | "emote" | "movement" | null = null
+	let expression: "alarm" | "angry" | "focus" | "happy" | "hurt" | null = null
+	if (overlays.includes("flinch")) {
+		source = "damage"
+		expression = "hurt"
+	} else if (overlays.includes("wave")) {
 		source = "emote"
 		expression = "happy"
 	} else if (overlays.includes("recoil") || overlays.includes("weapons-free")) {

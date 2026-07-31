@@ -36,6 +36,7 @@ export type PlayerSnapshot = {
 	freeAim: boolean
 	id: string
 	jump: 0 | 1 | 2
+	lifeSequence: number
 	position: Vector3Tuple
 	recoilSequence: number
 	recoilStartedAt: number
@@ -49,7 +50,7 @@ export type PlayerSnapshot = {
 
 export type PlayerMoveSnapshot = Omit<
 	PlayerSnapshot,
-	"id" | "recoilSequence" | "recoilStartedAt"
+	"id" | "lifeSequence" | "recoilSequence" | "recoilStartedAt"
 >
 
 export function nextAcceptedRecoilSignal(
@@ -99,6 +100,19 @@ export type DirectHitResult = {
 	projectileId: number
 	targetId: number | string
 	targetType: DirectHitTargetType
+}
+
+export type PlayerDamageImpact = {
+	direction: Vector3Tuple
+	position: Vector3Tuple
+}
+
+export type PlayerDamageSnapshot = PlayerDamageImpact & {
+	damage: number
+	fatal: boolean
+	playerId: string
+	sequence: number
+	serverTime: number
 }
 
 export type GrenadeIntent = {
