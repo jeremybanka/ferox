@@ -415,6 +415,7 @@ export class ArenaSimulation {
 				this.#onPlayerDamage(target.id, damage, {
 					direction: direction.toArray(),
 					position: impactPosition.toArray(),
+					source: "kamikaze",
 				})
 				this.#destroyDrone(drone, true, null)
 				return
@@ -574,6 +575,7 @@ export class ArenaSimulation {
 				this.#onPlayerDamage(player.id, damage, {
 					direction: direction.normalize().toArray(),
 					position: bodyCenter.toArray(),
+					source: "grenade",
 				})
 			}
 		}
@@ -652,6 +654,7 @@ export class ArenaSimulation {
 							.clone()
 							.lerp(projectile.position, playerHit.travelFraction)
 							.toArray(),
+						source: "projectile",
 					})
 					this.#reportDirectHit(projectile, {
 						classification: playerHit.classification,
@@ -675,6 +678,7 @@ export class ArenaSimulation {
 							.clone()
 							.lerp(projectile.position, playerHit.travelFraction)
 							.toArray(),
+						source: "projectile",
 					})
 					hit = true
 				}

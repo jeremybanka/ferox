@@ -79,6 +79,7 @@ test("player projectiles damage another pilot across a simulation tick", () => {
 	expect(damage[0]?.impact.position[0]).toBe(0)
 	expect(damage[0]?.impact.position[1]).toBe(1)
 	expect(damage[0]?.impact.position[2]).toBe(-4)
+	expect(damage[0]?.impact.source).toBe("projectile")
 	expect(endedProjectiles).toEqual([{ id: 1 }])
 })
 
@@ -328,7 +329,11 @@ test("grenades broadcast their flight and damage pilots when they explode", () =
 			velocity: [0, 0, 0],
 		},
 	]
-	const damage: Array<{ damage: number; playerId: string }> = []
+	const damage: Array<{
+		damage: number
+		playerId: string
+		source: PlayerDamageImpact["source"]
+	}> = []
 	const grenadeSnapshots: GrenadeSnapshot[] = []
 	const explosions: GrenadeExplodedSnapshot[] = []
 	const simulation = new ArenaSimulation({
@@ -340,8 +345,8 @@ test("grenades broadcast their flight and damage pilots when they explode", () =
 		getPlayers: () => players,
 		onDirectHit: () => undefined,
 		onDroneKilled: () => undefined,
-		onPlayerDamage: (playerId, amount) =>
-			damage.push({ damage: amount, playerId }),
+		onPlayerDamage: (playerId, amount, impact) =>
+			damage.push({ damage: amount, playerId, source: impact.source }),
 		seed: 7_431_905,
 	})
 
@@ -358,12 +363,13 @@ test("grenades broadcast their flight and damage pilots when they explode", () =
 	expect(grenadeSnapshots[0]?.ownerId).toBe("thrower")
 	expect(explosions).toHaveLength(1)
 	expect(explosions[0]?.id).toBe(grenadeSnapshots[0]?.id)
-	expect(damage.map(({ playerId }) => playerId).sort()).toEqual([
+	const grenadeDamage = damage.filter(({ source }) => source === "grenade")
+	expect(grenadeDamage.map(({ playerId }) => playerId).sort()).toEqual([
 		"target",
 		"thrower",
 	])
 	expect(
-		damage.every(({ damage: amount }) => amount > 0 && amount <= 120),
+		grenadeDamage.every(({ damage: amount }) => amount > 0 && amount <= 120),
 	).toBe(true)
 })
 

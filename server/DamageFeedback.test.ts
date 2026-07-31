@@ -32,6 +32,7 @@ function damageEvent(
 		position: [3, 2, -4],
 		sequence,
 		serverTime: 10,
+		source: "projectile",
 		...overrides,
 	}
 }

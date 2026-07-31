@@ -105,6 +105,7 @@ export type DirectHitResult = {
 export type PlayerDamageImpact = {
 	direction: Vector3Tuple
 	position: Vector3Tuple
+	source: "grenade" | "kamikaze" | "projectile"
 }
 
 export type PlayerDamageSnapshot = PlayerDamageImpact & {
