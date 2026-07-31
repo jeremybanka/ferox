@@ -28,6 +28,40 @@ export function isPilotEmote(value: unknown): value is PilotEmote {
 	return PILOT_EMOTES.some((emote) => emote === value)
 }
 
+export type PlayerSnapshot = {
+	aimDirection: Vector3Tuple
+	crouching: boolean
+	emote: PilotEmote | null
+	emoteStartedAt: number
+	freeAim: boolean
+	id: string
+	jump: 0 | 1 | 2
+	position: Vector3Tuple
+	recoilSequence: number
+	recoilStartedAt: number
+	rotation: [number, number]
+	sprinting: boolean
+	velocity: Vector3Tuple
+	visorExpression: VisorExpression
+	visorStartedAt: number
+	weaponsFree: boolean
+}
+
+export type PlayerMoveSnapshot = Omit<
+	PlayerSnapshot,
+	"id" | "recoilSequence" | "recoilStartedAt"
+>
+
+export function nextAcceptedRecoilSignal(
+	current: Pick<PlayerSnapshot, "recoilSequence" | "recoilStartedAt">,
+	startedAt: number,
+): Pick<PlayerSnapshot, "recoilSequence" | "recoilStartedAt"> {
+	return {
+		recoilSequence: current.recoilSequence + 1,
+		recoilStartedAt: startedAt,
+	}
+}
+
 export type DronePersonality = "bully" | "coward" | "kamikaze"
 export type DroneMood = "angry" | "berserk" | "haughty" | "idle" | "scared"
 

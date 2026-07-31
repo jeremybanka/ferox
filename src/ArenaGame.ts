@@ -10,6 +10,8 @@ import type {
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
 	GrenadeSnapshot,
+	PlayerMoveSnapshot,
+	PlayerSnapshot,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
 	PilotEmote,
@@ -40,6 +42,14 @@ import {
 	spreadDirection,
 	type RecoilSpreadState,
 } from "./RecoilSpread.ts"
+import {
+	initialRemoteRecoilState,
+	initialRemoteRecoilTracker,
+	observeRemoteRecoilEvent,
+	recoilAnimationLayer,
+	stepRemoteRecoil,
+	type RemoteRecoilState,
+} from "./pilot/RecoilAnimation.ts"
 import {
 	airborneMomentumLayer,
 	airborneVelocityLayer,
@@ -75,23 +85,6 @@ import {
 	waveAnimationLayer,
 } from "./pilot/WaveAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
-
-type PlayerSnapshot = {
-	aimDirection: [number, number, number]
-	crouching: boolean
-	emote: PilotEmote | null
-	emoteStartedAt: number
-	freeAim: boolean
-	id: string
-	jump: 0 | 1 | 2
-	position: [number, number, number]
-	rotation: [number, number]
-	sprinting: boolean
-	velocity: [number, number, number]
-	visorExpression: VisorExpression
-	visorStartedAt: number
-	weaponsFree: boolean
-}
 
 type SpawnSnapshot = {
 	position: [number, number]
@@ -156,6 +149,8 @@ type RemotePilot = {
 	landingStartedAt: number
 	pitch: number
 	position: THREE.Vector3
+	recoilSequence: number
+	recoilState: RemoteRecoilState
 	rig: PilotRig
 	sprinting: boolean
 	target: THREE.Vector3
@@ -400,7 +395,7 @@ export class ArenaGame {
 			visorExpression: this.#visorExpression,
 			visorStartedAt: this.#visorStartedAt,
 			weaponsFree: false,
-		})
+		} satisfies PlayerMoveSnapshot)
 	}
 
 	readonly #onPlayers = (players: PlayerSnapshot[]): void => {
@@ -434,6 +429,9 @@ export class ArenaGame {
 					landingStartedAt: -Infinity,
 					pitch: 0,
 					position: new THREE.Vector3(),
+					recoilSequence: initialRemoteRecoilTracker(snapshot.recoilSequence)
+						.sequence,
+					recoilState: initialRemoteRecoilState(),
 					rig,
 					sprinting: false,
 					target: new THREE.Vector3(),
@@ -479,6 +477,16 @@ export class ArenaGame {
 			model.emote = snapshot.emote
 			model.emoteSignalAt = snapshot.emoteStartedAt
 			model.freeAim = snapshot.freeAim
+			const recoil = observeRemoteRecoilEvent(
+				{
+					sequence: model.recoilSequence,
+					state: model.recoilState,
+				},
+				snapshot,
+				Date.now() / 1_000,
+			)
+			model.recoilSequence = recoil.sequence
+			model.recoilState = recoil.state
 			model.jump = snapshot.jump
 			if (model.jump > 0 && previousJump === 0) {
 				model.landingStartedAt = -Infinity
@@ -1345,6 +1353,7 @@ export class ArenaGame {
 
 	#updateRemotePlayers(delta: number): void {
 		for (const model of this.#remotePlayers.values()) {
+			model.recoilState = stepRemoteRecoil(model.recoilState, delta)
 			model.position.lerp(model.target, Math.min(1, delta * 12))
 			const horizontalSpeed = Math.hypot(model.velocity.x, model.velocity.z)
 			const localVelocity = model.velocity
@@ -1464,6 +1473,9 @@ export class ArenaGame {
 					weaponsFreeLayer(pointingDirection.pitch, pointingDirection.yaw),
 				)
 			}
+			if (model.recoilState.intensity > 0) {
+				layers.push(recoilAnimationLayer(model.recoilState.intensity))
+			}
 			const constraints = [lookTowardConstraint(lookDirection, 0.92)]
 			if (waving) {
 				constraints.push(waveTowardConstraint(lookDirection, 0.9))
@@ -1530,7 +1542,7 @@ export class ArenaGame {
 			visorExpression: this.#visorExpression,
 			visorStartedAt: this.#visorStartedAt,
 			weaponsFree: now < this.#weaponsFreeUntil,
-		})
+		} satisfies PlayerMoveSnapshot)
 	}
 
 	#emitHud(delta: number): void {

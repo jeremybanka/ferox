@@ -7,11 +7,12 @@ import { Server, type Socket as IoSocket } from "socket.io"
 import {
 	isPilotEmote,
 	isVisorExpression,
+	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
 	type FireIntent,
 	type GrenadeIntent,
-	type PilotEmote,
-	type VisorExpression,
+	type PlayerMoveSnapshot,
+	type PlayerSnapshot,
 } from "../src/arena-protocol.ts"
 import {
 	ARENA_SEED,
@@ -19,25 +20,6 @@ import {
 	PLAYER_SPAWN_POINTS,
 } from "../src/game-constants.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
-
-type PlayerSnapshot = {
-	aimDirection: [number, number, number]
-	crouching: boolean
-	emote: PilotEmote | null
-	emoteStartedAt: number
-	freeAim: boolean
-	id: string
-	jump: 0 | 1 | 2
-	position: [number, number, number]
-	rotation: [number, number]
-	sprinting: boolean
-	velocity: [number, number, number]
-	visorExpression: VisorExpression
-	visorStartedAt: number
-	weaponsFree: boolean
-}
-
-type MovePayload = Omit<PlayerSnapshot, "id">
 type SpawnPayload = {
 	position: [number, number]
 	yaw: number
@@ -168,6 +150,8 @@ realtime(
 			id: socketId,
 			jump: 0,
 			position: [spawnX, 8, spawnZ],
+			recoilSequence: 0,
+			recoilStartedAt: 0,
 			rotation: [spawnYaw, 0],
 			sprinting: false,
 			velocity: [0, 0, 0],
@@ -184,7 +168,7 @@ realtime(
 		onReady()
 		io.emit("arena:players", [...players.values()])
 
-		const onMove = (payload: MovePayload): void => {
+		const onMove = (payload: PlayerMoveSnapshot): void => {
 			if (
 				!Array.isArray(payload.aimDirection) ||
 				!Array.isArray(payload.position) ||
@@ -207,13 +191,27 @@ realtime(
 				].some((value) => !Number.isFinite(value))
 			)
 				return
-			players.set(socketId, { ...payload, id: socketId })
+			const current = players.get(socketId)
+			players.set(socketId, {
+				...payload,
+				id: socketId,
+				recoilSequence: current?.recoilSequence ?? 0,
+				recoilStartedAt: current?.recoilStartedAt ?? 0,
+			})
 		}
 		const onFire = (payload: FireIntent): void => {
 			const now = performance.now()
 			const previous = lastPlayerFire.get(socketId) ?? Number.NEGATIVE_INFINITY
 			if (now - previous < 110) return
-			if (simulation.fire(socketId, payload)) lastPlayerFire.set(socketId, now)
+			if (!simulation.fire(socketId, payload)) return
+			lastPlayerFire.set(socketId, now)
+			const player = players.get(socketId)
+			if (player !== undefined) {
+				players.set(socketId, {
+					...player,
+					...nextAcceptedRecoilSignal(player, Date.now() / 1_000),
+				})
+			}
 		}
 		const onThrowGrenade = (payload: GrenadeIntent): void => {
 			const now = performance.now()
