@@ -55,6 +55,18 @@ export type FireIntent = {
 	origin: Vector3Tuple
 }
 
+export type DirectHitClassification = "headshot" | "normal"
+export type DirectHitTargetType = "drone" | "player"
+
+export type DirectHitResult = {
+	classification: DirectHitClassification
+	clientShotId: number
+	damage: number
+	projectileId: number
+	targetId: number | string
+	targetType: DirectHitTargetType
+}
+
 export type GrenadeIntent = {
 	clientGrenadeId: number
 	direction: Vector3Tuple

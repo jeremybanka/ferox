@@ -124,14 +124,28 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					style={{
 						"--reticle-x": `${hud.reticleX * 100}%`,
 						"--reticle-y": `${hud.reticleY * 100}%`,
+						"--weapon-spread-offset": `${hud.recoilSpread * 0.85}rem`,
 					}}
 					aria-hidden="true"
 				>
-					<i />
-					<i />
-					<i />
-					<i />
+					<recoil-arms key={`recoil-${hud.recoilPulse}`}>
+						<i />
+						<i />
+						<i />
+						<i />
+					</recoil-arms>
 					<b />
+					{hud.hitMarkerVisible && (
+						<hit-marker
+							key={`hit-${hud.hitMarkerSequence}`}
+							data-classification={hud.hitMarkerClassification}
+						>
+							<i />
+							<i />
+							<i />
+							<i />
+						</hit-marker>
+					)}
 					<target-lock-box>
 						<small>✅ TARGET LOCKED</small>
 					</target-lock-box>

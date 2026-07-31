@@ -92,6 +92,9 @@ const simulation = new ArenaSimulation({
 			position: player.position,
 			velocity: player.velocity,
 		})),
+	onDirectHit: (playerId, result) => {
+		io.to(playerId).emit("arena:direct-hit", result)
+	},
 	onDroneKilled: (playerId) => {
 		playerScores.set(playerId, (playerScores.get(playerId) ?? 0) + 1)
 		io.to(playerId).emit("arena:combat", combatSnapshot(playerId))

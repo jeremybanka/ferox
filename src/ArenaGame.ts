@@ -4,6 +4,7 @@ import * as THREE from "three"
 import type {
 	ArenaSnapshot,
 	CombatSnapshot,
+	DirectHitResult,
 	DroneDestroyedSnapshot,
 	FireIntent,
 	GrenadeExplodedSnapshot,
@@ -24,12 +25,21 @@ import {
 	GRENADE_GRAVITY,
 	GRENADE_RADIUS,
 	GRENADE_RESTITUTION,
+	HIT_MARKER_DURATION_SECONDS,
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
 } from "./game-constants.ts"
 import type { GameHudState } from "./game-state.ts"
 import { isJumpGrounded, JUMP_PHYSICS, stepJumpPhysics } from "./JumpPhysics.ts"
+import {
+	addRecoilShot,
+	initialRecoilSpreadState,
+	normalizedRecoilSpread,
+	recoverRecoilSpread,
+	spreadDirection,
+	type RecoilSpreadState,
+} from "./RecoilSpread.ts"
 import {
 	airborneMomentumLayer,
 	airborneVelocityLayer,
@@ -184,6 +194,7 @@ export class ArenaGame {
 	}
 	readonly #muzzleFlashes: MuzzleFlash[] = []
 	readonly #projectiles: Projectile[] = []
+	readonly #pendingShotIds = new Set<number>()
 	readonly #remotePlayers = new Map<string, RemotePilot>()
 	readonly #renderer: THREE.WebGLRenderer
 	readonly #scene = new THREE.Scene()
@@ -205,6 +216,9 @@ export class ArenaGame {
 	#grenadeHeld = false
 	#grenadeSequence = 0
 	#health = 100
+	#hitMarkerClassification: DirectHitResult["classification"] = "normal"
+	#hitMarkerSequence = 0
+	#hitMarkerUntil = 0
 	#hudElapsed = 0
 	#jumpQueued = false
 	#lastFrame = performance.now()
@@ -216,6 +230,8 @@ export class ArenaGame {
 	#noiseTimer = 0
 	#reticleX = 0.5
 	#reticleY = 0.5
+	#recoilPulse = 0
+	#recoilState: RecoilSpreadState = initialRecoilSpreadState()
 	#rightBumperHeld = false
 	#score = 0
 	#shotSequence = 0
@@ -263,7 +279,7 @@ export class ArenaGame {
 
 	start(): void {
 		this.#canvas.focus()
-		void this.#canvas.requestPointerLock()
+		void this.#canvas.requestPointerLock().catch(() => undefined)
 	}
 
 	dispose(): void {
@@ -280,6 +296,7 @@ export class ArenaGame {
 		this.#socket.off("arena:players", this.#onPlayers)
 		this.#socket.off("arena:spawn", this.#onSpawn)
 		this.#socket.off("arena:combat", this.#onCombat)
+		this.#socket.off("arena:direct-hit", this.#onDirectHit)
 		this.#socket.off("arena:drone-destroyed", this.#onDroneDestroyed)
 		this.#socket.off("arena:grenade", this.#onGrenade)
 		this.#socket.off("arena:grenade-exploded", this.#onGrenadeExploded)
@@ -319,8 +336,8 @@ export class ArenaGame {
 
 	readonly #onMouseDown = (event: MouseEvent): void => {
 		if (document.pointerLockElement !== this.#canvas) {
+			if (event.target !== this.#canvas) return
 			this.start()
-			return
 		}
 		if (event.button === 0) this.#fire()
 		if (event.button === 2) this.#throwGrenade()
@@ -501,6 +518,22 @@ export class ArenaGame {
 		this.#score = combat.score
 	}
 
+	readonly #onDirectHit = (result: DirectHitResult): void => {
+		if (
+			!Number.isSafeInteger(result.clientShotId) ||
+			!Number.isSafeInteger(result.projectileId) ||
+			!Number.isFinite(result.damage) ||
+			(result.classification !== "normal" &&
+				result.classification !== "headshot") ||
+			!this.#pendingShotIds.delete(result.clientShotId)
+		)
+			return
+		this.#hitMarkerClassification = result.classification
+		this.#hitMarkerSequence += 1
+		this.#hitMarkerUntil =
+			performance.now() / 1_000 + HIT_MARKER_DURATION_SECONDS
+	}
+
 	readonly #onDroneDestroyed = (destroyed: DroneDestroyedSnapshot): void => {
 		this.#drones.showDestroyed(destroyed)
 	}
@@ -554,6 +587,7 @@ export class ArenaGame {
 		this.#socket.on("arena:players", this.#onPlayers)
 		this.#socket.on("arena:spawn", this.#onSpawn)
 		this.#socket.on("arena:combat", this.#onCombat)
+		this.#socket.on("arena:direct-hit", this.#onDirectHit)
 		this.#socket.on("arena:drone-destroyed", this.#onDroneDestroyed)
 		this.#socket.on("arena:grenade", this.#onGrenade)
 		this.#socket.on("arena:grenade-exploded", this.#onGrenadeExploded)
@@ -903,10 +937,19 @@ export class ArenaGame {
 		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
 		this.#camera.updateMatrixWorld(true)
 		const origin = this.#weaponMuzzle.getWorldPosition(new THREE.Vector3())
-		const direction = this.#getAimDirection(origin)
+		this.#recoilState = addRecoilShot(this.#recoilState)
+		const direction = spreadDirection(
+			this.#getAimDirection(origin),
+			this.#recoilState.spreadRadians,
+		)
 		this.#noiseTimer = 0.85
 		this.#weapon.position.z += 0.12
 		this.#shotSequence += 1
+		this.#recoilPulse += 1
+		this.#pendingShotIds.add(this.#shotSequence)
+		for (const shotId of this.#pendingShotIds) {
+			if (shotId < this.#shotSequence - 128) this.#pendingShotIds.delete(shotId)
+		}
 		this.#socket.emit("arena:fire", {
 			clientShotId: this.#shotSequence,
 			direction: direction.toArray(),
@@ -1502,12 +1545,17 @@ export class ArenaGame {
 					? "connecting"
 					: "offline",
 			health: this.#health,
+			hitMarkerClassification: this.#hitMarkerClassification,
+			hitMarkerSequence: this.#hitMarkerSequence,
+			hitMarkerVisible: performance.now() / 1_000 < this.#hitMarkerUntil,
 			drones: this.#drones.count,
 			jump: this.#player.jumps,
 			lockCountdown: Math.ceil(this.#targetEscapeRemaining),
 			players: this.#remotePlayers.size + 1,
 			reticleX: this.#reticleX,
 			reticleY: this.#reticleY,
+			recoilPulse: this.#recoilPulse,
+			recoilSpread: normalizedRecoilSpread(this.#recoilState),
 			score: this.#score,
 			sliding: this.#slide,
 			speed: Math.round(
@@ -1527,6 +1575,7 @@ export class ArenaGame {
 		)
 		this.#lastFrame = now
 		this.#updatePhysics(delta)
+		this.#recoilState = recoverRecoilSpread(this.#recoilState, delta)
 		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)
 		this.#drones.update(delta)
 		this.#updateMuzzleFlashes(delta)
