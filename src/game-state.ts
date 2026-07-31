@@ -7,11 +7,16 @@ export type GameHudState = {
 	connection: "connecting" | "offline" | "online"
 	drones: number
 	health: number
+	hitMarkerClassification: "headshot" | "normal"
+	hitMarkerSequence: number
+	hitMarkerVisible: boolean
 	jump: 0 | 1 | 2
 	lockCountdown: number
 	players: number
 	reticleX: number
 	reticleY: number
+	recoilPulse: number
+	recoilSpread: number
 	score: number
 	sliding: boolean
 	speed: number
@@ -25,11 +30,16 @@ export const gameHudStateAtom = atom<GameHudState>({
 		connection: "connecting",
 		drones: 0,
 		health: 100,
+		hitMarkerClassification: "normal",
+		hitMarkerSequence: 0,
+		hitMarkerVisible: false,
 		jump: 0,
 		lockCountdown: 0,
 		players: 1,
 		reticleX: 0.5,
 		reticleY: 0.5,
+		recoilPulse: 0,
+		recoilSpread: 0,
 		score: 0,
 		sliding: false,
 		speed: 0,

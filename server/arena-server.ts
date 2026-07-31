@@ -7,11 +7,13 @@ import { Server, type Socket as IoSocket } from "socket.io"
 import {
 	isPilotEmote,
 	isVisorExpression,
+	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
 	type FireIntent,
 	type GrenadeIntent,
-	type PilotEmote,
-	type VisorExpression,
+	type PlayerMoveSnapshot,
+	type PlayerDamageSnapshot,
+	type PlayerSnapshot,
 } from "../src/arena-protocol.ts"
 import {
 	ARENA_SEED,
@@ -19,26 +21,8 @@ import {
 	PLAYER_SPAWN_POINTS,
 } from "../src/game-constants.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
-
-type PlayerSnapshot = {
-	aimDirection: [number, number, number]
-	crouching: boolean
-	emote: PilotEmote | null
-	emoteStartedAt: number
-	freeAim: boolean
-	id: string
-	jump: 0 | 1 | 2
-	position: [number, number, number]
-	rotation: [number, number]
-	sprinting: boolean
-	velocity: [number, number, number]
-	visorExpression: VisorExpression
-	visorStartedAt: number
-	weaponsFree: boolean
-}
-
-type MovePayload = Omit<PlayerSnapshot, "id">
 type SpawnPayload = {
+	damageSequence: number
 	position: [number, number]
 	yaw: number
 }
@@ -60,6 +44,8 @@ const io = new Server(httpServer, {
 const players = new Map<string, PlayerSnapshot>()
 const playerSpawnSlots = new Map<string, number>()
 const playerHealth = new Map<string, number>()
+const playerDamageSequences = new Map<string, number>()
+const playerLifeSequences = new Map<string, number>()
 const playerScores = new Map<string, number>()
 const lastPlayerFire = new Map<string, number>()
 const lastPlayerGrenade = new Map<string, number>()
@@ -92,18 +78,38 @@ const simulation = new ArenaSimulation({
 			position: player.position,
 			velocity: player.velocity,
 		})),
+	onDirectHit: (playerId, result) => {
+		io.to(playerId).emit("arena:direct-hit", result)
+	},
 	onDroneKilled: (playerId) => {
 		playerScores.set(playerId, (playerScores.get(playerId) ?? 0) + 1)
 		io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
 	},
-	onPlayerDamage: (playerId, damage) => {
-		const nextHealth = Math.max(0, (playerHealth.get(playerId) ?? 100) - damage)
+	onPlayerDamage: (playerId, damage, impact) => {
+		const currentHealth = playerHealth.get(playerId) ?? 100
+		const nextHealth = Math.max(0, currentHealth - damage)
+		const appliedDamage = currentHealth - nextHealth
+		if (appliedDamage <= 0) return
+		const sequence = (playerDamageSequences.get(playerId) ?? 0) + 1
+		playerDamageSequences.set(playerId, sequence)
+		io.emit("arena:player-damaged", {
+			...impact,
+			damage: appliedDamage,
+			fatal: nextHealth <= 0,
+			playerId,
+			sequence,
+			serverTime: Date.now() / 1_000,
+		} satisfies PlayerDamageSnapshot)
 		if (nextHealth > 0) {
 			playerHealth.set(playerId, nextHealth)
 			io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
 			return
 		}
 		playerHealth.set(playerId, 100)
+		const lifeSequence = (playerLifeSequences.get(playerId) ?? 0) + 1
+		playerLifeSequences.set(playerId, lifeSequence)
+		const player = players.get(playerId)
+		if (player !== undefined) players.set(playerId, { ...player, lifeSequence })
 		playerScores.set(
 			playerId,
 			Math.max(0, (playerScores.get(playerId) ?? 0) - 1),
@@ -114,6 +120,7 @@ const simulation = new ArenaSimulation({
 		if (spawn !== undefined) {
 			const [spawnX, spawnZ, spawnYaw] = spawn
 			io.to(playerId).emit("arena:spawn", {
+				damageSequence: sequence,
 				position: [spawnX, spawnZ],
 				yaw: spawnYaw,
 			} satisfies SpawnPayload)
@@ -150,11 +157,14 @@ realtime(
 				: availableSlot
 		const [spawnX, spawnZ, spawnYaw] = PLAYER_SPAWN_POINTS[spawnIndex]!
 		const spawnPayload = {
+			damageSequence: 0,
 			position: [spawnX, spawnZ],
 			yaw: spawnYaw,
 		} satisfies SpawnPayload
 		playerSpawnSlots.set(socketId, spawnIndex)
+		playerDamageSequences.set(socketId, 0)
 		playerHealth.set(socketId, 100)
+		playerLifeSequences.set(socketId, 0)
 		playerScores.set(socketId, 0)
 		players.set(socketId, {
 			aimDirection: [-Math.sin(spawnYaw), 0, -Math.cos(spawnYaw)],
@@ -164,7 +174,10 @@ realtime(
 			freeAim: false,
 			id: socketId,
 			jump: 0,
+			lifeSequence: 0,
 			position: [spawnX, 8, spawnZ],
+			recoilSequence: 0,
+			recoilStartedAt: 0,
 			rotation: [spawnYaw, 0],
 			sprinting: false,
 			velocity: [0, 0, 0],
@@ -173,7 +186,10 @@ realtime(
 			weaponsFree: false,
 		})
 		const onReady = (): void => {
-			gameSocket.emit("arena:spawn", spawnPayload)
+			gameSocket.emit("arena:spawn", {
+				...spawnPayload,
+				damageSequence: playerDamageSequences.get(socketId) ?? 0,
+			})
 			gameSocket.emit("arena:combat", combatSnapshot(socketId))
 			gameSocket.emit("arena:snapshot", simulation.snapshot())
 		}
@@ -181,7 +197,7 @@ realtime(
 		onReady()
 		io.emit("arena:players", [...players.values()])
 
-		const onMove = (payload: MovePayload): void => {
+		const onMove = (payload: PlayerMoveSnapshot): void => {
 			if (
 				!Array.isArray(payload.aimDirection) ||
 				!Array.isArray(payload.position) ||
@@ -204,13 +220,28 @@ realtime(
 				].some((value) => !Number.isFinite(value))
 			)
 				return
-			players.set(socketId, { ...payload, id: socketId })
+			const current = players.get(socketId)
+			players.set(socketId, {
+				...payload,
+				id: socketId,
+				lifeSequence: current?.lifeSequence ?? 0,
+				recoilSequence: current?.recoilSequence ?? 0,
+				recoilStartedAt: current?.recoilStartedAt ?? 0,
+			})
 		}
 		const onFire = (payload: FireIntent): void => {
 			const now = performance.now()
 			const previous = lastPlayerFire.get(socketId) ?? Number.NEGATIVE_INFINITY
 			if (now - previous < 110) return
-			if (simulation.fire(socketId, payload)) lastPlayerFire.set(socketId, now)
+			if (!simulation.fire(socketId, payload)) return
+			lastPlayerFire.set(socketId, now)
+			const player = players.get(socketId)
+			if (player !== undefined) {
+				players.set(socketId, {
+					...player,
+					...nextAcceptedRecoilSignal(player, Date.now() / 1_000),
+				})
+			}
 		}
 		const onThrowGrenade = (payload: GrenadeIntent): void => {
 			const now = performance.now()
@@ -228,7 +259,9 @@ realtime(
 		return () => {
 			players.delete(socketId)
 			playerSpawnSlots.delete(socketId)
+			playerDamageSequences.delete(socketId)
 			playerHealth.delete(socketId)
+			playerLifeSequences.delete(socketId)
 			playerScores.delete(socketId)
 			lastPlayerFire.delete(socketId)
 			lastPlayerGrenade.delete(socketId)

@@ -13,7 +13,7 @@ export type BaseAnimation =
 	| "jump"
 	| CrouchRunAnimation
 
-export type OverlayAnimation = "wave" | "weapons-free"
+export type OverlayAnimation = "flinch" | "recoil" | "wave" | "weapons-free"
 
 export type SampleInterval = 0.167 | 0.0833
 

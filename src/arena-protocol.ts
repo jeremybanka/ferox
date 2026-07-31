@@ -28,6 +28,41 @@ export function isPilotEmote(value: unknown): value is PilotEmote {
 	return PILOT_EMOTES.some((emote) => emote === value)
 }
 
+export type PlayerSnapshot = {
+	aimDirection: Vector3Tuple
+	crouching: boolean
+	emote: PilotEmote | null
+	emoteStartedAt: number
+	freeAim: boolean
+	id: string
+	jump: 0 | 1 | 2
+	lifeSequence: number
+	position: Vector3Tuple
+	recoilSequence: number
+	recoilStartedAt: number
+	rotation: [number, number]
+	sprinting: boolean
+	velocity: Vector3Tuple
+	visorExpression: VisorExpression
+	visorStartedAt: number
+	weaponsFree: boolean
+}
+
+export type PlayerMoveSnapshot = Omit<
+	PlayerSnapshot,
+	"id" | "lifeSequence" | "recoilSequence" | "recoilStartedAt"
+>
+
+export function nextAcceptedRecoilSignal(
+	current: Pick<PlayerSnapshot, "recoilSequence" | "recoilStartedAt">,
+	startedAt: number,
+): Pick<PlayerSnapshot, "recoilSequence" | "recoilStartedAt"> {
+	return {
+		recoilSequence: current.recoilSequence + 1,
+		recoilStartedAt: startedAt,
+	}
+}
+
 export type DronePersonality = "bully" | "coward" | "kamikaze"
 export type DroneMood = "angry" | "berserk" | "haughty" | "idle" | "scared"
 
@@ -53,6 +88,32 @@ export type FireIntent = {
 	clientShotId: number
 	direction: Vector3Tuple
 	origin: Vector3Tuple
+}
+
+export type DirectHitClassification = "headshot" | "normal"
+export type DirectHitTargetType = "drone" | "player"
+
+export type DirectHitResult = {
+	classification: DirectHitClassification
+	clientShotId: number
+	damage: number
+	projectileId: number
+	targetId: number | string
+	targetType: DirectHitTargetType
+}
+
+export type PlayerDamageImpact = {
+	direction: Vector3Tuple
+	position: Vector3Tuple
+	source: "grenade" | "kamikaze" | "projectile"
+}
+
+export type PlayerDamageSnapshot = PlayerDamageImpact & {
+	damage: number
+	fatal: boolean
+	playerId: string
+	sequence: number
+	serverTime: number
 }
 
 export type GrenadeIntent = {

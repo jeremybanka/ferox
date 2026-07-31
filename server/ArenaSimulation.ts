@@ -2,6 +2,8 @@ import * as THREE from "three"
 
 import type {
 	ArenaSnapshot,
+	DirectHitClassification,
+	DirectHitResult,
 	DroneDestroyedSnapshot,
 	DroneMood,
 	DronePersonality,
@@ -10,6 +12,7 @@ import type {
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
 	GrenadeSnapshot,
+	PlayerDamageImpact,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
 	Vector3Tuple,
@@ -27,6 +30,8 @@ import {
 	GRENADE_RADIUS,
 	GRENADE_RESTITUTION,
 	GRENADE_THROW_SPEED,
+	PLAYER_HEADSHOT_MULTIPLIER,
+	PLAYER_PROJECTILE_DAMAGE,
 	grenadeDamageAtDistance,
 } from "../src/game-constants.ts"
 
@@ -58,6 +63,7 @@ type DroneState = {
 }
 
 type ProjectileState = {
+	clientShotId: number | null
 	damage: number
 	id: number
 	life: number
@@ -82,8 +88,13 @@ type ArenaSimulationOptions = {
 	emitProjectile: (snapshot: ProjectileSnapshot) => void
 	emitProjectileEnded: (snapshot: ProjectileEndedSnapshot) => void
 	getPlayers: () => SimulationPlayer[]
+	onDirectHit: (playerId: string, result: DirectHitResult) => void
 	onDroneKilled: (playerId: string) => void
-	onPlayerDamage: (playerId: string, damage: number) => void
+	onPlayerDamage: (
+		playerId: string,
+		damage: number,
+		impact: PlayerDamageImpact,
+	) => void
 	seed: number
 }
 
@@ -100,11 +111,14 @@ const BODY_HEALTH: Record<DronePersonality, number> = {
 const SAFE_DISTANCE = 27
 const PLAYER_EYE_HEIGHT = 1.72
 const PLAYER_CROUCH_EYE_HEIGHT = 1.08
-const PLAYER_HIT_RADIUS = 0.5
+const PLAYER_BODY_HIT_RADIUS = 0.46
+const PLAYER_HEAD_HIT_RADIUS = 0.3
 const PLAYER_STANDING_HIT_BOTTOM = 0.45
-const PLAYER_STANDING_HIT_TOP = 1.65
+const PLAYER_STANDING_HIT_TOP = 1.25
 const PLAYER_CROUCH_HIT_BOTTOM = 0.4
-const PLAYER_CROUCH_HIT_TOP = 1.2
+const PLAYER_CROUCH_HIT_TOP = 0.72
+const PLAYER_STANDING_HEAD_HEIGHT = 1.55
+const PLAYER_CROUCH_HEAD_HEIGHT = 0.94
 const TMP_A = new THREE.Vector3()
 const TMP_B = new THREE.Vector3()
 
@@ -118,6 +132,7 @@ export class ArenaSimulation {
 	readonly #getPlayers: ArenaSimulationOptions["getPlayers"]
 	readonly #grenades: GrenadeState[] = []
 	readonly #onDroneKilled: ArenaSimulationOptions["onDroneKilled"]
+	readonly #onDirectHit: ArenaSimulationOptions["onDirectHit"]
 	readonly #onPlayerDamage: ArenaSimulationOptions["onPlayerDamage"]
 	readonly #projectiles: ProjectileState[] = []
 	readonly #playerNoiseUntil = new Map<string, number>()
@@ -138,6 +153,7 @@ export class ArenaSimulation {
 		this.#emitProjectileEnded = options.emitProjectileEnded
 		this.#getPlayers = options.getPlayers
 		this.#onDroneKilled = options.onDroneKilled
+		this.#onDirectHit = options.onDirectHit
 		this.#onPlayerDamage = options.onPlayerDamage
 		this.#seed = options.seed
 	}
@@ -168,9 +184,10 @@ export class ArenaSimulation {
 			origin,
 			direction.normalize(),
 			"player",
-			20,
+			PLAYER_PROJECTILE_DAMAGE,
 			"#b8fff1",
 			playerId,
+			intent.clientShotId,
 		)
 		return true
 	}
@@ -391,7 +408,15 @@ export class ArenaSimulation {
 					34,
 					THREE.MathUtils.clamp(distance / 3.3, 0, 1),
 				)
-				this.#onPlayerDamage(target.id, damage)
+				const impactPosition = targetPosition.clone()
+				impactPosition.y -=
+					(target.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT) *
+					0.5
+				this.#onPlayerDamage(target.id, damage, {
+					direction: direction.toArray(),
+					position: impactPosition.toArray(),
+					source: "kamikaze",
+				})
 				this.#destroyDrone(drone, true, null)
 				return
 			}
@@ -463,7 +488,7 @@ export class ArenaSimulation {
 				),
 			)
 			.normalize()
-		this.#spawnProjectile(origin, direction, "bot", damage, color, null)
+		this.#spawnProjectile(origin, direction, "bot", damage, color, null, null)
 	}
 
 	#spawnProjectile(
@@ -473,10 +498,12 @@ export class ArenaSimulation {
 		damage: number,
 		color: string,
 		ownerId: string | null,
+		clientShotId: number | null,
 	): void {
 		const id = this.#nextProjectileId
 		this.#nextProjectileId += 1
 		this.#projectiles.push({
+			clientShotId,
 			damage,
 			id,
 			life: 2.4,
@@ -542,7 +569,15 @@ export class ArenaSimulation {
 			const damage = grenadeDamageAtDistance(
 				grenade.position.distanceTo(bodyCenter),
 			)
-			if (damage > 0) this.#onPlayerDamage(player.id, damage)
+			if (damage > 0) {
+				const direction = bodyCenter.clone().sub(grenade.position)
+				if (direction.lengthSq() < Number.EPSILON) direction.set(0, 1, 0)
+				this.#onPlayerDamage(player.id, damage, {
+					direction: direction.normalize().toArray(),
+					position: bodyCenter.toArray(),
+					source: "grenade",
+				})
+			}
 		}
 		this.#emitGrenadeExploded({
 			id: grenade.id,
@@ -601,9 +636,32 @@ export class ArenaSimulation {
 				) {
 					const drone = droneHit.target
 					this.#damageDrone(drone, projectile.damage, projectile.ownerId)
+					this.#reportDirectHit(projectile, {
+						classification: "normal",
+						damage: projectile.damage,
+						targetId: drone.id,
+						targetType: "drone",
+					})
 					hit = true
 				} else if (playerHit !== undefined) {
-					this.#onPlayerDamage(playerHit.target.id, projectile.damage)
+					const damage =
+						playerHit.classification === "headshot"
+							? projectile.damage * PLAYER_HEADSHOT_MULTIPLIER
+							: projectile.damage
+					this.#onPlayerDamage(playerHit.target.id, damage, {
+						direction: projectile.velocity.clone().normalize().toArray(),
+						position: previousPosition
+							.clone()
+							.lerp(projectile.position, playerHit.travelFraction)
+							.toArray(),
+						source: "projectile",
+					})
+					this.#reportDirectHit(projectile, {
+						classification: playerHit.classification,
+						damage,
+						targetId: playerHit.target.id,
+						targetType: "player",
+					})
 					hit = true
 				}
 			} else {
@@ -614,7 +672,14 @@ export class ArenaSimulation {
 					null,
 				)
 				if (playerHit !== undefined) {
-					this.#onPlayerDamage(playerHit.target.id, projectile.damage)
+					this.#onPlayerDamage(playerHit.target.id, projectile.damage, {
+						direction: projectile.velocity.clone().normalize().toArray(),
+						position: previousPosition
+							.clone()
+							.lerp(projectile.position, playerHit.travelFraction)
+							.toArray(),
+						source: "projectile",
+					})
 					hit = true
 				}
 			}
@@ -669,8 +734,16 @@ export class ArenaSimulation {
 		end: THREE.Vector3,
 		players: readonly SimulationPlayer[],
 		excludedPlayerId: string | null,
-	): CollisionCandidate<SimulationPlayer> | undefined {
-		let nearest: CollisionCandidate<SimulationPlayer> | undefined
+	):
+		| (CollisionCandidate<SimulationPlayer> & {
+				classification: DirectHitClassification
+		  })
+		| undefined {
+		let nearest:
+			| (CollisionCandidate<SimulationPlayer> & {
+					classification: DirectHitClassification
+			  })
+			| undefined
 		for (const player of players) {
 			if (player.id === excludedPlayerId) continue
 			const eyeHeight = player.crouching
@@ -683,6 +756,14 @@ export class ArenaSimulation {
 				? PLAYER_CROUCH_HIT_TOP
 				: PLAYER_STANDING_HIT_TOP
 			const groundY = player.position[1] - eyeHeight
+			const headCenter = new THREE.Vector3(
+				player.position[0],
+				groundY +
+					(player.crouching
+						? PLAYER_CROUCH_HEAD_HEIGHT
+						: PLAYER_STANDING_HEAD_HEIGHT),
+				player.position[2],
+			)
 			const capsuleBottom = new THREE.Vector3(
 				player.position[0],
 				groundY + bottomHeight,
@@ -690,25 +771,60 @@ export class ArenaSimulation {
 			)
 			const capsuleTop = capsuleBottom.clone()
 			capsuleTop.y = groundY + topHeight
-			const collision = this.#segmentDistanceSquared(
+			const bodyCollision = this.#segmentDistanceSquared(
 				start,
 				end,
 				capsuleBottom,
 				capsuleTop,
 			)
-			if (collision.distanceSquared >= PLAYER_HIT_RADIUS * PLAYER_HIT_RADIUS)
-				continue
-			if (
-				nearest === undefined ||
-				collision.firstTravelFraction < nearest.travelFraction
-			) {
+			const headCollision = this.#segmentDistanceSquared(
+				start,
+				end,
+				headCenter,
+				headCenter,
+			)
+			const hitsBody =
+				bodyCollision.distanceSquared <
+				PLAYER_BODY_HIT_RADIUS * PLAYER_BODY_HIT_RADIUS
+			const hitsHead =
+				headCollision.distanceSquared <
+				PLAYER_HEAD_HIT_RADIUS * PLAYER_HEAD_HIT_RADIUS
+			if (!hitsBody && !hitsHead) continue
+			const hitsHeadFirst =
+				hitsHead &&
+				(!hitsBody ||
+					headCollision.firstTravelFraction <=
+						bodyCollision.firstTravelFraction + Number.EPSILON)
+			const classification: DirectHitClassification = hitsHeadFirst
+				? "headshot"
+				: "normal"
+			const travelFraction = hitsHeadFirst
+				? headCollision.firstTravelFraction
+				: bodyCollision.firstTravelFraction
+			if (nearest === undefined || travelFraction < nearest.travelFraction) {
 				nearest = {
+					classification,
 					target: player,
-					travelFraction: collision.firstTravelFraction,
+					travelFraction,
 				}
 			}
 		}
 		return nearest
+	}
+
+	#reportDirectHit(
+		projectile: ProjectileState,
+		hit: Pick<
+			DirectHitResult,
+			"classification" | "damage" | "targetId" | "targetType"
+		>,
+	): void {
+		if (projectile.ownerId === null || projectile.clientShotId === null) return
+		this.#onDirectHit(projectile.ownerId, {
+			...hit,
+			clientShotId: projectile.clientShotId,
+			projectileId: projectile.id,
+		})
 	}
 
 	#segmentDistanceSquared(
