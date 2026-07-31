@@ -73,6 +73,7 @@ const simulation = new ArenaSimulation({
 	},
 	getPlayers: () =>
 		[...players.values()].map((player) => ({
+			crouching: player.crouching,
 			id: player.id,
 			position: player.position,
 			velocity: player.velocity,

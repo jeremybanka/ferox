@@ -20,9 +20,15 @@ import {
 } from "../src/game-constants.ts"
 
 export type SimulationPlayer = {
+	crouching: boolean
 	id: string
 	position: Vector3Tuple
 	velocity: Vector3Tuple
+}
+
+type CollisionCandidate<T> = {
+	target: T
+	travelFraction: number
 }
 
 type DroneState = {
@@ -71,6 +77,13 @@ const BODY_HEALTH: Record<DronePersonality, number> = {
 	kamikaze: 24,
 }
 const SAFE_DISTANCE = 27
+const PLAYER_EYE_HEIGHT = 1.72
+const PLAYER_CROUCH_EYE_HEIGHT = 1.08
+const PLAYER_HIT_RADIUS = 0.5
+const PLAYER_STANDING_HIT_BOTTOM = 0.45
+const PLAYER_STANDING_HIT_TOP = 1.65
+const PLAYER_CROUCH_HIT_BOTTOM = 0.4
+const PLAYER_CROUCH_HIT_TOP = 1.2
 const TMP_A = new THREE.Vector3()
 const TMP_B = new THREE.Vector3()
 
@@ -422,11 +435,27 @@ export class ArenaSimulation {
 			const projectile = this.#projectiles[index]
 			if (projectile === undefined) continue
 			projectile.life -= delta
+			const previousPosition = projectile.position.clone()
 			projectile.position.addScaledVector(projectile.velocity, delta)
 			let hit = false
 			if (projectile.team === "player") {
-				const drone = this.#nearestDrone(projectile.position, 1.35)
-				if (drone !== undefined) {
+				const droneHit = this.#nearestDroneAlongSegment(
+					previousPosition,
+					projectile.position,
+					1.35,
+				)
+				const playerHit = this.#nearestPlayerAlongSegment(
+					previousPosition,
+					projectile.position,
+					players,
+					projectile.ownerId,
+				)
+				if (
+					droneHit !== undefined &&
+					(playerHit === undefined ||
+						droneHit.travelFraction <= playerHit.travelFraction)
+				) {
+					const drone = droneHit.target
 					drone.health -= projectile.damage
 					if (projectile.ownerId !== null) {
 						drone.threat.set(
@@ -446,16 +475,19 @@ export class ArenaSimulation {
 						this.#destroyDrone(drone, false, projectile.ownerId)
 					}
 					hit = true
+				} else if (playerHit !== undefined) {
+					this.#onPlayerDamage(playerHit.target.id, projectile.damage)
+					hit = true
 				}
 			} else {
-				const player = players.find(
-					(candidate) =>
-						new THREE.Vector3(...candidate.position).distanceTo(
-							projectile.position,
-						) < 0.72,
+				const playerHit = this.#nearestPlayerAlongSegment(
+					previousPosition,
+					projectile.position,
+					players,
+					null,
 				)
-				if (player !== undefined) {
-					this.#onPlayerDamage(player.id, projectile.damage)
+				if (playerHit !== undefined) {
+					this.#onPlayerDamage(playerHit.target.id, projectile.damage)
 					hit = true
 				}
 			}
@@ -474,20 +506,159 @@ export class ArenaSimulation {
 		}
 	}
 
-	#nearestDrone(
-		position: THREE.Vector3,
+	#nearestDroneAlongSegment(
+		start: THREE.Vector3,
+		end: THREE.Vector3,
 		radius: number,
-	): DroneState | undefined {
-		let nearest: DroneState | undefined
-		let distance = radius
+	): CollisionCandidate<DroneState> | undefined {
+		let nearest: CollisionCandidate<DroneState> | undefined
+		const travel = TMP_A.copy(end).sub(start)
+		const travelLengthSquared = travel.lengthSq()
 		for (const drone of this.#drones) {
-			const candidateDistance = drone.position.distanceTo(position)
-			if (candidateDistance < distance) {
-				distance = candidateDistance
-				nearest = drone
+			const travelFraction =
+				travelLengthSquared === 0
+					? 0
+					: THREE.MathUtils.clamp(
+							drone.position.clone().sub(start).dot(travel) /
+								travelLengthSquared,
+							0,
+							1,
+						)
+			const closestPoint = TMP_B.copy(start).addScaledVector(
+				travel,
+				travelFraction,
+			)
+			if (closestPoint.distanceToSquared(drone.position) >= radius * radius)
+				continue
+			if (nearest === undefined || travelFraction < nearest.travelFraction) {
+				nearest = { target: drone, travelFraction }
 			}
 		}
 		return nearest
+	}
+
+	#nearestPlayerAlongSegment(
+		start: THREE.Vector3,
+		end: THREE.Vector3,
+		players: readonly SimulationPlayer[],
+		excludedPlayerId: string | null,
+	): CollisionCandidate<SimulationPlayer> | undefined {
+		let nearest: CollisionCandidate<SimulationPlayer> | undefined
+		for (const player of players) {
+			if (player.id === excludedPlayerId) continue
+			const eyeHeight = player.crouching
+				? PLAYER_CROUCH_EYE_HEIGHT
+				: PLAYER_EYE_HEIGHT
+			const bottomHeight = player.crouching
+				? PLAYER_CROUCH_HIT_BOTTOM
+				: PLAYER_STANDING_HIT_BOTTOM
+			const topHeight = player.crouching
+				? PLAYER_CROUCH_HIT_TOP
+				: PLAYER_STANDING_HIT_TOP
+			const groundY = player.position[1] - eyeHeight
+			const capsuleBottom = new THREE.Vector3(
+				player.position[0],
+				groundY + bottomHeight,
+				player.position[2],
+			)
+			const capsuleTop = capsuleBottom.clone()
+			capsuleTop.y = groundY + topHeight
+			const collision = this.#segmentDistanceSquared(
+				start,
+				end,
+				capsuleBottom,
+				capsuleTop,
+			)
+			if (collision.distanceSquared >= PLAYER_HIT_RADIUS * PLAYER_HIT_RADIUS)
+				continue
+			if (
+				nearest === undefined ||
+				collision.firstTravelFraction < nearest.travelFraction
+			) {
+				nearest = {
+					target: player,
+					travelFraction: collision.firstTravelFraction,
+				}
+			}
+		}
+		return nearest
+	}
+
+	#segmentDistanceSquared(
+		firstStart: THREE.Vector3,
+		firstEnd: THREE.Vector3,
+		secondStart: THREE.Vector3,
+		secondEnd: THREE.Vector3,
+	): { distanceSquared: number; firstTravelFraction: number } {
+		const firstDirection = firstEnd.clone().sub(firstStart)
+		const secondDirection = secondEnd.clone().sub(secondStart)
+		const offset = firstStart.clone().sub(secondStart)
+		const firstLengthSquared = firstDirection.lengthSq()
+		const secondLengthSquared = secondDirection.lengthSq()
+		const secondProjection = secondDirection.dot(offset)
+		let firstTravelFraction = 0
+		let secondTravelFraction = 0
+
+		if (firstLengthSquared <= Number.EPSILON) {
+			secondTravelFraction = THREE.MathUtils.clamp(
+				secondProjection / secondLengthSquared,
+				0,
+				1,
+			)
+		} else {
+			const firstProjection = firstDirection.dot(offset)
+			if (secondLengthSquared <= Number.EPSILON) {
+				firstTravelFraction = THREE.MathUtils.clamp(
+					-firstProjection / firstLengthSquared,
+					0,
+					1,
+				)
+			} else {
+				const directionProjection = firstDirection.dot(secondDirection)
+				const denominator =
+					firstLengthSquared * secondLengthSquared -
+					directionProjection * directionProjection
+				if (denominator > Number.EPSILON) {
+					firstTravelFraction = THREE.MathUtils.clamp(
+						(directionProjection * secondProjection -
+							firstProjection * secondLengthSquared) /
+							denominator,
+						0,
+						1,
+					)
+				}
+				const secondDistance =
+					directionProjection * firstTravelFraction + secondProjection
+				if (secondDistance < 0) {
+					secondTravelFraction = 0
+					firstTravelFraction = THREE.MathUtils.clamp(
+						-firstProjection / firstLengthSquared,
+						0,
+						1,
+					)
+				} else if (secondDistance > secondLengthSquared) {
+					secondTravelFraction = 1
+					firstTravelFraction = THREE.MathUtils.clamp(
+						(directionProjection - firstProjection) / firstLengthSquared,
+						0,
+						1,
+					)
+				} else {
+					secondTravelFraction = secondDistance / secondLengthSquared
+				}
+			}
+		}
+
+		const firstPoint = firstStart
+			.clone()
+			.addScaledVector(firstDirection, firstTravelFraction)
+		const secondPoint = secondStart
+			.clone()
+			.addScaledVector(secondDirection, secondTravelFraction)
+		return {
+			distanceSquared: firstPoint.distanceToSquared(secondPoint),
+			firstTravelFraction,
+		}
 	}
 
 	#destroyDrone(

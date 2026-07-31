@@ -12,7 +12,8 @@
 		"fmt:check": "dprint check",
 		"lint": "vp lint && eslint . && lasertag check",
 		"preview": "vite preview",
-		"spellcheck": "cspell ."
+		"spellcheck": "cspell .",
+		"test": "node --test server/*.test.ts"
 	},
 	"dependencies": {
 		"atom.io": "0.50.1",
