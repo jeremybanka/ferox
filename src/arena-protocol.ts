@@ -51,7 +51,11 @@ export type PlayerSnapshot = {
 
 export type PlayerMoveSnapshot = Omit<
 	PlayerSnapshot,
-	"equippedWeapon" | "id" | "lifeSequence" | "recoilSequence" | "recoilStartedAt"
+	| "equippedWeapon"
+	| "id"
+	| "lifeSequence"
+	| "recoilSequence"
+	| "recoilStartedAt"
 >
 
 export function nextAcceptedRecoilSignal(
@@ -88,10 +92,32 @@ export type ArenaSnapshot = {
 
 export type WeaponKind = "arc-blaster" | "mini-missile"
 
+export type MiniMissileTargetRef =
+	| { id: number; kind: "drone" }
+	| { id: string; kind: "pilot" }
+
 export type MiniMissileIntent = {
 	clientMissileId: number
 	direction: Vector3Tuple
 	origin: Vector3Tuple
+	target?: MiniMissileTargetRef | null
+}
+
+export function isMiniMissileTargetRef(
+	value: unknown,
+): value is MiniMissileTargetRef {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	if (!Object.keys(record).every((key) => key === "id" || key === "kind"))
+		return false
+	return (
+		(record["kind"] === "pilot" &&
+			typeof record["id"] === "string" &&
+			record["id"].length > 0) ||
+		(record["kind"] === "drone" &&
+			Number.isSafeInteger(record["id"]) &&
+			(record["id"] as number) >= 0)
+	)
 }
 
 export type MiniMissilePickupIntent = {

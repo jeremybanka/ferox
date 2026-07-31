@@ -1,8 +1,6 @@
-import type { Vector3Tuple } from "./arena-protocol.ts"
+import type { MiniMissileTargetRef, Vector3Tuple } from "./arena-protocol.ts"
 
-export type SmartTargetRef =
-	| { id: number; kind: "drone" }
-	| { id: string; kind: "pilot" }
+export type SmartTargetRef = MiniMissileTargetRef
 
 export type SmartTargetCandidate = {
 	position: Vector3Tuple

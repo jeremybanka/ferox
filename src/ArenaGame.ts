@@ -1264,6 +1264,9 @@ export class ArenaGame {
 				clientMissileId: this.#missileSequence,
 				direction: aimDirection.toArray(),
 				origin: origin.toArray(),
+				...(this.#acquiredTargetId === null
+					? {}
+					: { target: this.#acquiredTargetId }),
 			} satisfies MiniMissileIntent)
 		} else {
 			this.#recoilState = addRecoilShot(this.#recoilState)

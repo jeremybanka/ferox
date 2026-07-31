@@ -16,11 +16,13 @@ import type {
 	MiniMissileExplodedSnapshot,
 	MiniMissileIntent,
 	MiniMissileSnapshot,
+	MiniMissileTargetRef,
 	PlayerDamageImpact,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
 	Vector3Tuple,
 } from "../src/arena-protocol.ts"
+import { isMiniMissileTargetRef } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
 import {
 	DRONE_AUDITORY_RADIUS,
@@ -39,19 +41,34 @@ import {
 	grenadeDamageAtDistance,
 	MINI_MISSILE_BLAST_RADIUS,
 	MINI_MISSILE_GRAVITY,
-	MINI_MISSILE_HOMING_RANGE,
 	MINI_MISSILE_MAX_TURN_RATE,
 	MINI_MISSILE_POWERED_SECONDS,
 	MINI_MISSILE_RADIUS,
+	MINI_MISSILE_SEEKER_SCAN_SECONDS,
 	MINI_MISSILE_SPEED,
 	miniMissileDamageAtDistance,
 } from "../src/game-constants.ts"
+import { pilotChestAnchorFromEye } from "../src/pilot-targeting.ts"
+import {
+	sameMiniMissileTarget,
+	selectMiniMissileSeekerTarget,
+	validateMiniMissileDesignation,
+	type MiniMissileSeekerCandidate,
+} from "./MiniMissileSeeker.ts"
 
 export type SimulationPlayer = {
 	crouching: boolean
 	id: string
 	position: Vector3Tuple
 	velocity: Vector3Tuple
+}
+
+export type SimulationDroneSeed = {
+	health?: number
+	id: number
+	personality?: DronePersonality
+	position: Vector3Tuple
+	stationary?: boolean
 }
 
 type CollisionCandidate<T> = {
@@ -67,6 +84,7 @@ type DroneState = {
 	mood: DroneMood
 	personality: DronePersonality
 	position: THREE.Vector3
+	stationary: boolean
 	targetPlayerId: string | null
 	threat: Map<string, number>
 	velocity: THREE.Vector3
@@ -99,7 +117,9 @@ type MiniMissileState = {
 	phase: "falling" | "powered"
 	position: THREE.Vector3
 	poweredLife: number
-	targetPlayerId: string | null
+	seekerElapsed: number
+	seekerEnabled: boolean
+	targetRef: MiniMissileTargetRef | null
 	velocity: THREE.Vector3
 }
 
@@ -113,6 +133,7 @@ type ArenaSimulationOptions = {
 	emitProjectile: (snapshot: ProjectileSnapshot) => void
 	emitProjectileEnded: (snapshot: ProjectileEndedSnapshot) => void
 	getPlayers: () => SimulationPlayer[]
+	initialDrones?: readonly SimulationDroneSeed[]
 	onDirectHit: (playerId: string, result: DirectHitResult) => void
 	onDroneKilled: (playerId: string) => void
 	onLockChanged: (attackerId: string, targetId: string, locked: boolean) => void
@@ -193,6 +214,25 @@ export class ArenaSimulation {
 		this.#onLockChanged = options.onLockChanged
 		this.#onPlayerDamage = options.onPlayerDamage
 		this.#seed = options.seed
+		for (const seed of options.initialDrones ?? []) {
+			const personality = seed.personality ?? "bully"
+			this.#drones.push({
+				attackCooldown: Number.POSITIVE_INFINITY,
+				burstRounds: 0,
+				health: seed.health ?? BODY_HEALTH[personality],
+				id: seed.id,
+				mood: "idle",
+				personality,
+				position: new THREE.Vector3(...seed.position),
+				stationary: seed.stationary ?? true,
+				targetPlayerId: null,
+				threat: new Map(),
+				velocity: new THREE.Vector3(),
+				wanderAngle: 0,
+				yaw: 0,
+			})
+			this.#nextDroneId = Math.max(this.#nextDroneId, seed.id + 1)
+		}
 	}
 
 	get droneCount(): number {
@@ -204,6 +244,11 @@ export class ArenaSimulation {
 			.length
 	}
 
+	removeDrone(droneId: number): void {
+		const drone = this.#drones.find((candidate) => candidate.id === droneId)
+		if (drone !== undefined) this.#destroyDrone(drone, true, null)
+	}
+
 	removePlayer(playerId: string): void {
 		this.#lastMissileIntent.delete(playerId)
 		for (let index = this.#missiles.length - 1; index >= 0; index -= 1) {
@@ -211,15 +256,21 @@ export class ArenaSimulation {
 			if (missile === undefined) continue
 			if (missile.ownerId === playerId) {
 				this.#endMissile(index, missile)
-			} else if (missile.targetPlayerId === playerId) {
-				this.#setMissileTarget(missile, null)
+			} else if (
+				missile.targetRef?.kind === "pilot" &&
+				missile.targetRef.id === playerId
+			) {
+				this.#clearMissileTargetForSeek(missile)
 			}
 		}
 	}
 
 	cancelLocksByOwner(playerId: string): void {
 		for (const missile of this.#missiles) {
-			if (missile.ownerId === playerId) this.#setMissileTarget(missile, null)
+			if (missile.ownerId === playerId) {
+				missile.seekerEnabled = false
+				this.#setMissileTarget(missile, null)
+			}
 		}
 	}
 
@@ -317,20 +368,30 @@ export class ArenaSimulation {
 		const direction = new THREE.Vector3(...intent.direction)
 		if (direction.lengthSq() < 0.8 || direction.lengthSq() > 1.2) return false
 		direction.normalize()
-		const target = this.#acquireMissileTarget(playerId, origin, players)
+		const candidates = this.#getMiniMissileCandidates(playerId, players)
+		const target = isMiniMissileTargetRef(intent.target)
+			? validateMiniMissileDesignation(
+					intent.target,
+					origin.toArray(),
+					direction.toArray(),
+					candidates,
+				)
+			: null
 		const missile: MiniMissileState = {
 			id: this.#nextMissileId,
 			ownerId: playerId,
 			phase: "powered",
 			position: origin,
 			poweredLife: MINI_MISSILE_POWERED_SECONDS,
-			targetPlayerId: null,
+			seekerElapsed: 0,
+			seekerEnabled: true,
+			targetRef: null,
 			velocity: direction.multiplyScalar(MINI_MISSILE_SPEED),
 		}
 		this.#nextMissileId += 1
 		this.#lastMissileIntent.set(playerId, intent.clientMissileId)
 		this.#missiles.push(missile)
-		this.#setMissileTarget(missile, target?.id ?? null)
+		this.#setMissileTarget(missile, target?.ref ?? null)
 		this.#playerNoiseUntil.set(playerId, this.#elapsed + 0.85)
 		this.#emitMiniMissile(this.#snapshotMissile(missile))
 		return true
@@ -353,7 +414,8 @@ export class ArenaSimulation {
 		this.#updateThreat(delta, players)
 		for (let index = this.#drones.length - 1; index >= 0; index -= 1) {
 			const drone = this.#drones[index]
-			if (drone !== undefined) this.#updateDrone(drone, delta, players)
+			if (drone !== undefined && !drone.stationary)
+				this.#updateDrone(drone, delta, players)
 		}
 		this.#updateProjectiles(delta, players)
 		this.#updateGrenades(delta, players)
@@ -396,6 +458,7 @@ export class ArenaSimulation {
 			mood: "idle",
 			personality,
 			position: new THREE.Vector3(x, arenaHeightAt(this.#seed, x, z) + 3.4, z),
+			stationary: false,
 			targetPlayerId: null,
 			threat: new Map(),
 			velocity: new THREE.Vector3(),
@@ -573,21 +636,52 @@ export class ArenaSimulation {
 		drone.attackCooldown = drone.burstRounds === 0 ? 1.7 : 0.12
 	}
 
-	#acquireMissileTarget(
+	#getMiniMissileCandidates(
 		ownerId: string,
-		origin: THREE.Vector3,
 		players: readonly SimulationPlayer[],
-	): SimulationPlayer | undefined {
-		let nearest: SimulationPlayer | undefined
-		let nearestDistance = MINI_MISSILE_HOMING_RANGE
+	): MiniMissileSeekerCandidate[] {
+		const candidates: MiniMissileSeekerCandidate[] = []
 		for (const player of players) {
 			if (player.id === ownerId) continue
-			const distance = origin.distanceTo(new THREE.Vector3(...player.position))
-			if (distance >= nearestDistance) continue
-			nearest = player
-			nearestDistance = distance
+			candidates.push({
+				position: pilotChestAnchorFromEye(player.position, player.crouching),
+				ref: { id: player.id, kind: "pilot" },
+			})
 		}
-		return nearest
+		for (const drone of this.#drones) {
+			if (drone.health <= 0) continue
+			candidates.push({
+				position: drone.position.toArray(),
+				ref: { id: drone.id, kind: "drone" },
+			})
+		}
+		return candidates
+	}
+
+	#resolveMiniMissileTarget(
+		ownerId: string,
+		targetRef: MiniMissileTargetRef,
+		players: readonly SimulationPlayer[],
+	): MiniMissileSeekerCandidate | null {
+		if (targetRef.kind === "pilot") {
+			if (targetRef.id === ownerId) return null
+			const player = players.find((candidate) => candidate.id === targetRef.id)
+			return player === undefined
+				? null
+				: {
+						position: pilotChestAnchorFromEye(
+							player.position,
+							player.crouching,
+						),
+						ref: targetRef,
+					}
+		}
+		const drone = this.#drones.find(
+			(candidate) => candidate.id === targetRef.id && candidate.health > 0,
+		)
+		return drone === undefined
+			? null
+			: { position: drone.position.toArray(), ref: targetRef }
 	}
 
 	#updateMissiles(delta: number, players: readonly SimulationPlayer[]): void {
@@ -597,18 +691,33 @@ export class ArenaSimulation {
 			const previousPosition = missile.position.clone()
 			if (missile.phase === "powered") {
 				missile.poweredLife -= delta
-				const target = players.find(
-					(player) => player.id === missile.targetPlayerId,
-				)
-				if (
-					target === undefined ||
-					missile.position.distanceTo(new THREE.Vector3(...target.position)) >
-						MINI_MISSILE_HOMING_RANGE
-				) {
-					this.#setMissileTarget(missile, null)
-				} else {
+				let lostTarget = false
+				let target =
+					missile.targetRef === null
+						? null
+						: this.#resolveMiniMissileTarget(
+								missile.ownerId,
+								missile.targetRef,
+								players,
+							)
+				if (missile.targetRef !== null && target === null) {
+					this.#clearMissileTargetForSeek(missile)
+					lostTarget = true
+				}
+				if (target === null && missile.seekerEnabled && !lostTarget) {
+					missile.seekerElapsed += delta
+					if (missile.seekerElapsed >= MINI_MISSILE_SEEKER_SCAN_SECONDS) {
+						missile.seekerElapsed = 0
+						target = selectMiniMissileSeekerTarget(
+							missile.position.toArray(),
+							missile.velocity.toArray(),
+							this.#getMiniMissileCandidates(missile.ownerId, players),
+						)
+						if (target !== null) this.#setMissileTarget(missile, target.ref)
+					}
+				}
+				if (target !== null) {
 					const desired = new THREE.Vector3(...target.position)
-						.add(new THREE.Vector3(0, -0.65, 0))
 						.sub(missile.position)
 						.normalize()
 					const current = missile.velocity.clone().normalize()
@@ -628,6 +737,7 @@ export class ArenaSimulation {
 				}
 				if (missile.poweredLife <= 0) {
 					missile.phase = "falling"
+					missile.seekerEnabled = false
 					this.#setMissileTarget(missile, null)
 				}
 			}
@@ -713,33 +823,40 @@ export class ArenaSimulation {
 
 	#setMissileTarget(
 		missile: MiniMissileState,
-		targetPlayerId: string | null,
+		targetRef: MiniMissileTargetRef | null,
 	): void {
-		const previousTarget = missile.targetPlayerId
-		if (previousTarget === targetPlayerId) return
-		if (previousTarget !== null) {
+		const previousTarget = missile.targetRef
+		if (sameMiniMissileTarget(previousTarget, targetRef)) return
+		if (previousTarget?.kind === "pilot") {
 			const hasAnotherLock = this.#missiles.some(
 				(candidate) =>
 					candidate !== missile &&
 					candidate.ownerId === missile.ownerId &&
-					candidate.targetPlayerId === previousTarget,
+					candidate.targetRef?.kind === "pilot" &&
+					candidate.targetRef.id === previousTarget.id,
 			)
 			if (!hasAnotherLock) {
-				this.#onLockChanged(missile.ownerId, previousTarget, false)
+				this.#onLockChanged(missile.ownerId, previousTarget.id, false)
 			}
 		}
-		missile.targetPlayerId = targetPlayerId
-		if (targetPlayerId !== null) {
+		missile.targetRef = targetRef
+		if (targetRef?.kind === "pilot") {
 			const alreadyLocked = this.#missiles.some(
 				(candidate) =>
 					candidate !== missile &&
 					candidate.ownerId === missile.ownerId &&
-					candidate.targetPlayerId === targetPlayerId,
+					candidate.targetRef?.kind === "pilot" &&
+					candidate.targetRef.id === targetRef.id,
 			)
 			if (!alreadyLocked) {
-				this.#onLockChanged(missile.ownerId, targetPlayerId, true)
+				this.#onLockChanged(missile.ownerId, targetRef.id, true)
 			}
 		}
+	}
+
+	#clearMissileTargetForSeek(missile: MiniMissileState): void {
+		this.#setMissileTarget(missile, null)
+		missile.seekerElapsed = 0
 	}
 
 	#snapshotMissile(missile: MiniMissileState): MiniMissileSnapshot {
@@ -1195,6 +1312,14 @@ export class ArenaSimulation {
 		const index = this.#drones.indexOf(drone)
 		if (index < 0) return
 		this.#drones.splice(index, 1)
+		for (const missile of this.#missiles) {
+			if (
+				missile.targetRef?.kind === "drone" &&
+				missile.targetRef.id === drone.id
+			) {
+				this.#clearMissileTargetForSeek(missile)
+			}
+		}
 		this.#emitDroneDestroyed({
 			id: drone.id,
 			personality: drone.personality,

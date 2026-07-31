@@ -17,11 +17,16 @@ import {
 	grenadeDamageAtDistance,
 	MINI_MISSILE_BLAST_RADIUS,
 	MINI_MISSILE_DAMAGE,
-	MINI_MISSILE_HOMING_RANGE,
 	MINI_MISSILE_MAX_TURN_RATE,
+	MINI_MISSILE_SEEKER_RANGE,
+	MINI_MISSILE_SEEKER_SCAN_SECONDS,
 	miniMissileDamageAtDistance,
 } from "../src/game-constants.ts"
-import { ArenaSimulation, type SimulationPlayer } from "./ArenaSimulation.ts"
+import {
+	ArenaSimulation,
+	type SimulationDroneSeed,
+	type SimulationPlayer,
+} from "./ArenaSimulation.ts"
 
 function makeSimulation(
 	players: SimulationPlayer[],
@@ -436,7 +441,10 @@ type MissileHarness = {
 	simulation: ArenaSimulation
 }
 
-function makeMissileHarness(players: SimulationPlayer[]): MissileHarness {
+function makeMissileHarness(
+	players: SimulationPlayer[],
+	initialDrones: readonly SimulationDroneSeed[] = [],
+): MissileHarness {
 	const damage: MissileHarness["damage"] = []
 	const ended: MiniMissileEndedSnapshot[] = []
 	const explosions: MiniMissileExplodedSnapshot[] = []
@@ -452,6 +460,7 @@ function makeMissileHarness(players: SimulationPlayer[]): MissileHarness {
 		emitProjectile: () => undefined,
 		emitProjectileEnded: () => undefined,
 		getPlayers: () => players,
+		initialDrones,
 		onDirectHit: () => undefined,
 		onDroneKilled: () => undefined,
 		onLockChanged: (attackerId, targetId, locked) =>
@@ -462,7 +471,7 @@ function makeMissileHarness(players: SimulationPlayer[]): MissileHarness {
 	return { damage, ended, explosions, locks, missiles, simulation }
 }
 
-test("mini-missiles acquire the nearest other pilot only within range", () => {
+test("valid launch designation immediately locks a pilot without public IDs", () => {
 	const players: SimulationPlayer[] = [
 		{
 			crouching: false,
@@ -473,13 +482,13 @@ test("mini-missiles acquire the nearest other pilot only within range", () => {
 		{
 			crouching: false,
 			id: "near",
-			position: [9, 20, -9],
+			position: [6, 20, -12],
 			velocity: [0, 0, 0],
 		},
 		{
 			crouching: false,
 			id: "outside",
-			position: [MINI_MISSILE_HOMING_RANGE + 1, 20, 0],
+			position: [MINI_MISSILE_SEEKER_RANGE + 1, 20, 0],
 			velocity: [0, 0, 0],
 		},
 	]
@@ -490,6 +499,7 @@ test("mini-missiles acquire the nearest other pilot only within range", () => {
 			clientMissileId: 1,
 			direction: [0, 0, -1],
 			origin: [0, 20, 0],
+			target: { id: "near", kind: "pilot" },
 		}),
 		true,
 	)
@@ -504,7 +514,7 @@ test("mini-missiles acquire the nearest other pilot only within range", () => {
 	])
 })
 
-test("mini-missiles reject replayed intent IDs and do not lock out-of-range pilots", () => {
+test("mini-missiles reject replayed IDs and ignore invalid designations", () => {
 	const players: SimulationPlayer[] = [
 		{
 			crouching: false,
@@ -515,7 +525,7 @@ test("mini-missiles reject replayed intent IDs and do not lock out-of-range pilo
 		{
 			crouching: false,
 			id: "outside",
-			position: [MINI_MISSILE_HOMING_RANGE + 1, 20, 0],
+			position: [MINI_MISSILE_SEEKER_RANGE + 1, 20, 0],
 			velocity: [0, 0, 0],
 		},
 	]
@@ -528,11 +538,137 @@ test("mini-missiles reject replayed intent IDs and do not lock out-of-range pilo
 		clientMissileId: 4,
 		direction: [0, 1, 0] as [number, number, number],
 		origin: [0, 20, 0] as [number, number, number],
+		target: { id: "outside", kind: "pilot" } as const,
 	}
 	assert.equal(harness.simulation.fireMiniMissile("owner", intent), true)
 	assert.equal(harness.simulation.fireMiniMissile("owner", intent), false)
 	assert.equal(harness.missiles.length, 1)
 	assert.deepEqual(harness.locks, [])
+})
+
+test("targetless missiles fly straight until the seeker scan cadence elapses", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 40, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "candidate",
+			position: [6, 40, -20],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 40, 0],
+	})
+
+	harness.simulation.update(MINI_MISSILE_SEEKER_SCAN_SECONDS - 0.02)
+	assert.deepEqual(
+		harness.simulation.snapshot().missiles[0]?.velocity,
+		[0, 0, -11],
+	)
+	assert.deepEqual(harness.locks, [])
+	harness.simulation.update(0.02)
+	assert.ok((harness.simulation.snapshot().missiles[0]?.velocity[0] ?? 0) > 0)
+	assert.deepEqual(harness.locks, [
+		{ attackerId: "owner", locked: true, targetId: "candidate" },
+	])
+})
+
+test("targetless missiles can acquire a drone after it enters seeker range", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 40, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players, [
+		{ id: 12, position: [8, 40, -52] },
+	])
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 40, 0],
+	})
+
+	harness.simulation.update(MINI_MISSILE_SEEKER_SCAN_SECONDS)
+	assert.deepEqual(
+		harness.simulation.snapshot().missiles[0]?.velocity,
+		[0, 0, -11],
+	)
+	for (let index = 0; index < 6; index += 1) {
+		harness.simulation.update(MINI_MISSILE_SEEKER_SCAN_SECONDS)
+	}
+	assert.ok((harness.simulation.snapshot().missiles[0]?.velocity[0] ?? 0) > 0)
+	assert.deepEqual(harness.locks, [])
+})
+
+test("a valid drone designation steers immediately without a pilot warning", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 40, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players, [
+		{ id: 8, position: [6, 40, -16] },
+	])
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 40, 0],
+		target: { id: 8, kind: "drone" },
+	})
+
+	harness.simulation.update(0.05)
+	assert.ok((harness.simulation.snapshot().missiles[0]?.velocity[0] ?? 0) > 0)
+	assert.deepEqual(harness.locks, [])
+})
+
+test("spoofed designation falls back to an authoritative seeker candidate", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 40, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "spoofed",
+			position: [20, 40, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "legit",
+			position: [4, 40, -18],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 40, 0],
+		target: { id: "spoofed", kind: "pilot" },
+	})
+	assert.deepEqual(harness.locks, [])
+
+	harness.simulation.update(MINI_MISSILE_SEEKER_SCAN_SECONDS)
+	assert.deepEqual(harness.locks, [
+		{ attackerId: "owner", locked: true, targetId: "legit" },
+	])
 })
 
 test("mini-missile steering is turn-rate limited", () => {
@@ -546,7 +682,7 @@ test("mini-missile steering is turn-rate limited", () => {
 		{
 			crouching: false,
 			id: "target",
-			position: [10, 20, -10],
+			position: [6, 20, -12],
 			velocity: [0, 0, 0],
 		},
 	]
@@ -555,6 +691,7 @@ test("mini-missile steering is turn-rate limited", () => {
 		clientMissileId: 1,
 		direction: [0, 0, -1],
 		origin: [0, 20, 0],
+		target: { id: "target", kind: "pilot" },
 	})
 	harness.simulation.update(0.1)
 	const velocity = harness.simulation.snapshot().missiles[0]?.velocity
@@ -566,39 +703,7 @@ test("mini-missile steering is turn-rate limited", () => {
 	assert.ok(turn <= MINI_MISSILE_MAX_TURN_RATE * 0.1 + 0.02)
 })
 
-test("mini-missiles begin a limited turn toward a target directly behind", () => {
-	const players: SimulationPlayer[] = [
-		{
-			crouching: false,
-			id: "owner",
-			position: [0, 20, 0],
-			velocity: [0, 0, 0],
-		},
-		{
-			crouching: false,
-			id: "target",
-			position: [0, 20, 10],
-			velocity: [0, 0, 0],
-		},
-	]
-	const harness = makeMissileHarness(players)
-	harness.simulation.fireMiniMissile("owner", {
-		clientMissileId: 1,
-		direction: [0, 0, -1],
-		origin: [0, 20, 0],
-	})
-	harness.simulation.update(0.1)
-
-	const velocity = harness.simulation.snapshot().missiles[0]?.velocity
-	assert.ok(velocity !== undefined)
-	const turn = new THREE.Vector3(0, 0, -1).angleTo(
-		new THREE.Vector3(...velocity),
-	)
-	assert.ok(turn > 0)
-	assert.ok(turn <= MINI_MISSILE_MAX_TURN_RATE * 0.1 + Number.EPSILON)
-})
-
-test("target loss clears the lock and leaves the missile unguided", () => {
+test("designated targets stay sticky after moving behind the missile", () => {
 	const players: SimulationPlayer[] = [
 		{
 			crouching: false,
@@ -618,14 +723,92 @@ test("target loss clears the lock and leaves the missile unguided", () => {
 		clientMissileId: 1,
 		direction: [0, 0, -1],
 		origin: [0, 20, 0],
+		target: { id: "target", kind: "pilot" },
+	})
+	players[1]!.position = [0, 20, 10]
+	harness.simulation.update(0.1)
+
+	const velocity = harness.simulation.snapshot().missiles[0]?.velocity
+	assert.ok(velocity !== undefined)
+	const turn = new THREE.Vector3(0, 0, -1).angleTo(
+		new THREE.Vector3(...velocity),
+	)
+	assert.ok(turn > 0)
+	assert.ok(turn <= MINI_MISSILE_MAX_TURN_RATE * 0.1 + Number.EPSILON)
+	assert.deepEqual(harness.locks, [
+		{ attackerId: "owner", locked: true, targetId: "target" },
+	])
+})
+
+test("pilot loss clears its warning before fallback acquisition resumes", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 20, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 20, -12],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "fallback",
+			position: [5, 20, -20],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 20, 0],
+		target: { id: "target", kind: "pilot" },
 	})
 	players.splice(1, 1)
-	harness.simulation.update(0.1)
+	harness.simulation.removePlayer("target")
+	harness.simulation.update(MINI_MISSILE_SEEKER_SCAN_SECONDS)
 
 	assert.equal(harness.simulation.snapshot().missiles.length, 1)
 	assert.deepEqual(harness.locks, [
 		{ attackerId: "owner", locked: true, targetId: "target" },
 		{ attackerId: "owner", locked: false, targetId: "target" },
+		{ attackerId: "owner", locked: true, targetId: "fallback" },
+	])
+})
+
+test("destroyed drone targets fall back to pilots from the current heading", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 40, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "fallback",
+			position: [-5, 40, -20],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players, [
+		{ id: 6, position: [5, 40, -16] },
+	])
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 40, 0],
+		target: { id: 6, kind: "drone" },
+	})
+	harness.simulation.removeDrone(6)
+	harness.simulation.update(MINI_MISSILE_SEEKER_SCAN_SECONDS)
+
+	assert.deepEqual(harness.locks, [
+		{ attackerId: "owner", locked: true, targetId: "fallback" },
 	])
 })
 
@@ -692,6 +875,7 @@ test("removing a shooter clears its lock and despawns missiles without explosion
 		clientMissileId: 1,
 		direction: [0, 0, -1],
 		origin: [0, 20, 0],
+		target: { id: "target", kind: "pilot" },
 	})
 	harness.simulation.removePlayer("owner")
 
