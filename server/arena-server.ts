@@ -28,6 +28,10 @@ import {
 } from "../src/game-constants.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
 import { MiniMissileArmory, type LockUpdate } from "./MiniMissileArmory.ts"
+import {
+	StandardLockTracker,
+	type StandardLockUpdate,
+} from "./StandardLockTracker.ts"
 type SpawnPayload = {
 	damageSequence: number
 	position: [number, number]
@@ -64,10 +68,19 @@ const armory = new MiniMissileArmory([
 	arenaHeightAt(ARENA_SEED, pickupX, pickupZ) + 0.72,
 	pickupZ,
 ])
+const standardLocks = new StandardLockTracker()
 
-const emitLockUpdates = (updates: readonly LockUpdate[]): void => {
+const emitMissileLockUpdates = (updates: readonly LockUpdate[]): void => {
 	for (const update of updates) {
 		io.to(update.playerId).emit("arena:incoming-lock", update.snapshot)
+	}
+}
+
+const emitStandardLockUpdates = (
+	updates: readonly StandardLockUpdate[],
+): void => {
+	for (const update of updates) {
+		io.to(update.playerId).emit("arena:incoming-standard-lock", update.snapshot)
 	}
 }
 
@@ -127,7 +140,7 @@ const simulation = new ArenaSimulation({
 		io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
 	},
 	onLockChanged: (attackerId, targetId, locked) => {
-		emitLockUpdates(armory.setLock(attackerId, targetId, locked))
+		emitMissileLockUpdates(armory.setLock(attackerId, targetId, locked))
 	},
 	onPlayerDamage: (playerId, damage, impact) => {
 		const currentHealth = playerHealth.get(playerId) ?? 100
@@ -159,7 +172,8 @@ const simulation = new ArenaSimulation({
 			Math.max(0, (playerScores.get(playerId) ?? 0) - 1),
 		)
 		simulation.removePlayer(playerId)
-		emitLockUpdates(armory.clearLocksForPlayer(playerId))
+		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
+		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
 		if (armory.release(playerId, Date.now())) emitPickup()
 		emitEquipment(playerId)
 		const spawnIndex = playerSpawnSlots.get(playerId)
@@ -167,6 +181,15 @@ const simulation = new ArenaSimulation({
 			spawnIndex === undefined ? undefined : PLAYER_SPAWN_POINTS[spawnIndex]
 		if (spawn !== undefined) {
 			const [spawnX, spawnZ, spawnYaw] = spawn
+			const player = players.get(playerId)
+			if (player !== undefined) {
+				player.aimDirection = [-Math.sin(spawnYaw), 0, -Math.cos(spawnYaw)]
+				player.crouching = false
+				player.freeAim = false
+				player.position = [spawnX, 8, spawnZ]
+				player.rotation = [spawnYaw, 0]
+				player.sprinting = false
+			}
 			io.to(playerId).emit("arena:spawn", {
 				damageSequence: sequence,
 				position: [spawnX, spawnZ],
@@ -245,6 +268,10 @@ realtime(
 			gameSocket.emit("arena:equipment", armory.equipment(socketId))
 			gameSocket.emit("arena:mini-missile-pickup", armory.pickup())
 			gameSocket.emit("arena:incoming-lock", armory.incoming(socketId))
+			gameSocket.emit(
+				"arena:incoming-standard-lock",
+				standardLocks.incoming(socketId),
+			)
 		}
 		gameSocket.on("arena:ready", onReady)
 		onReady()
@@ -256,6 +283,10 @@ realtime(
 				!Array.isArray(payload.position) ||
 				!Array.isArray(payload.rotation) ||
 				!Array.isArray(payload.velocity) ||
+				typeof payload.crouching !== "boolean" ||
+				typeof payload.freeAim !== "boolean" ||
+				(payload.jump !== 0 && payload.jump !== 1 && payload.jump !== 2) ||
+				typeof payload.sprinting !== "boolean" ||
 				typeof payload.weaponsFree !== "boolean" ||
 				(payload.emote !== null && !isPilotEmote(payload.emote)) ||
 				!Number.isFinite(payload.emoteStartedAt) ||
@@ -282,6 +313,11 @@ realtime(
 				recoilSequence: current?.recoilSequence ?? 0,
 				recoilStartedAt: current?.recoilStartedAt ?? 0,
 			})
+			emitStandardLockUpdates(standardLocks.reconcile(players))
+		}
+		const onStandardLock = (payload: unknown): void => {
+			if (!standardLocks.acceptIntent(socketId, payload)) return
+			emitStandardLockUpdates(standardLocks.reconcile(players))
 		}
 		const onFire = (payload: FireIntent): void => {
 			if (armory.equipment(socketId).weapon !== "arc-blaster") return
@@ -333,6 +369,7 @@ realtime(
 			if (previousWeapon !== payload.weapon)
 				simulation.cancelLocksByOwner(socketId)
 			emitEquipment(socketId)
+			emitStandardLockUpdates(standardLocks.reconcile(players))
 			emitPickup()
 			io.emit("arena:players", [...players.values()])
 		}
@@ -346,6 +383,7 @@ realtime(
 			}
 		}
 		gameSocket.on("arena:move", onMove)
+		gameSocket.on("arena:standard-lock", onStandardLock)
 		gameSocket.on("arena:fire", onFire)
 		gameSocket.on("arena:fire-mini-missile", onFireMiniMissile)
 		gameSocket.on("arena:collect-mini-missile", onCollectMiniMissile)
@@ -354,7 +392,8 @@ realtime(
 
 		return () => {
 			simulation.removePlayer(socketId)
-			emitLockUpdates(armory.disconnect(socketId, Date.now()))
+			emitMissileLockUpdates(armory.disconnect(socketId, Date.now()))
+			emitStandardLockUpdates(standardLocks.clearPlayer(socketId))
 			players.delete(socketId)
 			playerSpawnSlots.delete(socketId)
 			playerDamageSequences.delete(socketId)
@@ -369,6 +408,7 @@ realtime(
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)
 			gameSocket.off("arena:move", onMove)
+			gameSocket.off("arena:standard-lock", onStandardLock)
 			gameSocket.off("arena:fire", onFire)
 			gameSocket.off("arena:fire-mini-missile", onFireMiniMissile)
 			gameSocket.off("arena:collect-mini-missile", onCollectMiniMissile)

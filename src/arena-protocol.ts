@@ -155,6 +155,37 @@ export type IncomingLockSnapshot = {
 	attackers: number
 }
 
+export type IncomingStandardLockSnapshot = {
+	attackers: number
+}
+
+export type StandardLockIntent = {
+	active: boolean
+	clientLockId: number
+}
+
+export function isStandardLockIntent(
+	value: unknown,
+): value is StandardLockIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).every(
+			(key) => key === "active" || key === "clientLockId",
+		) &&
+		typeof record["active"] === "boolean" &&
+		Number.isSafeInteger(record["clientLockId"]) &&
+		(record["clientLockId"] as number) >= 0
+	)
+}
+
+export function isNewStandardLockIntent(
+	value: unknown,
+	lastAcceptedId: number,
+): value is StandardLockIntent {
+	return isStandardLockIntent(value) && value.clientLockId > lastAcceptedId
+}
+
 export type FireIntent = {
 	clientShotId: number
 	direction: Vector3Tuple

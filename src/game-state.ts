@@ -11,7 +11,8 @@ export type GameHudState = {
 	hitMarkerClassification: "headshot" | "normal"
 	hitMarkerSequence: number
 	hitMarkerVisible: boolean
-	incomingLocks: number
+	incomingMissileLocks: number
+	incomingStandardLocks: number
 	jump: 0 | 1 | 2
 	lockCountdown: number
 	players: number
@@ -37,7 +38,8 @@ export const gameHudStateAtom = atom<GameHudState>({
 		hitMarkerClassification: "normal",
 		hitMarkerSequence: 0,
 		hitMarkerVisible: false,
-		incomingLocks: 0,
+		incomingMissileLocks: 0,
+		incomingStandardLocks: 0,
 		jump: 0,
 		lockCountdown: 0,
 		players: 1,

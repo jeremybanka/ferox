@@ -23,6 +23,13 @@ export function AppShell({ socket }: AppShellProps): VNode {
 	const hud = useO(gameHudStateAtom)
 	const seed = useO(arenaSeedAtom)
 	const setHud = useI(gameHudStateAtom)
+	const incomingThreats = hud.incomingMissileLocks + hud.incomingStandardLocks
+	const incomingThreatKind =
+		hud.incomingMissileLocks > 0 && hud.incomingStandardLocks > 0
+			? "combined"
+			: hud.incomingMissileLocks > 0
+				? "missile"
+				: "standard"
 
 	useEffect(() => {
 		const canvas = canvasRef.current
@@ -100,16 +107,31 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</game-header>
 
 				<incoming-threat
-					data-active={hud.incomingLocks > 0}
+					data-active={incomingThreats > 0}
+					data-kind={incomingThreatKind}
+					data-missile-locks={hud.incomingMissileLocks}
+					data-standard-locks={hud.incomingStandardLocks}
 					role="status"
 					aria-live="assertive"
-					aria-hidden={hud.incomingLocks === 0}
+					aria-hidden={incomingThreats === 0}
 				>
-					<strong>⚠ MISSILE LOCK</strong>
+					<strong>
+						{incomingThreatKind === "combined"
+							? "⚠ TARGET + MISSILE LOCK"
+							: incomingThreatKind === "missile"
+								? "⚠ MISSILE LOCK"
+								: "⚠ TARGET LOCK"}
+					</strong>
 					<span>
-						{hud.incomingLocks === 1
-							? "1 INCOMING PILOT"
-							: `${hud.incomingLocks} INCOMING PILOTS`}
+						{incomingThreatKind === "combined"
+							? `${hud.incomingStandardLocks} TARGETING • ${hud.incomingMissileLocks} MISSILE`
+							: incomingThreatKind === "missile"
+								? hud.incomingMissileLocks === 1
+									? "1 INCOMING PILOT"
+									: `${hud.incomingMissileLocks} INCOMING PILOTS`
+								: hud.incomingStandardLocks === 1
+									? "1 PILOT TARGETING YOU"
+									: `${hud.incomingStandardLocks} PILOTS TARGETING YOU`}
 					</span>
 				</incoming-threat>
 

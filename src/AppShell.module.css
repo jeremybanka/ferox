@@ -322,6 +322,26 @@ app-shell.class {
 				translate: -50% 0;
 				box-shadow: 0 0 1.35rem rgb(255 76 45 / 0.55);
 			}
+
+			&[data-kind="standard"] {
+				border-color: #ffc55f;
+				background: rgb(52 34 8 / 0.78);
+				color: #ffd278;
+
+				> span {
+					color: #ffe8b5;
+				}
+
+				&[data-active="true"] {
+					box-shadow: 0 0 1.35rem rgb(255 184 61 / 0.48);
+				}
+			}
+
+			&[data-kind="combined"] {
+				border-color: #ff7f49;
+				background: rgb(67 18 12 / 0.8);
+				color: #ffad72;
+			}
 		}
 
 		> pickup-prompt {

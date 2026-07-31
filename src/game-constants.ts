@@ -70,6 +70,8 @@ export const PLAYER_SPAWN_ORDER: readonly number[] = [
 ]
 
 export const SMART_TARGET_RADIUS_SCREEN = 0.22
+export const STANDARD_LOCK_DIRECTION_COSINE = Math.cos(Math.PI / 18)
+export const STANDARD_LOCK_MAX_RANGE = 48
 export const FREE_AIM_TAP_THRESHOLD_MS = 220
 export const TARGET_ESCAPE_DURATION_MS = 1_000
 export const TARGET_LOST_FLASH_MS = 260

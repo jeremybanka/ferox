@@ -12,6 +12,7 @@ import type {
 	GrenadeIntent,
 	GrenadeSnapshot,
 	IncomingLockSnapshot,
+	IncomingStandardLockSnapshot,
 	MiniMissileEndedSnapshot,
 	MiniMissileExplodedSnapshot,
 	MiniMissileIntent,
@@ -23,6 +24,7 @@ import type {
 	PlayerSnapshot,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
+	StandardLockIntent,
 	PilotEmote,
 	VisorExpression,
 	WeaponKind,
@@ -76,6 +78,11 @@ import {
 	stepRemoteRecoil,
 	type RemoteRecoilState,
 } from "./pilot/RecoilAnimation.ts"
+import {
+	pilotChestAnchor,
+	PILOT_CROUCH_EYE_HEIGHT,
+	PILOT_STANDING_EYE_HEIGHT,
+} from "./pilot-targeting.ts"
 import {
 	airborneMomentumLayer,
 	airborneVelocityLayer,
@@ -207,8 +214,6 @@ type RemotePilot = {
 	yaw: number
 }
 
-const PLAYER_EYE = 1.72
-const CROUCH_EYE = 1.08
 const ARENA_SIZE = 118
 const WEAPONS_FREE_COOLDOWN_SECONDS = 2
 const REMOTE_MARKER_GEOMETRY = new THREE.OctahedronGeometry(0.2, 0)
@@ -263,7 +268,8 @@ export class ArenaGame {
 	#hitMarkerClassification: DirectHitResult["classification"] = "normal"
 	#hitMarkerSequence = 0
 	#hitMarkerUntil = 0
-	#incomingLocks = 0
+	#incomingMissileLocks = 0
+	#incomingStandardLocks = 0
 	#hudElapsed = 0
 	#jumpQueued = false
 	#lastFrame = performance.now()
@@ -290,6 +296,8 @@ export class ArenaGame {
 	#slide = false
 	#snapshotElapsed = 0
 	#sprinting = false
+	#standardLockReported = false
+	#standardLockSequence = 0
 	#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
 	#targetLostFlashRemaining = 0
 	#targetingState: TargetingState = "idle"
@@ -323,7 +331,7 @@ export class ArenaGame {
 			scene: this.#scene,
 		})
 		this.#bindEvents()
-		this.#player.position.y = this.#heightAt(0, 13) + PLAYER_EYE
+		this.#player.position.y = this.#heightAt(0, 13) + PILOT_STANDING_EYE_HEIGHT
 		this.#connected = this.#socket.connected
 		this.#socket.connect()
 		this.#animate()
@@ -355,6 +363,10 @@ export class ArenaGame {
 		this.#socket.off("arena:grenade-exploded", this.#onGrenadeExploded)
 		this.#socket.off("arena:equipment", this.#onEquipment)
 		this.#socket.off("arena:incoming-lock", this.#onIncomingLock)
+		this.#socket.off(
+			"arena:incoming-standard-lock",
+			this.#onIncomingStandardLock,
+		)
 		this.#socket.off("arena:mini-missile", this.#onMiniMissile)
 		this.#socket.off("arena:mini-missile-ended", this.#onMiniMissileEnded)
 		this.#socket.off("arena:mini-missile-exploded", this.#onMiniMissileExploded)
@@ -456,7 +468,9 @@ export class ArenaGame {
 		}
 		this.#remotePlayers.clear()
 		for (const id of this.#missiles.keys()) this.#removeMiniMissileVisual(id)
-		this.#incomingLocks = 0
+		this.#incomingMissileLocks = 0
+		this.#incomingStandardLocks = 0
+		this.#standardLockReported = false
 	}
 
 	readonly #onSpawn = (spawn: SpawnSnapshot): void => {
@@ -466,7 +480,11 @@ export class ArenaGame {
 			!Number.isSafeInteger(spawn.damageSequence)
 		)
 			return
-		this.#player.position.set(x, this.#heightAt(x, z) + PLAYER_EYE, z)
+		this.#player.position.set(
+			x,
+			this.#heightAt(x, z) + PILOT_STANDING_EYE_HEIGHT,
+			z,
+		)
 		this.#player.velocity.set(0, 0, 0)
 		this.#player.yaw = spawn.yaw
 		this.#player.pitch = -0.04
@@ -553,7 +571,9 @@ export class ArenaGame {
 				.set(...snapshot.position)
 				.addScaledVector(
 					new THREE.Vector3(0, 1, 0),
-					snapshot.crouching ? -CROUCH_EYE : -PLAYER_EYE,
+					snapshot.crouching
+						? -PILOT_CROUCH_EYE_HEIGHT
+						: -PILOT_STANDING_EYE_HEIGHT,
 				)
 			if (isNew) model.position.copy(model.target)
 			const previousJump = model.jump
@@ -741,7 +761,14 @@ export class ArenaGame {
 
 	readonly #onIncomingLock = (lock: IncomingLockSnapshot): void => {
 		if (!Number.isSafeInteger(lock.attackers) || lock.attackers < 0) return
-		this.#incomingLocks = lock.attackers
+		this.#incomingMissileLocks = lock.attackers
+	}
+
+	readonly #onIncomingStandardLock = (
+		lock: IncomingStandardLockSnapshot,
+	): void => {
+		if (!Number.isSafeInteger(lock.attackers) || lock.attackers < 0) return
+		this.#incomingStandardLocks = lock.attackers
 	}
 
 	readonly #onMiniMissilePickup = (pickup: MiniMissilePickupSnapshot): void => {
@@ -822,6 +849,10 @@ export class ArenaGame {
 		this.#socket.on("arena:grenade-exploded", this.#onGrenadeExploded)
 		this.#socket.on("arena:equipment", this.#onEquipment)
 		this.#socket.on("arena:incoming-lock", this.#onIncomingLock)
+		this.#socket.on(
+			"arena:incoming-standard-lock",
+			this.#onIncomingStandardLock,
+		)
 		this.#socket.on("arena:mini-missile", this.#onMiniMissile)
 		this.#socket.on("arena:mini-missile-ended", this.#onMiniMissileEnded)
 		this.#socket.on("arena:mini-missile-exploded", this.#onMiniMissileExploded)
@@ -1093,7 +1124,7 @@ export class ArenaGame {
 		const crouch =
 			this.#keys.has("ControlLeft") || this.#keys.has("KeyC") || gamepad.crouch
 		this.#crouching = crouch
-		const eye = crouch ? CROUCH_EYE : PLAYER_EYE
+		const eye = crouch ? PILOT_CROUCH_EYE_HEIGHT : PILOT_STANDING_EYE_HEIGHT
 		const ground =
 			this.#heightAt(this.#player.position.x, this.#player.position.z) + eye
 		const grounded = isJumpGrounded(
@@ -1657,6 +1688,21 @@ export class ArenaGame {
 		this.#reticleY = best?.y ?? 0.5
 	}
 
+	#syncStandardLockIntent(): void {
+		const active =
+			this.#connected &&
+			this.#weaponKind === "arc-blaster" &&
+			this.#targetingState === "locked" &&
+			this.#lockedTargetId?.kind === "pilot"
+		if (active === this.#standardLockReported) return
+		this.#standardLockReported = active
+		this.#standardLockSequence += 1
+		this.#socket.emit("arena:standard-lock", {
+			active,
+			clientLockId: this.#standardLockSequence,
+		} satisfies StandardLockIntent)
+	}
+
 	#getSmartTargetCandidates(): SmartTargetCandidate[] {
 		const candidates: SmartTargetCandidate[] = this.#drones
 			.getTargetCandidates()
@@ -1665,10 +1711,10 @@ export class ArenaGame {
 				ref: { id: candidate.id, kind: "drone" },
 			}))
 		for (const [id, pilot] of this.#remotePlayers) {
-			const position = pilot.position
-				.clone()
-				.add(new THREE.Vector3(0, PLAYER_EYE * 0.55, 0))
-				.toArray()
+			const position = pilotChestAnchor(
+				pilot.position.toArray(),
+				pilot.crouching,
+			)
 			const candidate = pilotSmartTargetCandidate(this.#socket.id, id, position)
 			if (candidate !== null) candidates.push(candidate)
 		}
@@ -1682,7 +1728,9 @@ export class ArenaGame {
 		const pilot = this.#remotePlayers.get(target.id)
 		return pilot === undefined
 			? null
-			: pilot.position.clone().add(new THREE.Vector3(0, PLAYER_EYE * 0.55, 0))
+			: new THREE.Vector3(
+					...pilotChestAnchor(pilot.position.toArray(), pilot.crouching),
+				)
 	}
 
 	#projectTarget(position: THREE.Vector3): {
@@ -1967,7 +2015,8 @@ export class ArenaGame {
 			hitMarkerClassification: this.#hitMarkerClassification,
 			hitMarkerSequence: this.#hitMarkerSequence,
 			hitMarkerVisible: performance.now() / 1_000 < this.#hitMarkerUntil,
-			incomingLocks: this.#incomingLocks,
+			incomingMissileLocks: this.#incomingMissileLocks,
+			incomingStandardLocks: this.#incomingStandardLocks,
 			drones: this.#drones.count,
 			jump: this.#player.jumps,
 			lockCountdown: Math.ceil(this.#targetEscapeRemaining),
@@ -2019,6 +2068,7 @@ export class ArenaGame {
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)
 		this.#updateTargeting(delta)
+		this.#syncStandardLockIntent()
 		this.#updateWeaponPosture(delta)
 		this.#sendSnapshot(delta)
 		this.#emitHud(delta)
