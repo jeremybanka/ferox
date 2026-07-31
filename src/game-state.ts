@@ -15,6 +15,7 @@ export type GameHudState = {
 	jump: 0 | 1 | 2
 	lockCountdown: number
 	players: number
+	pickup: "available" | "carried" | "nearby" | "respawning"
 	reticleX: number
 	reticleY: number
 	recoilPulse: number
@@ -40,6 +41,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 		jump: 0,
 		lockCountdown: 0,
 		players: 1,
+		pickup: "respawning",
 		reticleX: 0.5,
 		reticleY: 0.5,
 		recoilPulse: 0,

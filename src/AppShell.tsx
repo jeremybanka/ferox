@@ -113,6 +113,18 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					</span>
 				</incoming-threat>
 
+				<pickup-prompt
+					data-active={hud.pickup === "nearby"}
+					aria-hidden={hud.pickup !== "nearby"}
+				>
+					<strong>MINI-MISSILE READY</strong>
+					<span>
+						<kbd>E</kbd>
+						<kbd>Y / △</kbd>
+						PICK UP
+					</span>
+				</pickup-prompt>
+
 				<smart-target-zone data-state={hud.targeting} aria-hidden="true">
 					<free-aim-label>
 						<strong>FREE AIM</strong>
@@ -207,7 +219,13 @@ export function AppShell({ socket }: AppShellProps): VNode {
 								: "GUIDANCE ARMED • X TO DROP"
 							: hud.ammo === 0
 								? "PRESS RB / R TO RELOAD"
-								: "PLASMA CELLS"}
+								: hud.pickup === "nearby"
+									? "E / Y TO PICK UP"
+									: hud.pickup === "available"
+										? "MINI-MISSILE AVAILABLE"
+										: hud.pickup === "carried"
+											? "MINI-MISSILE CARRIED"
+											: "MINI-MISSILE RESPAWNING"}
 					</em>
 				</weapon-status>
 
@@ -232,7 +250,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>RELOAD</span>
 						<kbd>RMB / LT</kbd>
 						<span>GRENADE</span>
-						<kbd>E</kbd>
+						<kbd>E / Y</kbd>
 						<span>PICK UP</span>
 						<kbd>D-PAD ↑</kbd>
 						<span>WAVE</span>

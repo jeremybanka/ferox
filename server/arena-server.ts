@@ -6,6 +6,7 @@ import { Server, type Socket as IoSocket } from "socket.io"
 
 import {
 	isPilotEmote,
+	isNewMiniMissilePickupIntent,
 	isVisorExpression,
 	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
@@ -13,6 +14,7 @@ import {
 	type FireIntent,
 	type GrenadeIntent,
 	type MiniMissileIntent,
+	type MiniMissilePickupIntent,
 	type PlayerMoveSnapshot,
 	type PlayerDamageSnapshot,
 	type PlayerSnapshot,
@@ -55,6 +57,7 @@ const playerScores = new Map<string, number>()
 const lastPlayerFire = new Map<string, number>()
 const lastPlayerGrenade = new Map<string, number>()
 const lastPlayerMissile = new Map<string, number>()
+const lastPlayerPickup = new Map<string, number>()
 const [pickupX, pickupZ] = MINI_MISSILE_PICKUP_POSITION
 const armory = new MiniMissileArmory([
 	pickupX,
@@ -307,7 +310,10 @@ realtime(
 			lastPlayerMissile.set(socketId, now)
 			emitEquipment(socketId)
 		}
-		const onCollectMiniMissile = (): void => {
+		const onCollectMiniMissile = (payload: MiniMissilePickupIntent): void => {
+			const previous = lastPlayerPickup.get(socketId) ?? -1
+			if (!isNewMiniMissilePickupIntent(payload, previous)) return
+			lastPlayerPickup.set(socketId, payload.clientPickupId)
 			const player = players.get(socketId)
 			if (player === undefined || !armory.collect(socketId, player.position))
 				return
@@ -358,6 +364,7 @@ realtime(
 			lastPlayerFire.delete(socketId)
 			lastPlayerGrenade.delete(socketId)
 			lastPlayerMissile.delete(socketId)
+			lastPlayerPickup.delete(socketId)
 			emitPickup()
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)

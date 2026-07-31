@@ -15,6 +15,7 @@ import type {
 	MiniMissileEndedSnapshot,
 	MiniMissileExplodedSnapshot,
 	MiniMissileIntent,
+	MiniMissilePickupIntent,
 	MiniMissilePickupSnapshot,
 	MiniMissileSnapshot,
 	PlayerMoveSnapshot,
@@ -39,10 +40,16 @@ import {
 	GRENADE_RESTITUTION,
 	HIT_MARKER_DURATION_SECONDS,
 	MINI_MISSILE_PICKUP_POSITION,
+	MINI_MISSILE_PICKUP_RADIUS,
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
 } from "./game-constants.ts"
+import {
+	inputEdge,
+	isPickupGamepadInput,
+	isPickupKeyboardInput,
+} from "./game-input.ts"
 import type { GameHudState } from "./game-state.ts"
 import { isJumpGrounded, JUMP_PHYSICS, stepJumpPhysics } from "./JumpPhysics.ts"
 import {
@@ -104,6 +111,12 @@ import {
 	waveAnimationLayer,
 } from "./pilot/WaveAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
+import {
+	pilotSmartTargetCandidate,
+	selectBestSmartTarget,
+	type SmartTargetCandidate,
+	type SmartTargetRef,
+} from "./smart-targeting.ts"
 
 type SpawnSnapshot = {
 	damageSequence: number
@@ -233,9 +246,9 @@ export class ArenaGame {
 	readonly #weapon = new THREE.Group()
 	readonly #weaponMuzzle = new THREE.Group()
 	#ammo = 28
-	#acquiredTargetId: number | null = null
+	#acquiredTargetId: SmartTargetRef | null = null
 	#animationFrame = 0
-	#bumperTapTargetId: number | null = null
+	#bumperTapTargetId: SmartTargetRef | null = null
 	#connected = false
 	#crouching = false
 	#dPadUpHeld = false
@@ -256,7 +269,7 @@ export class ArenaGame {
 	#lastFrame = performance.now()
 	#leftBumperDuration = 0
 	#leftBumperHeld = false
-	#lockedTargetId: number | null = null
+	#lockedTargetId: SmartTargetRef | null = null
 	#lockToggleQueued = false
 	#lookGamepad = new THREE.Vector2()
 	#noiseTimer = 0
@@ -268,6 +281,11 @@ export class ArenaGame {
 	#score = 0
 	#shotSequence = 0
 	#missileSequence = 0
+	#pickupAvailable = false
+	#pickupHeld = false
+	#pickupOwnerId: string | null = null
+	readonly #pickupPosition = new THREE.Vector3()
+	#pickupSequence = 0
 	#shotHeld = false
 	#slide = false
 	#snapshotElapsed = 0
@@ -365,9 +383,7 @@ export class ArenaGame {
 			this.#ammo < 28
 		)
 			this.#ammo = 28
-		if (event.code === "KeyE" && !event.repeat) {
-			this.#socket.emit("arena:collect-mini-missile")
-		}
+		if (isPickupKeyboardInput(event.code, event.repeat)) this.#requestPickup()
 		if (
 			event.code === "KeyX" &&
 			!event.repeat &&
@@ -737,6 +753,9 @@ export class ArenaGame {
 			return
 		this.#missilePickup.position.set(...pickup.position)
 		this.#missilePickup.visible = pickup.available
+		this.#pickupPosition.set(...pickup.position)
+		this.#pickupAvailable = pickup.available
+		this.#pickupOwnerId = pickup.ownerId
 	}
 
 	readonly #onMiniMissile = (missile: MiniMissileSnapshot): void => {
@@ -974,6 +993,7 @@ export class ArenaGame {
 		grenade: boolean
 		jump: boolean
 		lock: boolean
+		pickup: boolean
 		reload: boolean
 		sprint: boolean
 		wave: boolean
@@ -989,6 +1009,7 @@ export class ArenaGame {
 				grenade: false,
 				jump: false,
 				lock: false,
+				pickup: false,
 				reload: false,
 				sprint: false,
 				wave: false,
@@ -1007,6 +1028,7 @@ export class ArenaGame {
 		const fire = (gamepad.buttons[7]?.value ?? 0) > 0.25
 		const grenade = (gamepad.buttons[6]?.value ?? 0) > 0.25
 		const lock = gamepad.buttons[4]?.pressed ?? false
+		const pickup = isPickupGamepadInput(gamepad.buttons)
 		const reload = gamepad.buttons[5]?.pressed ?? false
 		const sprint = gamepad.buttons[10]?.pressed ?? false
 		const wave = gamepad.buttons[12]?.pressed ?? false
@@ -1016,6 +1038,7 @@ export class ArenaGame {
 			grenade,
 			jump,
 			lock,
+			pickup,
 			reload,
 			sprint,
 			wave,
@@ -1026,6 +1049,9 @@ export class ArenaGame {
 
 	#updatePhysics(delta: number): void {
 		const gamepad = this.#pollGamepad()
+		const pickupEdge = inputEdge(gamepad.pickup, this.#pickupHeld)
+		this.#pickupHeld = pickupEdge.held
+		if (pickupEdge.triggered) this.#requestPickup()
 		if (gamepad.wave && !this.#dPadUpHeld) {
 			this.#waveStartedAt = Date.now() / 1_000
 			this.#waveUntil = performance.now() / 1_000 + WAVE_DURATION_SECONDS
@@ -1171,6 +1197,13 @@ export class ArenaGame {
 		this.#grenadeHeld = gamepad.grenade
 		this.#fireCooldown -= delta
 		this.#grenadeCooldown -= delta
+	}
+
+	#requestPickup(): void {
+		this.#pickupSequence += 1
+		this.#socket.emit("arena:collect-mini-missile", {
+			clientPickupId: this.#pickupSequence,
+		} satisfies MiniMissilePickupIntent)
 	}
 
 	#fire(): void {
@@ -1428,7 +1461,7 @@ export class ArenaGame {
 		const acquiredPosition =
 			this.#acquiredTargetId === null
 				? null
-				: this.#drones.getTargetPosition(this.#acquiredTargetId)
+				: this.#getSmartTargetPosition(this.#acquiredTargetId)
 		return acquiredPosition === null
 			? new THREE.Vector3(0, 0, -1)
 					.applyQuaternion(this.#camera.quaternion)
@@ -1582,9 +1615,7 @@ export class ArenaGame {
 		}
 
 		if (this.#lockedTargetId !== null) {
-			const lockedPosition = this.#drones.getTargetPosition(
-				this.#lockedTargetId,
-			)
+			const lockedPosition = this.#getSmartTargetPosition(this.#lockedTargetId)
 			if (lockedPosition === null) {
 				this.#loseTarget()
 				return
@@ -1610,30 +1641,48 @@ export class ArenaGame {
 			return
 		}
 
-		let best:
-			| {
-					distance: number
-					id: number
-					x: number
-					y: number
-			  }
-			| undefined
-		for (const candidate of this.#drones.getTargetCandidates()) {
-			const projected = this.#projectTarget(candidate.position)
-			if (projected === null || !projected.inside) continue
-			if (best === undefined || projected.distance < best.distance) {
-				best = {
-					distance: projected.distance,
-					id: candidate.id,
-					x: projected.x,
-					y: projected.y,
-				}
-			}
-		}
-		this.#acquiredTargetId = best?.id ?? null
-		this.#targetingState = best === undefined ? "idle" : "acquired"
+		const best = selectBestSmartTarget(
+			this.#getSmartTargetCandidates(),
+			(candidate) => {
+				const projected = this.#projectTarget(
+					new THREE.Vector3(...candidate.position),
+				)
+				if (projected === null || !projected.inside) return null
+				return projected
+			},
+		)
+		this.#acquiredTargetId = best?.ref ?? null
+		this.#targetingState = best === null ? "idle" : "acquired"
 		this.#reticleX = best?.x ?? 0.5
 		this.#reticleY = best?.y ?? 0.5
+	}
+
+	#getSmartTargetCandidates(): SmartTargetCandidate[] {
+		const candidates: SmartTargetCandidate[] = this.#drones
+			.getTargetCandidates()
+			.map((candidate) => ({
+				position: candidate.position.toArray(),
+				ref: { id: candidate.id, kind: "drone" },
+			}))
+		for (const [id, pilot] of this.#remotePlayers) {
+			const position = pilot.position
+				.clone()
+				.add(new THREE.Vector3(0, PLAYER_EYE * 0.55, 0))
+				.toArray()
+			const candidate = pilotSmartTargetCandidate(this.#socket.id, id, position)
+			if (candidate !== null) candidates.push(candidate)
+		}
+		return candidates
+	}
+
+	#getSmartTargetPosition(target: SmartTargetRef): THREE.Vector3 | null {
+		if (target.kind === "drone") {
+			return this.#drones.getTargetPosition(target.id)
+		}
+		const pilot = this.#remotePlayers.get(target.id)
+		return pilot === undefined
+			? null
+			: pilot.position.clone().add(new THREE.Vector3(0, PLAYER_EYE * 0.55, 0))
 	}
 
 	#projectTarget(position: THREE.Vector3): {
@@ -1676,7 +1725,7 @@ export class ArenaGame {
 		const targetPosition =
 			this.#acquiredTargetId === null
 				? null
-				: this.#drones.getTargetPosition(this.#acquiredTargetId)
+				: this.#getSmartTargetPosition(this.#acquiredTargetId)
 		if (this.#sprinting) {
 			desired.setFromEuler(new THREE.Euler(1.05, 0, 0))
 		} else if (targetPosition !== null) {
@@ -1903,6 +1952,10 @@ export class ArenaGame {
 		this.#hudElapsed += delta
 		if (this.#hudElapsed < 0.09) return
 		this.#hudElapsed = 0
+		const pickupNearby =
+			this.#pickupAvailable &&
+			this.#player.position.distanceTo(this.#pickupPosition) <=
+				MINI_MISSILE_PICKUP_RADIUS
 		this.#onHud({
 			ammo: this.#ammo,
 			connection: this.#connected
@@ -1919,6 +1972,14 @@ export class ArenaGame {
 			jump: this.#player.jumps,
 			lockCountdown: Math.ceil(this.#targetEscapeRemaining),
 			players: this.#remotePlayers.size + 1,
+			pickup:
+				this.#weaponKind === "mini-missile" || this.#pickupOwnerId !== null
+					? "carried"
+					: pickupNearby
+						? "nearby"
+						: this.#pickupAvailable
+							? "available"
+							: "respawning",
 			reticleX: this.#reticleX,
 			reticleY: this.#reticleY,
 			recoilPulse: this.#recoilPulse,

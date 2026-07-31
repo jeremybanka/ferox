@@ -94,6 +94,32 @@ export type MiniMissileIntent = {
 	origin: Vector3Tuple
 }
 
+export type MiniMissilePickupIntent = {
+	clientPickupId: number
+}
+
+export function isMiniMissilePickupIntent(
+	value: unknown,
+): value is MiniMissilePickupIntent {
+	return (
+		value !== null &&
+		typeof value === "object" &&
+		Number.isSafeInteger(
+			(value as { clientPickupId?: unknown }).clientPickupId,
+		) &&
+		(value as { clientPickupId: number }).clientPickupId >= 0
+	)
+}
+
+export function isNewMiniMissilePickupIntent(
+	value: unknown,
+	lastAcceptedId: number,
+): value is MiniMissilePickupIntent {
+	return (
+		isMiniMissilePickupIntent(value) && value.clientPickupId > lastAcceptedId
+	)
+}
+
 export type MiniMissilePhase = "falling" | "powered"
 
 export type MiniMissileSnapshot = {
