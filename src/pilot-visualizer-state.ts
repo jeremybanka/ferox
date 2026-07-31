@@ -9,9 +9,12 @@ export type CrouchRunAnimation = `crouch-run-${RunDirection}`
 export type BaseAnimation =
 	| RunDirection
 	| "crouch"
+	| "death"
 	| "double-jump"
 	| "idle"
 	| "jump"
+	| "reload"
+	| "slide"
 	| CrouchRunAnimation
 
 export type OverlayAnimation = "flinch" | "recoil" | "wave" | "weapons-free"

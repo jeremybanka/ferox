@@ -5,6 +5,10 @@ import { useEffect, useRef } from "preact/hooks"
 
 import css from "./PilotVisualizer.module.css"
 import {
+	WEAPON_RELOAD_DURATION_SECONDS,
+	WEAPON_RELOAD_REFILL_PROGRESS,
+} from "./game-constants.ts"
+import {
 	pilotVisualizerAlignmentAtom,
 	pilotVisualizerAlignmentSweepAtom,
 	pilotVisualizerControlsAtom,
@@ -56,6 +60,7 @@ import {
 	waveTowardConstraint,
 	type PilotPointDirection,
 } from "./pilot/DirectionalConstraints.ts"
+import { deathAnimationLayer } from "./pilot/DeathAnimation.ts"
 import { JUMP_KEYFRAME_MARKERS } from "./pilot/JumpAnimation.ts"
 import {
 	idleAnimationLayer,
@@ -89,6 +94,8 @@ import {
 	RUN_KEYFRAME_MARKERS,
 	type RunDirection,
 } from "./pilot/RunAnimation.ts"
+import { reloadAnimationLayer } from "./pilot/ReloadAnimation.ts"
+import { slideAnimationLayer } from "./pilot/SlideAnimation.ts"
 import { waveAnimationLayer } from "./pilot/WaveAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 
@@ -105,6 +112,9 @@ const BASE_ANIMATIONS: readonly BaseAnimation[] = [
 	"right",
 	"jump",
 	"double-jump",
+	"slide",
+	"reload",
+	"death",
 	"crouch",
 	"crouch-run-forward",
 	"crouch-run-left",
@@ -134,13 +144,39 @@ const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	"crouch-run-forward": CROUCH_RUN_DURATION_SECONDS,
 	"crouch-run-left": CROUCH_RUN_DURATION_SECONDS,
 	"crouch-run-right": CROUCH_RUN_DURATION_SECONDS,
+	death: 1.2,
 	"double-jump": DOUBLE_JUMP_BURST_SECONDS,
 	forward: 1,
 	idle: IDLE_DURATION_SECONDS,
 	jump: JUMP_PREVIEW_DURATION_SECONDS,
 	left: 1,
+	reload: WEAPON_RELOAD_DURATION_SECONDS,
 	right: 1,
+	slide: 1.4,
 }
+
+const SLIDE_PREVIEW_MARKERS: readonly AnimationMarker[] = [
+	{ label: "enter", progress: 0 },
+	{ label: "low silhouette", progress: 0.18 },
+	{ label: "dust cadence", progress: 0.5 },
+	{ label: "exit", progress: 0.82 },
+	{ label: "neutral", progress: 1 },
+]
+
+const RELOAD_PREVIEW_MARKERS: readonly AnimationMarker[] = [
+	{ label: "start", progress: 0 },
+	{ label: "cell release", progress: 0.24 },
+	{ label: "cell seat", progress: 0.58 },
+	{ label: "refill", progress: WEAPON_RELOAD_REFILL_PROGRESS },
+	{ label: "ready", progress: 1 },
+]
+
+const DEATH_PREVIEW_MARKERS: readonly AnimationMarker[] = [
+	{ label: "impact", progress: 0 },
+	{ label: "collapse", progress: 0.3 },
+	{ label: "grounded", progress: 0.6 },
+	{ label: "defeated hold", progress: 1 },
+]
 
 const BUNNYHOP_GROUND_SECONDS = 0.22
 const BUNNYHOP_DURATION_SECONDS =
@@ -227,6 +263,31 @@ function supportsBunnyhop(baseAnimation: BaseAnimation): boolean {
 	return baseAnimation === "idle" || isRunDirection(baseAnimation)
 }
 
+function supportsOverlay(
+	baseAnimation: BaseAnimation,
+	_overlay: OverlayAnimation,
+): boolean {
+	return baseAnimation !== "death" && baseAnimation !== "reload"
+}
+
+function isLifecycleAnimation(
+	baseAnimation: BaseAnimation,
+): baseAnimation is "death" | "reload" | "slide" {
+	return (
+		baseAnimation === "death" ||
+		baseAnimation === "reload" ||
+		baseAnimation === "slide"
+	)
+}
+
+function slidePreviewWeight(progress: number): number {
+	if (progress < 0.18) return THREE.MathUtils.smoothstep(progress, 0, 0.18)
+	if (progress > 0.82) {
+		return 1 - THREE.MathUtils.smoothstep(progress, 0.82, 1)
+	}
+	return 1
+}
+
 function getPreviewDuration(
 	baseAnimation: BaseAnimation,
 	bunnyhopping: boolean,
@@ -251,6 +312,9 @@ function getAnimationMarkers(
 	}
 	if (baseAnimation === "jump") return JUMP_PREVIEW_MARKERS
 	if (baseAnimation === "double-jump") return DOUBLE_JUMP_KEYFRAME_MARKERS
+	if (baseAnimation === "slide") return SLIDE_PREVIEW_MARKERS
+	if (baseAnimation === "reload") return RELOAD_PREVIEW_MARKERS
+	if (baseAnimation === "death") return DEATH_PREVIEW_MARKERS
 	return []
 }
 
@@ -408,6 +472,65 @@ function getPoseStats(
 	]
 }
 
+function getLifecyclePoseStats(
+	baseAnimation: BaseAnimation,
+	time: number,
+): readonly PoseStat[] | null {
+	if (!isLifecycleAnimation(baseAnimation)) return null
+	const duration = BASE_DURATION_SECONDS[baseAnimation]
+	const progress = THREE.MathUtils.clamp(time / duration, 0, 1)
+	if (baseAnimation === "slide") {
+		const weight = slidePreviewWeight(progress)
+		return [
+			{ label: "TIMELINE", max: 1, signed: false, unit: "", value: progress },
+			{ label: "POSE", max: 1, signed: false, unit: "", value: weight },
+			{
+				label: "DUST",
+				max: 1,
+				signed: false,
+				unit: "",
+				value: weight >= 0.95 ? 1 : 0,
+			},
+		]
+	}
+	if (baseAnimation === "reload") {
+		return [
+			{ label: "TIMELINE", max: 1, signed: false, unit: "", value: progress },
+			{
+				label: "HANDLING",
+				max: 1,
+				signed: false,
+				unit: "",
+				value: Math.sin(progress * Math.PI),
+			},
+			{
+				label: "REFILLED",
+				max: 1,
+				signed: false,
+				unit: "",
+				value: progress >= WEAPON_RELOAD_REFILL_PROGRESS ? 1 : 0,
+			},
+		]
+	}
+	return [
+		{ label: "TIMELINE", max: 1, signed: false, unit: "", value: progress },
+		{
+			label: "COLLAPSE",
+			max: 1,
+			signed: false,
+			unit: "",
+			value: THREE.MathUtils.smoothstep(time, 0, 0.72),
+		},
+		{
+			label: "DEFEATED",
+			max: 1,
+			signed: false,
+			unit: "",
+			value: progress >= 0.6 ? 1 : 0,
+		},
+	]
+}
+
 function PoseStatBar({ stat }: { stat: PoseStat }): VNode {
 	const normalized = THREE.MathUtils.clamp(stat.value / stat.max, -1, 1)
 	const start = stat.signed ? (normalized < 0 ? 50 + normalized * 50 : 50) : 0
@@ -452,10 +575,24 @@ function applyPreviewPose(
 	const weaponsFreeWeight =
 		overlayWeights["weapons-free"] ??
 		(overlays.includes("weapons-free") ? 1 : 0)
+	const overlaysAllowed =
+		baseAnimation !== "death" && baseAnimation !== "reload"
 	const layers: PilotAnimationLayer[] = []
 	let isAirborne = false
 	let rootHeight = 0
-	if (activeBunnyhop) {
+	if (baseAnimation === "death") {
+		layers.push(deathAnimationLayer(time))
+	} else if (baseAnimation === "reload") {
+		layers.push(idleAnimationLayer(time))
+		layers.push(reloadAnimationLayer(progress))
+	} else if (baseAnimation === "slide") {
+		layers.push(idleAnimationLayer(time))
+		layers.push({
+			...slideAnimationLayer(),
+			fadeSeconds: 0,
+			weight: slidePreviewWeight(progress),
+		})
+	} else if (activeBunnyhop) {
 		const airborneSample = samplePreviewAirborneMotion(
 			baseAnimation,
 			bunnyhopping,
@@ -560,12 +697,12 @@ function applyPreviewPose(
 		const crouchDirection = getCrouchRunDirection(baseAnimation) ?? "forward"
 		layers.push(crouchRunAnimationLayer(time, 1, crouchDirection))
 	}
-	if (weaponsFreeWeight > 0) {
+	if (overlaysAllowed && weaponsFreeWeight > 0) {
 		layers.push(
 			weaponsFreeLayer(direction.pitch, direction.yaw, weaponsFreeWeight),
 		)
 	}
-	if (overlays.includes("recoil")) {
+	if (overlaysAllowed && overlays.includes("recoil")) {
 		const recoilTime = THREE.MathUtils.euclideanModulo(
 			time,
 			REMOTE_RECOIL_PREVIEW_CYCLE_SECONDS,
@@ -576,7 +713,7 @@ function applyPreviewPose(
 			),
 		)
 	}
-	if (overlays.includes("flinch")) {
+	if (overlaysAllowed && overlays.includes("flinch")) {
 		const damageTime = THREE.MathUtils.euclideanModulo(
 			time,
 			DAMAGE_PREVIEW_CYCLE_SECONDS,
@@ -588,14 +725,15 @@ function applyPreviewPose(
 			),
 		)
 	}
-	if (overlays.includes("wave")) {
+	if (overlaysAllowed && overlays.includes("wave")) {
 		layers.push(waveAnimationLayer(progress))
 	}
-	const constraints = [lookTowardConstraint(direction, 0.94)]
-	if (overlays.includes("wave")) {
+	const constraints =
+		baseAnimation === "death" ? [] : [lookTowardConstraint(direction, 0.94)]
+	if (overlaysAllowed && overlays.includes("wave")) {
 		constraints.push(waveTowardConstraint(direction, 0.9))
 	}
-	if (weaponsFreeWeight > 0) {
+	if (overlaysAllowed && weaponsFreeWeight > 0) {
 		constraints.push(pointBlasterConstraint(direction, weaponsFreeWeight))
 	}
 	if (isAirborne) {
@@ -630,28 +768,54 @@ function applyPreviewVisor(
 	overlays: readonly OverlayAnimation[],
 	now: number,
 ): void {
-	let source: "combat" | "damage" | "emote" | "movement" | null = null
-	let expression: "alarm" | "angry" | "focus" | "happy" | "hurt" | null = null
-	if (overlays.includes("flinch")) {
+	let source:
+		| "combat"
+		| "damage"
+		| "defeated"
+		| "emote"
+		| "movement"
+		| null = null
+	let expression:
+		| "alarm"
+		| "angry"
+		| "defeated"
+		| "focus"
+		| "happy"
+		| "hurt"
+		| null = null
+	if (baseAnimation === "death") {
+		source = "defeated"
+		expression = "defeated"
+	} else if (baseAnimation !== "reload" && overlays.includes("flinch")) {
 		source = "damage"
 		expression = "hurt"
-	} else if (overlays.includes("wave")) {
+	} else if (baseAnimation !== "reload" && overlays.includes("wave")) {
 		source = "emote"
 		expression = "happy"
-	} else if (overlays.includes("recoil") || overlays.includes("weapons-free")) {
+	} else if (
+		baseAnimation !== "reload" &&
+		(overlays.includes("recoil") || overlays.includes("weapons-free"))
+	) {
 		source = "combat"
 		expression = "focus"
 	} else if (baseAnimation === "double-jump") {
 		source = "movement"
 		expression = "alarm"
 	} else if (
+		baseAnimation === "slide" ||
 		baseAnimation === "crouch" ||
 		getCrouchRunDirection(baseAnimation) !== null
 	) {
 		source = "movement"
 		expression = "angry"
 	}
-	for (const candidate of ["combat", "damage", "emote", "movement"] as const) {
+	for (const candidate of [
+		"combat",
+		"damage",
+		"defeated",
+		"emote",
+		"movement",
+	] as const) {
 		if (candidate !== source) rig.visorDisplay.clearSignal(candidate)
 	}
 	if (source !== null && expression !== null)
@@ -741,10 +905,24 @@ export function PilotVisualizer(): VNode {
 		bunnyhopping,
 		Math.min(selectedTime, duration),
 	)
-	const poseStats = getPoseStats(poseSample)
+	const lifecyclePoseStats = getLifecyclePoseStats(
+		baseAnimation,
+		Math.min(selectedTime, duration),
+	)
+	const poseStats = lifecyclePoseStats ?? getPoseStats(poseSample)
+	const poseDiagnosticsActive =
+		poseSample !== null || lifecyclePoseStats !== null
+	const poseDiagnosticsLabel =
+		lifecyclePoseStats === null
+			? poseSample === null
+				? "NO AIRBORNE SAMPLE"
+				: "AIRBORNE LIVE"
+			: `${baseAnimation.toUpperCase()} PHASE`
 	const stackLabels = [
 		...(bunnyhopping ? ["AUTO BUNNYHOP"] : []),
-		...overlays.map((overlay) => overlay.toUpperCase()),
+		...overlays
+			.filter((overlay) => supportsOverlay(baseAnimation, overlay))
+			.map((overlay) => overlay.toUpperCase()),
 	]
 
 	const selectBaseAnimation = (nextAnimation: BaseAnimation): void => {
@@ -752,6 +930,9 @@ export function PilotVisualizer(): VNode {
 		setSelectedTime(0)
 		setIsPlaying(true)
 		if (!supportsBunnyhop(nextAnimation)) setBunnyhopping(false)
+		setOverlays((current) =>
+			current.filter((overlay) => supportsOverlay(nextAnimation, overlay)),
+		)
 		setBaseAnimation(nextAnimation)
 	}
 
@@ -764,6 +945,7 @@ export function PilotVisualizer(): VNode {
 	}
 
 	const toggleOverlay = (overlay: OverlayAnimation): void => {
+		if (!supportsOverlay(baseAnimation, overlay)) return
 		setOverlays((current) =>
 			current.includes(overlay)
 				? current.filter((candidate) => candidate !== overlay)
@@ -1219,13 +1401,23 @@ export function PilotVisualizer(): VNode {
 						<button
 							key={overlay}
 							type="button"
-							aria-pressed={overlays.includes(overlay)}
-							data-active={overlays.includes(overlay)}
+							aria-pressed={
+								overlays.includes(overlay) &&
+								supportsOverlay(baseAnimation, overlay)
+							}
+							data-active={
+								overlays.includes(overlay) &&
+								supportsOverlay(baseAnimation, overlay)
+							}
+							disabled={!supportsOverlay(baseAnimation, overlay)}
 							onClick={() => {
 								toggleOverlay(overlay)
 							}}
 						>
-							{overlays.includes(overlay) ? "+ " : "  "}
+							{overlays.includes(overlay) &&
+							supportsOverlay(baseAnimation, overlay)
+								? "+ "
+								: "  "}
 							{overlay}
 						</button>
 					))}
@@ -1243,12 +1435,10 @@ export function PilotVisualizer(): VNode {
 					</button>
 				</fieldset>
 			</animation-stack>
-			<pose-diagnostics data-active={poseSample !== null}>
+			<pose-diagnostics data-active={poseDiagnosticsActive}>
 				<pose-diagnostics-header>
 					<strong>POSE INPUTS</strong>
-					<span>
-						{poseSample === null ? "NO AIRBORNE SAMPLE" : "AIRBORNE LIVE"}
-					</span>
+					<span>{poseDiagnosticsLabel}</span>
 				</pose-diagnostics-header>
 				<section>
 					{poseStats.map((stat) => (
