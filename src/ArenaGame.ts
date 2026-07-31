@@ -493,6 +493,7 @@ export class ArenaGame {
 		this.#damageEffects.clear()
 		for (const model of this.#remotePlayers.values()) {
 			this.#scene.remove(model.rig.root)
+			disposePilotModel(model.rig)
 		}
 		this.#remotePlayers.clear()
 		for (const id of this.#missiles.keys()) this.#removeMiniMissileVisual(id)

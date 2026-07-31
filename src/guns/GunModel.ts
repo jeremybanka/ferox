@@ -125,6 +125,10 @@ function buildMiniMissileLauncher(
 	muzzle.position.set(0, 0.02, -1.22).sub(triggerPoint)
 }
 
+function assertUnhandledGun(id: never): never {
+	throw new Error(`No model builder registered for gun: ${String(id)}`)
+}
+
 export function applyGunTransform(
 	object: THREE.Object3D,
 	transform: GunTransform,
@@ -143,8 +147,16 @@ export function createGunModel(
 	const muzzle = new THREE.Group()
 	muzzle.name = `${id} muzzle`
 	const materials = materialPalette(palette)
-	if (id === "arc-blaster") buildArcBlaster(root, muzzle, materials)
-	else buildMiniMissileLauncher(root, muzzle, materials)
+	switch (id) {
+		case "arc-blaster":
+			buildArcBlaster(root, muzzle, materials)
+			break
+		case "mini-missile":
+			buildMiniMissileLauncher(root, muzzle, materials)
+			break
+		default:
+			assertUnhandledGun(id)
+	}
 	root.add(muzzle)
 	root.traverse((child) => {
 		if (child instanceof THREE.Mesh) {

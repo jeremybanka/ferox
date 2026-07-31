@@ -16,6 +16,10 @@ export type LockUpdate = {
 	snapshot: IncomingLockSnapshot
 }
 
+function assertUnhandledWeapon(weapon: never): never {
+	throw new Error(`Armory does not handle gun: ${String(weapon)}`)
+}
+
 export class MiniMissileArmory {
 	readonly #incomingLocks = new Map<string, Set<string>>()
 	readonly #pickupPosition: Vector3Tuple
@@ -58,14 +62,18 @@ export class MiniMissileArmory {
 
 	equip(playerId: string, weapon: WeaponKind, now: number): boolean {
 		if (!this.#weapons.has(playerId)) return false
-		if (weapon === "mini-missile") {
-			if (this.#ownerId !== playerId || this.#ammo <= 0) return false
-			this.#weapons.set(playerId, weapon)
-			return true
+		switch (weapon) {
+			case "mini-missile":
+				if (this.#ownerId !== playerId || this.#ammo <= 0) return false
+				this.#weapons.set(playerId, weapon)
+				return true
+			case "arc-blaster":
+				this.#weapons.set(playerId, weapon)
+				if (this.#ownerId === playerId) this.release(playerId, now)
+				return true
+			default:
+				return assertUnhandledWeapon(weapon)
 		}
-		this.#weapons.set(playerId, weapon)
-		if (this.#ownerId === playerId) this.release(playerId, now)
-		return true
 	}
 
 	consumeMiniMissile(playerId: string): boolean {
@@ -118,11 +126,19 @@ export class MiniMissileArmory {
 
 	equipment(playerId: string): EquipmentSnapshot {
 		const weapon = this.#weapons.get(playerId) ?? DEFAULT_GUN_ID
+		let ammo: number
+		switch (weapon) {
+			case "arc-blaster":
+				ammo = gunDefinition(weapon).magazineSize
+				break
+			case "mini-missile":
+				ammo = this.#ownerId === playerId ? this.#ammo : 0
+				break
+			default:
+				return assertUnhandledWeapon(weapon)
+		}
 		return {
-			ammo:
-				weapon === "mini-missile" && this.#ownerId === playerId
-					? this.#ammo
-					: gunDefinition(weapon).magazineSize,
+			ammo,
 			weapon,
 		}
 	}
