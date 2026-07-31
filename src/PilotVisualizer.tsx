@@ -250,11 +250,7 @@ function getPreviewPlanarVelocity(baseAnimation: BaseAnimation): {
 	return {
 		x: baseAnimation === "left" ? -7 : baseAnimation === "right" ? 7 : 0,
 		z:
-			baseAnimation === "forward"
-				? -8
-				: baseAnimation === "backward"
-					? 6.4
-					: 0,
+			baseAnimation === "forward" ? -8 : baseAnimation === "backward" ? 6.4 : 0,
 	}
 }
 
@@ -313,7 +309,9 @@ function samplePreviewAirborneMotion(
 	return null
 }
 
-function getPoseStats(sample: PreviewAirborneSample | null): readonly PoseStat[] {
+function getPoseStats(
+	sample: PreviewAirborneSample | null,
+): readonly PoseStat[] {
 	const motion = sample?.motion
 	const phase =
 		motion === undefined
@@ -384,16 +382,10 @@ function getPoseStats(sample: PreviewAirborneSample | null): readonly PoseStat[]
 
 function PoseStatBar({ stat }: { stat: PoseStat }): VNode {
 	const normalized = THREE.MathUtils.clamp(stat.value / stat.max, -1, 1)
-	const start = stat.signed
-		? normalized < 0
-			? 50 + normalized * 50
-			: 50
-		: 0
+	const start = stat.signed ? (normalized < 0 ? 50 + normalized * 50 : 50) : 0
 	const width = Math.abs(normalized) * (stat.signed ? 50 : 100)
 	const displayValue =
-		stat.unit === "°"
-			? THREE.MathUtils.radToDeg(stat.value)
-			: stat.value
+		stat.unit === "°" ? THREE.MathUtils.radToDeg(stat.value) : stat.value
 	const formattedValue =
 		stat.unit === "" ? displayValue.toFixed(2) : displayValue.toFixed(1)
 
@@ -1151,7 +1143,9 @@ export function PilotVisualizer(): VNode {
 			<pose-diagnostics data-active={poseSample !== null}>
 				<pose-diagnostics-header>
 					<strong>POSE INPUTS</strong>
-					<span>{poseSample === null ? "NO AIRBORNE SAMPLE" : "AIRBORNE LIVE"}</span>
+					<span>
+						{poseSample === null ? "NO AIRBORNE SAMPLE" : "AIRBORNE LIVE"}
+					</span>
 				</pose-diagnostics-header>
 				<section>
 					{poseStats.map((stat) => (
