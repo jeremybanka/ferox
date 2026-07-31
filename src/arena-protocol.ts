@@ -20,6 +20,14 @@ export function isVisorExpression(value: unknown): value is VisorExpression {
 	return VISOR_EXPRESSIONS.some((expression) => expression === value)
 }
 
+export const PILOT_EMOTES = ["wave"] as const
+
+export type PilotEmote = (typeof PILOT_EMOTES)[number]
+
+export function isPilotEmote(value: unknown): value is PilotEmote {
+	return PILOT_EMOTES.some((emote) => emote === value)
+}
+
 export type DronePersonality = "bully" | "coward" | "kamikaze"
 export type DroneMood = "angry" | "berserk" | "haughty" | "idle" | "scared"
 

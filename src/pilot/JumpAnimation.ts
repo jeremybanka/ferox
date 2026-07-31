@@ -1,134 +1,114 @@
-import { alignBlasterHand } from "./BlasterPose.ts"
+import {
+	applyPilotPose,
+	definePilotPose,
+	type PilotPose,
+} from "./PilotAnimation.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
-type JumpPose = {
-	arm: number
-	bodyPitch: number
-	bodyY: number
+type ArmPose = {
 	elbow: number
-	foot: number
-	headPitch: number
-	hipsPitch: number
-	hipsY: number
-	leg: number
-	rootY: number
-	shoulderRoll: number
+	swing: number
 }
 
-const jumpPoses: ReadonlyArray<readonly [number, JumpPose]> = [
-	[
-		0,
-		{
-			arm: 0,
-			bodyPitch: 0,
-			bodyY: 2.52,
-			elbow: 0,
-			foot: 0,
-			headPitch: 0,
-			hipsPitch: 0,
-			hipsY: 1.72,
-			leg: 0,
-			rootY: 0,
-			shoulderRoll: 0,
-		},
-	],
-	[
-		0.14,
-		{
-			arm: 0.34,
-			bodyPitch: 0.2,
-			bodyY: 2.34,
-			elbow: -0.62,
-			foot: -0.42,
-			headPitch: -0.1,
-			hipsPitch: -0.12,
-			hipsY: 1.46,
-			leg: 0.7,
-			rootY: -0.08,
-			shoulderRoll: 0.1,
-		},
-	],
-	[
-		0.29,
-		{
-			arm: -0.5,
-			bodyPitch: -0.14,
-			bodyY: 2.58,
-			elbow: -0.28,
-			foot: 0.3,
-			headPitch: 0.08,
-			hipsPitch: 0.1,
-			hipsY: 1.77,
-			leg: -0.28,
-			rootY: 1.08,
-			shoulderRoll: 0.2,
-		},
-	],
-	[
-		0.55,
-		{
-			arm: -0.16,
-			bodyPitch: 0.02,
-			bodyY: 2.48,
-			elbow: -0.52,
-			foot: -0.48,
-			headPitch: -0.04,
-			hipsPitch: -0.04,
-			hipsY: 1.62,
-			leg: 0.48,
-			rootY: 1.82,
-			shoulderRoll: 0.14,
-		},
-	],
-	[
-		0.76,
-		{
-			arm: 0.24,
-			bodyPitch: 0.12,
-			bodyY: 2.45,
-			elbow: -0.68,
-			foot: -0.62,
-			headPitch: -0.08,
-			hipsPitch: -0.08,
-			hipsY: 1.58,
-			leg: 0.58,
-			rootY: 1.12,
-			shoulderRoll: 0.18,
-		},
-	],
-	[
-		0.9,
-		{
-			arm: 0.42,
-			bodyPitch: 0.24,
-			bodyY: 2.3,
-			elbow: -0.78,
-			foot: -0.5,
-			headPitch: -0.12,
-			hipsPitch: -0.16,
-			hipsY: 1.4,
-			leg: 0.78,
-			rootY: -0.1,
-			shoulderRoll: 0.08,
-		},
-	],
-	[
-		1,
-		{
-			arm: 0,
-			bodyPitch: 0,
-			bodyY: 2.52,
-			elbow: 0,
-			foot: 0,
-			headPitch: 0,
-			hipsPitch: 0,
-			hipsY: 1.72,
-			leg: 0,
-			rootY: 0,
-			shoulderRoll: 0,
-		},
-	],
+type LegPose = {
+	foot: number
+	hip: number
+	knee: number
+	toe: number
+}
+
+type JumpPose = {
+	bodyY: number
+	bodyYaw: number
+	hipsRoll: number
+	hipsY: number
+	hipsYaw: number
+	leftArm: ArmPose
+	leftLeg: LegPose
+	rightArm: ArmPose
+	rightLeg: LegPose
+}
+
+function leg(hip: number, knee: number, foot: number, toe: number): LegPose {
+	return {
+		foot,
+		hip,
+		knee,
+		toe,
+	}
+}
+
+// Jump begins on the run's push pose because the gameplay impulse is immediate.
+const ascentPushPose: JumpPose = {
+	bodyY: -0.035,
+	bodyYaw: -0.045,
+	hipsRoll: -0.055,
+	hipsY: -0.08,
+	hipsYaw: 0.055,
+	leftArm: { elbow: 1.7, swing: -0.1 },
+	leftLeg: leg(0, -0.1, 0, 0.7),
+	rightArm: { elbow: 1.7, swing: 0.09 },
+	rightLeg: leg(1.3, -1.5, -0.18, 0.34),
+}
+
+// The run's flight pose is shared by the end of ascent and start of descent.
+const apexFlightPose: JumpPose = {
+	bodyY: 0.018,
+	bodyYaw: 0.085,
+	hipsRoll: 0.035,
+	hipsY: 0.0,
+	hipsYaw: -0.1,
+	leftArm: { elbow: 1.2, swing: 0.4 },
+	leftLeg: leg(-0.56, -0.2, -0.24, 0.3),
+	rightArm: { elbow: 1.65, swing: -0.13 },
+	rightLeg: leg(1.3, -1, 0.12, 0.18),
+}
+
+const runContactPose: JumpPose = {
+	bodyY: 0,
+	bodyYaw: -0.09,
+	hipsRoll: -0.035,
+	hipsY: 0.02,
+	hipsYaw: 0.11,
+	leftArm: { elbow: 1.62, swing: -0.6 },
+	leftLeg: leg(1.2, 0, 0, 0),
+	rightArm: { elbow: 1.7, swing: 0.04 },
+	rightLeg: leg(0, -1.2, 0, 0),
+}
+
+function mirrorPose(pose: JumpPose): JumpPose {
+	return {
+		...pose,
+		bodyYaw: -pose.bodyYaw,
+		hipsRoll: -pose.hipsRoll,
+		hipsYaw: -pose.hipsYaw,
+		leftArm: { ...pose.leftArm, swing: -pose.leftArm.swing },
+		leftLeg: pose.rightLeg,
+		rightArm: { ...pose.rightArm, swing: -pose.rightArm.swing },
+		rightLeg: pose.leftLeg,
+	}
+}
+
+const descentContactPose = mirrorPose(runContactPose)
+
+const JUMP_KEYFRAMES: ReadonlyArray<readonly [number, JumpPose]> = [
+	[0, ascentPushPose],
+	[0.5, apexFlightPose],
+	[1, descentContactPose],
 ]
+
+const JUMP_KEYFRAME_LABELS = [
+	"ascent · push L",
+	"apex · flight L",
+	"descent · contact R",
+] as const
+
+export const JUMP_KEYFRAME_MARKERS = JUMP_KEYFRAMES.map(
+	([progress], index) => ({
+		label: JUMP_KEYFRAME_LABELS[index] ?? `pose ${index + 1}`,
+		progress,
+	}),
+)
 
 function blend(from: number, to: number, amount: number): number {
 	return from + (to - from) * amount
@@ -138,61 +118,83 @@ function smoothstep(value: number): number {
 	return value * value * (3 - 2 * value)
 }
 
-export function applyJumpAnimation(rig: PilotRig, progress: number): void {
+function interpolateLeg(from: LegPose, to: LegPose, amount: number): LegPose {
+	return {
+		foot: blend(from.foot, to.foot, amount),
+		hip: blend(from.hip, to.hip, amount),
+		knee: blend(from.knee, to.knee, amount),
+		toe: blend(from.toe, to.toe, amount),
+	}
+}
+
+function interpolateArm(from: ArmPose, to: ArmPose, amount: number): ArmPose {
+	return {
+		elbow: blend(from.elbow, to.elbow, amount),
+		swing: blend(from.swing, to.swing, amount),
+	}
+}
+
+function sampleJumpPose(progress: number): JumpPose {
 	const clampedProgress = Math.max(0, Math.min(1, progress))
 	let poseIndex = 0
-
 	while (
-		poseIndex < jumpPoses.length - 2 &&
-		clampedProgress > jumpPoses[poseIndex + 1]![0]
+		poseIndex < JUMP_KEYFRAMES.length - 2 &&
+		clampedProgress > JUMP_KEYFRAMES[poseIndex + 1]![0]
 	) {
 		poseIndex += 1
 	}
-
-	const [fromTime, from] = jumpPoses[poseIndex]!
-	const [toTime, to] = jumpPoses[poseIndex + 1]!
+	const [fromTime, from] = JUMP_KEYFRAMES[poseIndex]!
+	const [toTime, to] = JUMP_KEYFRAMES[poseIndex + 1]!
 	const amount = smoothstep(
 		(clampedProgress - fromTime) / Math.max(0.001, toTime - fromTime),
 	)
-	const value = (key: keyof JumpPose): number =>
-		blend(from[key], to[key], amount)
+	return {
+		bodyY: blend(from.bodyY, to.bodyY, amount),
+		bodyYaw: blend(from.bodyYaw, to.bodyYaw, amount),
+		hipsRoll: blend(from.hipsRoll, to.hipsRoll, amount),
+		hipsY: blend(from.hipsY, to.hipsY, amount),
+		hipsYaw: blend(from.hipsYaw, to.hipsYaw, amount),
+		leftArm: interpolateArm(from.leftArm, to.leftArm, amount),
+		leftLeg: interpolateLeg(from.leftLeg, to.leftLeg, amount),
+		rightArm: interpolateArm(from.rightArm, to.rightArm, amount),
+		rightLeg: interpolateLeg(from.rightLeg, to.rightLeg, amount),
+	}
+}
 
-	rig.root.position.y = value("rootY")
-	rig.body.position.y = value("bodyY") - value("hipsY") - 0.8
-	rig.hips.position.y = value("hipsY")
+export function sampleJumpAnimationPose(progress: number): PilotPose {
+	const pose = sampleJumpPose(progress)
+	return definePilotPose({
+		body: {
+			position: { y: pose.bodyY },
+			rotation: { y: pose.bodyYaw },
+		},
+		head: { rotation: { y: -pose.bodyYaw * 0.34 } },
+		hips: {
+			position: { y: 1.72 + pose.hipsY },
+			rotation: {
+				y: pose.hipsYaw,
+				z: pose.hipsRoll,
+			},
+		},
+		leftArm: { rotation: { x: pose.leftArm.swing } },
+		leftElbow: { rotation: { x: pose.leftArm.elbow } },
+		leftFoot: { rotation: { x: pose.leftLeg.foot } },
+		leftKnee: { rotation: { x: pose.leftLeg.knee } },
+		leftLeg: { rotation: { x: pose.leftLeg.hip } },
+		leftShoulder: { rotation: { y: -0.6, z: -0.6 } },
+		leftToe: { rotation: { x: pose.leftLeg.toe } },
+		neck: { rotation: { x: 0.55, y: -pose.bodyYaw * 0.24 } },
+		rightArm: { rotation: { x: pose.rightArm.swing * 0.72 } },
+		rightElbow: { rotation: { x: pose.rightArm.elbow * 0.88 } },
+		rightFoot: { rotation: { x: pose.rightLeg.foot } },
+		rightHand: { rotation: { x: -pose.bodyY * 0.4 } },
+		rightKnee: { rotation: { x: pose.rightLeg.knee } },
+		rightLeg: { rotation: { x: pose.rightLeg.hip } },
+		rightShoulder: { rotation: { y: 0.6, z: 0.2 } },
+		rightToe: { rotation: { x: pose.rightLeg.toe } },
+	})
+}
 
-	rig.body.rotation.x = value("bodyPitch")
-	rig.hips.rotation.x = value("hipsPitch")
-	rig.neck.rotation.x = value("headPitch") * 0.4
-	rig.head.rotation.x = value("headPitch") * 0.6
-
-	const leg = value("leg")
-	const foot = value("foot")
-	rig.leftLeg.rotation.x = leg
-	rig.rightLeg.rotation.x = leg * 0.92
-	rig.leftLeg.rotation.z = -leg * 0.07
-	rig.rightLeg.rotation.z = leg * 0.07
-	rig.leftKnee.rotation.x = -Math.max(
-		0.08,
-		Math.abs(leg) * 1.12 + Math.max(0, -foot) * 0.3,
-	)
-	rig.rightKnee.rotation.x = rig.leftKnee.rotation.x * 0.92
-	rig.leftFoot.rotation.x =
-		-(rig.leftLeg.rotation.x + rig.leftKnee.rotation.x) + foot * 0.18
-	rig.rightFoot.rotation.x =
-		-(rig.rightLeg.rotation.x + rig.rightKnee.rotation.x) + foot * 0.16
-	rig.leftToe.rotation.x = Math.max(0, -foot) * 0.28
-	rig.rightToe.rotation.x = Math.max(0, -foot) * 0.26
-
-	const arm = value("arm")
-	const elbow = value("elbow")
-	const shoulderRoll = value("shoulderRoll")
-	rig.leftArm.rotation.x = arm
-	rig.rightArm.rotation.x = arm * 0.72
-	rig.leftElbow.rotation.x = -elbow
-	rig.rightElbow.rotation.x = -elbow * 0.82
-	rig.leftHand.rotation.x = arm * 0.14
-	rig.leftShoulder.rotation.z = -shoulderRoll
-	rig.rightShoulder.rotation.z = shoulderRoll
-	alignBlasterHand(rig, arm * 0.1)
+export function applyJumpAnimation(rig: PilotRig, progress: number): void {
+	applyPilotPose(rig, sampleJumpAnimationPose(progress))
 }

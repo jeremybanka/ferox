@@ -71,14 +71,14 @@ drawFrame(3, (draw) => eyes(draw, [7, 14, 6, 2], [19, 14, 6, 2]))
 drawFrame(4, ({ rect }) => {
 	rect(8, 14, 5, 3)
 	rect(19, 14, 5, 3)
-	rect(10, 13, 3, 1)
-	rect(19, 13, 3, 1)
+	// rect(10, 13, 3, 1)
+	// rect(19, 13, 3, 1)
 })
 drawFrame(5, ({ rect }) => {
-	rect(9, 14, 4, 3)
-	rect(19, 14, 4, 3)
-	rect(11, 13, 2, 1)
-	rect(19, 13, 2, 1)
+	rect(8, 14, 5, 2)
+	rect(19, 14, 5, 2)
+	// rect(11, 13, 2, 1)
+	// rect(19, 13, 2, 1)
 })
 drawFrame(6, ({ line, rect }) => {
 	line(6, 12, 12, 15)
@@ -94,19 +94,17 @@ drawFrame(7, ({ line, rect }) => {
 	rect(9, 15, 4, 3)
 	rect(19, 15, 4, 3)
 })
-drawFrame(8, ({ line, rect }) => {
-	line(7, 16, 11, 12)
-	line(11, 12, 14, 16)
-	line(18, 16, 21, 12)
+drawFrame(8, ({ line }) => {
+	line(6, 16, 10, 12)
+	line(10, 12, 14, 16)
+	line(17, 16, 21, 12)
 	line(21, 12, 25, 16)
-	rect(14, 19, 4, 1)
 })
-drawFrame(9, ({ line, rect }) => {
-	line(7, 17, 11, 13)
-	line(11, 13, 14, 17)
-	line(18, 17, 21, 13)
+drawFrame(9, ({ line }) => {
+	line(6, 17, 10, 13)
+	line(10, 13, 14, 17)
+	line(17, 17, 21, 13)
 	line(21, 13, 25, 17)
-	rect(13, 19, 6, 1)
 })
 drawFrame(10, ({ rect }) => {
 	rect(7, 11, 6, 8)

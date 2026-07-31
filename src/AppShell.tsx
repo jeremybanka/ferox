@@ -192,6 +192,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>FREE AIM</span>
 						<kbd>RB</kbd>
 						<span>RELOAD</span>
+						<kbd>D-PAD ↑</kbd>
+						<span>WAVE</span>
 						<kbd>◉</kbd>
 						<span>GAMEPAD READY</span>
 					</control-hint>

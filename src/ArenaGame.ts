@@ -8,6 +8,7 @@ import type {
 	FireIntent,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
+	PilotEmote,
 	VisorExpression,
 } from "./arena-protocol.ts"
 import { isVisorExpression } from "./arena-protocol.ts"
@@ -20,22 +21,52 @@ import {
 	TARGET_LOST_FLASH_MS,
 } from "./game-constants.ts"
 import type { GameHudState } from "./game-state.ts"
-import { applyFreeAimPose } from "./pilot/AimPose.ts"
+import {
+	isJumpGrounded,
+	JUMP_PHYSICS,
+	stepJumpPhysics,
+} from "./JumpPhysics.ts"
+import {
+	airborneMomentumLayer,
+	airborneVelocityLayer,
+	DOUBLE_JUMP_BURST_SECONDS,
+	doubleJumpBurstLayer,
+	LANDING_PREP_SECONDS,
+	LANDING_RECOVERY_SECONDS,
+	landingPreparationLayer,
+	landingRecoveryLayer,
+	limitAirborneShoulderSpread,
+	risingFallingAnimationLayer,
+} from "./pilot/AirborneAnimation.ts"
 import {
 	applyCrouchIdleAnimation,
-	applyCrouchMoveAnimation,
+	crouchRunAnimationLayer,
 } from "./pilot/CrouchAnimation.ts"
-import { applyDoubleJumpAnimation } from "./pilot/DoubleJumpAnimation.ts"
-import { applyJumpAnimation } from "./pilot/JumpAnimation.ts"
 import {
-	createPilotModel,
-	resetPilotPose,
-	type PilotRig,
-} from "./pilot/PilotModel.ts"
-import { applyRunAnimation, type RunDirection } from "./pilot/RunAnimation.ts"
+	lookTowardConstraint,
+	pointBlasterConstraint,
+	waveTowardConstraint,
+} from "./pilot/DirectionalConstraints.ts"
+import { idleAnimationLayer } from "./pilot/IdleAnimation.ts"
+import { createPilotModel, type PilotRig } from "./pilot/PilotModel.ts"
+import {
+	FULL_BODY_INFLUENCE,
+	PilotAnimationMixer,
+	sampleDraftAnimation,
+	type PilotAnimationLayer,
+} from "./pilot/PilotAnimation.ts"
+import { runAnimationLayer, type RunDirection } from "./pilot/RunAnimation.ts"
+import {
+	WAVE_DURATION_SECONDS,
+	waveAnimationLayer,
+} from "./pilot/WaveAnimation.ts"
+import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 
 type PlayerSnapshot = {
+	aimDirection: [number, number, number]
 	crouching: boolean
+	emote: PilotEmote | null
+	emoteStartedAt: number
 	freeAim: boolean
 	id: string
 	jump: 0 | 1 | 2
@@ -45,6 +76,7 @@ type PlayerSnapshot = {
 	velocity: [number, number, number]
 	visorExpression: VisorExpression
 	visorStartedAt: number
+	weaponsFree: boolean
 }
 
 type SpawnSnapshot = {
@@ -66,6 +98,13 @@ type Projectile = {
 	velocity: THREE.Vector3
 }
 
+type MuzzleFlash = {
+	life: number
+	light: THREE.PointLight
+	material: THREE.MeshBasicMaterial
+	mesh: THREE.Mesh
+}
+
 type TargetingState =
 	| "acquired"
 	| "escaping"
@@ -75,9 +114,17 @@ type TargetingState =
 	| "lost"
 
 type RemotePilot = {
+	aimDirection: THREE.Vector3
+	animator: PilotAnimationMixer
 	crouching: boolean
+	doubleJumpStartedAt: number
+	emote: PilotEmote | null
+	emoteSignalAt: number
+	emoteStartedAt: number
 	freeAim: boolean
 	jump: 0 | 1 | 2
+	landingImpactVelocity: number
+	landingStartedAt: number
 	pitch: number
 	position: THREE.Vector3
 	rig: PilotRig
@@ -86,12 +133,15 @@ type RemotePilot = {
 	velocity: THREE.Vector3
 	visorExpression: VisorExpression
 	visorStartedAt: number
+	weaponsFree: boolean
+	weaponsFreeWeight: number
 	yaw: number
 }
 
 const PLAYER_EYE = 1.72
 const CROUCH_EYE = 1.08
 const ARENA_SIZE = 118
+const WEAPONS_FREE_COOLDOWN_SECONDS = 2
 const REMOTE_MARKER_GEOMETRY = new THREE.OctahedronGeometry(0.2, 0)
 const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
 	color: "#79f5e2",
@@ -111,6 +161,7 @@ export class ArenaGame {
 		pitch: -0.04,
 		jumps: 0 as 0 | 1 | 2,
 	}
+	readonly #muzzleFlashes: MuzzleFlash[] = []
 	readonly #projectiles: Projectile[] = []
 	readonly #remotePlayers = new Map<string, RemotePilot>()
 	readonly #renderer: THREE.WebGLRenderer
@@ -118,12 +169,14 @@ export class ArenaGame {
 	readonly #seed: number
 	readonly #socket: Socket
 	readonly #weapon = new THREE.Group()
+	readonly #weaponMuzzle = new THREE.Group()
 	#ammo = 28
 	#acquiredTargetId: number | null = null
 	#animationFrame = 0
 	#bumperTapTargetId: number | null = null
 	#connected = false
 	#crouching = false
+	#dPadUpHeld = false
 	#disposed = false
 	#fireCooldown = 0
 	#freeAim = false
@@ -152,6 +205,9 @@ export class ArenaGame {
 	#visorExpression: VisorExpression = "boot"
 	#visorHurtUntil = 0
 	#visorStartedAt = Date.now() / 1_000
+	#waveStartedAt = 0
+	#waveUntil = 0
+	#weaponsFreeUntil = 0
 
 	constructor(options: ArenaGameOptions) {
 		this.#canvas = options.canvas
@@ -204,6 +260,12 @@ export class ArenaGame {
 		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
+		for (const flash of this.#muzzleFlashes) {
+			this.#scene.remove(flash.mesh)
+			flash.mesh.geometry.dispose()
+			flash.material.dispose()
+		}
+		this.#muzzleFlashes.length = 0
 		this.#renderer.dispose()
 	}
 
@@ -268,7 +330,12 @@ export class ArenaGame {
 		this.#camera.position.copy(this.#player.position)
 		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
 		this.#socket.emit("arena:move", {
+			aimDirection: new THREE.Vector3(0, 0, -1)
+				.applyQuaternion(this.#camera.quaternion)
+				.toArray(),
 			crouching: false,
+			emote: null,
+			emoteStartedAt: 0,
 			freeAim: false,
 			jump: 0,
 			position: this.#player.position.toArray(),
@@ -277,6 +344,7 @@ export class ArenaGame {
 			velocity: [0, 0, 0],
 			visorExpression: this.#visorExpression,
 			visorStartedAt: this.#visorStartedAt,
+			weaponsFree: false,
 		})
 	}
 
@@ -298,9 +366,17 @@ export class ArenaGame {
 				marker.rotation.y = Math.PI / 4
 				rig.root.add(marker)
 				model = {
+					aimDirection: new THREE.Vector3(0, 0, -1),
+					animator: new PilotAnimationMixer(),
 					crouching: false,
+					doubleJumpStartedAt: -Infinity,
+					emote: null,
+					emoteSignalAt: 0,
+					emoteStartedAt: -Infinity,
 					freeAim: false,
 					jump: 0,
+					landingImpactVelocity: 0,
+					landingStartedAt: -Infinity,
 					pitch: 0,
 					position: new THREE.Vector3(),
 					rig,
@@ -309,6 +385,8 @@ export class ArenaGame {
 					velocity: new THREE.Vector3(),
 					visorExpression: "boot",
 					visorStartedAt: Date.now() / 1_000,
+					weaponsFree: false,
+					weaponsFreeWeight: 0,
 					yaw: 0,
 				}
 				this.#remotePlayers.set(snapshot.id, model)
@@ -322,13 +400,43 @@ export class ArenaGame {
 					snapshot.crouching ? -CROUCH_EYE : -PLAYER_EYE,
 				)
 			if (isNew) model.position.copy(model.target)
+			const previousJump = model.jump
+			const previousVerticalVelocity = model.velocity.y
+			const animationEventTime = performance.now() / 1_000
 			model.velocity.set(...snapshot.velocity)
+			if (
+				Array.isArray(snapshot.aimDirection) &&
+				snapshot.aimDirection.length === 3 &&
+				snapshot.aimDirection.every(Number.isFinite)
+			) {
+				model.aimDirection.set(...snapshot.aimDirection).normalize()
+			}
 			model.yaw = snapshot.rotation[0]
 			model.pitch = snapshot.rotation[1]
 			model.crouching = snapshot.crouching
+			if (
+				snapshot.emote !== null &&
+				(model.emote !== snapshot.emote ||
+					model.emoteSignalAt !== snapshot.emoteStartedAt)
+			) {
+				model.emoteStartedAt = performance.now() / 1_000
+			}
+			model.emote = snapshot.emote
+			model.emoteSignalAt = snapshot.emoteStartedAt
 			model.freeAim = snapshot.freeAim
 			model.jump = snapshot.jump
+			if (model.jump > 0 && previousJump === 0) {
+				model.landingStartedAt = -Infinity
+			}
+			if (model.jump === 2 && previousJump !== 2) {
+				model.doubleJumpStartedAt = animationEventTime
+			}
+			if (model.jump === 0 && previousJump > 0) {
+				model.landingStartedAt = animationEventTime
+				model.landingImpactVelocity = Math.max(0, -previousVerticalVelocity)
+			}
 			model.sprinting = snapshot.sprinting
+			model.weaponsFree = snapshot.weaponsFree === true
 			if (
 				isVisorExpression(snapshot.visorExpression) &&
 				Number.isFinite(snapshot.visorStartedAt)
@@ -360,12 +468,10 @@ export class ArenaGame {
 	}
 
 	readonly #onProjectile = (projectile: ProjectileSnapshot): void => {
-		this.#spawnProjectile(
-			projectile.id,
-			new THREE.Vector3(...projectile.origin),
-			new THREE.Vector3(...projectile.direction),
-			projectile.color,
-		)
+		const origin = new THREE.Vector3(...projectile.origin)
+		const direction = new THREE.Vector3(...projectile.direction)
+		this.#spawnMuzzleFlash(origin, direction, projectile.color)
+		this.#spawnProjectile(projectile.id, origin, direction, projectile.color)
 	}
 
 	readonly #onProjectileEnded = (ended: ProjectileEndedSnapshot): void => {
@@ -515,7 +621,9 @@ export class ArenaGame {
 		barrel.position.set(0, 0.03, -0.47)
 		const sight = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.12), accent)
 		sight.position.set(0, 0.14, -0.1)
-		this.#weapon.add(body, barrel, sight)
+		this.#weaponMuzzle.name = "first-person blaster muzzle"
+		this.#weaponMuzzle.position.set(0, 0.03, -0.7)
+		this.#weapon.add(body, barrel, sight, this.#weaponMuzzle)
 		this.#weapon.position.set(0.35, -0.31, -0.7)
 		this.#camera.add(this.#weapon)
 		this.#scene.add(this.#camera)
@@ -528,6 +636,7 @@ export class ArenaGame {
 		lock: boolean
 		reload: boolean
 		sprint: boolean
+		wave: boolean
 		x: number
 		y: number
 	} {
@@ -541,6 +650,7 @@ export class ArenaGame {
 				lock: false,
 				reload: false,
 				sprint: false,
+				wave: false,
 				x: 0,
 				y: 0,
 			}
@@ -557,6 +667,7 @@ export class ArenaGame {
 		const lock = gamepad.buttons[4]?.pressed ?? false
 		const reload = gamepad.buttons[5]?.pressed ?? false
 		const sprint = gamepad.buttons[10]?.pressed ?? false
+		const wave = gamepad.buttons[12]?.pressed ?? false
 		return {
 			crouch,
 			fire,
@@ -564,6 +675,7 @@ export class ArenaGame {
 			lock,
 			reload,
 			sprint,
+			wave,
 			x: deadzone(gamepad.axes[0] ?? 0),
 			y: deadzone(gamepad.axes[1] ?? 0),
 		}
@@ -571,6 +683,11 @@ export class ArenaGame {
 
 	#updatePhysics(delta: number): void {
 		const gamepad = this.#pollGamepad()
+		if (gamepad.wave && !this.#dPadUpHeld) {
+			this.#waveStartedAt = Date.now() / 1_000
+			this.#waveUntil = performance.now() / 1_000 + WAVE_DURATION_SECONDS
+		}
+		this.#dPadUpHeld = gamepad.wave
 		const freeAimPressed = gamepad.lock || this.#keys.has("KeyQ")
 		if (freeAimPressed) {
 			if (!this.#leftBumperHeld) {
@@ -605,15 +722,15 @@ export class ArenaGame {
 		const eye = crouch ? CROUCH_EYE : PLAYER_EYE
 		const ground =
 			this.#heightAt(this.#player.position.x, this.#player.position.z) + eye
-		const grounded =
-			this.#player.position.y <= ground + 0.12 && this.#player.velocity.y <= 0
+		const grounded = isJumpGrounded(
+			{
+				positionY: this.#player.position.y,
+				velocityY: this.#player.velocity.y,
+			},
+			ground,
+		)
 		const speed = Math.hypot(this.#player.velocity.x, this.#player.velocity.z)
 		this.#slide = grounded && crouch && speed > 4.3
-		if (grounded) {
-			this.#player.position.y = ground
-			this.#player.velocity.y = Math.max(this.#player.velocity.y, 0)
-			this.#player.jumps = 0
-		}
 
 		const keyboardX =
 			Number(this.#keys.has("KeyD")) - Number(this.#keys.has("KeyA"))
@@ -670,36 +787,37 @@ export class ArenaGame {
 
 		const gamepadJumpPressed = gamepad.jump
 		if (gamepadJumpPressed && !this.#shotHeld) this.#jumpQueued = true
-		if (this.#jumpQueued) {
-			if (grounded) {
-				this.#player.velocity.y = 10.6
-				this.#player.jumps = 1
-			} else if (this.#player.jumps < 2) {
-				this.#player.velocity.y = 9.4
-				this.#player.jumps = 2
-			}
-			this.#jumpQueued = false
-		}
 		this.#shotHeld = gamepadJumpPressed
-		if (!grounded) this.#player.velocity.y -= 23 * delta
-		this.#player.position.addScaledVector(this.#player.velocity, delta)
 		const boundary = ARENA_SIZE * 0.47
-		this.#player.position.x = THREE.MathUtils.clamp(
-			this.#player.position.x,
+		const nextX = THREE.MathUtils.clamp(
+			this.#player.position.x + this.#player.velocity.x * delta,
 			-boundary,
 			boundary,
 		)
-		this.#player.position.z = THREE.MathUtils.clamp(
-			this.#player.position.z,
+		const nextZ = THREE.MathUtils.clamp(
+			this.#player.position.z + this.#player.velocity.z * delta,
 			-boundary,
 			boundary,
 		)
 		const nextGround =
-			this.#heightAt(this.#player.position.x, this.#player.position.z) + eye
-		if (this.#player.position.y < nextGround) {
-			this.#player.position.y = nextGround
-			this.#player.velocity.y = 0
-		}
+			this.#heightAt(nextX, nextZ) + eye
+		const jumpStep = stepJumpPhysics(
+			{
+				jumpCount: this.#player.jumps,
+				positionY: this.#player.position.y,
+				velocityY: this.#player.velocity.y,
+			},
+			{
+				delta,
+				groundAfter: nextGround,
+				groundBefore: ground,
+				jumpRequested: this.#jumpQueued,
+			},
+		)
+		this.#jumpQueued = false
+		this.#player.jumps = jumpStep.jumpCount
+		this.#player.position.set(nextX, jumpStep.positionY, nextZ)
+		this.#player.velocity.y = jumpStep.velocityY
 		const trigger = gamepad.fire || this.#keys.has("KeyF")
 		if (trigger && this.#fireCooldown <= 0) this.#fire()
 		this.#fireCooldown -= delta
@@ -715,19 +833,14 @@ export class ArenaGame {
 		)
 			return
 		this.#fireCooldown = 0.13
+		this.#weaponsFreeUntil =
+			performance.now() / 1_000 + WEAPONS_FREE_COOLDOWN_SECONDS
 		this.#ammo -= 1
-		const origin = this.#camera.getWorldPosition(new THREE.Vector3())
-		const acquiredPosition =
-			this.#acquiredTargetId === null
-				? null
-				: this.#drones.getTargetPosition(this.#acquiredTargetId)
-		const direction =
-			acquiredPosition === null
-				? new THREE.Vector3(0, 0, -1)
-						.applyQuaternion(this.#camera.quaternion)
-						.normalize()
-				: acquiredPosition.sub(origin).normalize()
-		origin.addScaledVector(direction, 0.8)
+		this.#camera.position.copy(this.#player.position)
+		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
+		this.#camera.updateMatrixWorld(true)
+		const origin = this.#weaponMuzzle.getWorldPosition(new THREE.Vector3())
+		const direction = this.#getAimDirection(origin)
 		this.#noiseTimer = 0.85
 		this.#weapon.position.z += 0.12
 		this.#shotSequence += 1
@@ -736,6 +849,18 @@ export class ArenaGame {
 			direction: direction.toArray(),
 			origin: origin.toArray(),
 		} satisfies FireIntent)
+	}
+
+	#getAimDirection(origin = this.#camera.position): THREE.Vector3 {
+		const acquiredPosition =
+			this.#acquiredTargetId === null
+				? null
+				: this.#drones.getTargetPosition(this.#acquiredTargetId)
+		return acquiredPosition === null
+			? new THREE.Vector3(0, 0, -1)
+					.applyQuaternion(this.#camera.quaternion)
+					.normalize()
+			: acquiredPosition.sub(origin).normalize()
 	}
 
 	#spawnProjectile(
@@ -758,6 +883,54 @@ export class ArenaGame {
 			mesh,
 			velocity: direction.multiplyScalar(55),
 		})
+	}
+
+	#spawnMuzzleFlash(
+		origin: THREE.Vector3,
+		direction: THREE.Vector3,
+		color: THREE.ColorRepresentation,
+	): void {
+		const material = new THREE.MeshBasicMaterial({
+			blending: THREE.AdditiveBlending,
+			color,
+			depthWrite: false,
+			opacity: 1,
+			transparent: true,
+		})
+		const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(1, 0), material)
+		mesh.position.copy(origin).addScaledVector(direction, 0.06)
+		mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction)
+		mesh.scale.set(0.11, 0.11, 0.34)
+		const light = new THREE.PointLight(color, 5, 4)
+		mesh.add(light)
+		this.#scene.add(mesh)
+		this.#muzzleFlashes.push({
+			life: 0.075,
+			light,
+			material,
+			mesh,
+		})
+	}
+
+	#updateMuzzleFlashes(delta: number): void {
+		for (let index = this.#muzzleFlashes.length - 1; index >= 0; index -= 1) {
+			const flash = this.#muzzleFlashes[index]
+			if (flash === undefined) continue
+			flash.life -= delta
+			const strength = THREE.MathUtils.clamp(flash.life / 0.075, 0, 1)
+			flash.material.opacity = strength
+			flash.light.intensity = strength * 5
+			flash.mesh.scale.set(
+				0.11 + (1 - strength) * 0.08,
+				0.11 + (1 - strength) * 0.08,
+				0.34 + (1 - strength) * 0.16,
+			)
+			if (flash.life > 0) continue
+			this.#scene.remove(flash.mesh)
+			flash.mesh.geometry.dispose()
+			flash.material.dispose()
+			this.#muzzleFlashes.splice(index, 1)
+		}
 	}
 
 	#updateProjectiles(delta: number): void {
@@ -946,7 +1119,6 @@ export class ArenaGame {
 	#updateRemotePlayers(delta: number): void {
 		for (const model of this.#remotePlayers.values()) {
 			model.position.lerp(model.target, Math.min(1, delta * 12))
-			resetPilotPose(model.rig)
 			const horizontalSpeed = Math.hypot(model.velocity.x, model.velocity.z)
 			const localVelocity = model.velocity
 				.clone()
@@ -958,39 +1130,127 @@ export class ArenaGame {
 				direction = localVelocity.z < 0 ? "forward" : "backward"
 			}
 			const animationTime = performance.now() / 1_000
-			if (model.crouching) {
-				if (horizontalSpeed > 0.35) {
-					applyCrouchMoveAnimation(model.rig, animationTime, 1, direction)
-				} else {
-					applyCrouchIdleAnimation(model.rig, animationTime, 1)
+			const layers: PilotAnimationLayer[] = []
+			if (model.jump > 0) {
+				const airborneMotion = {
+					jumpCount: model.jump === 2 ? (2 as const) : (1 as const),
+					localVelocityX: localVelocity.x,
+					localVelocityZ: localVelocity.z,
+					verticalVelocity: model.velocity.y,
 				}
-			} else if (model.jump === 2) {
-				const progress = THREE.MathUtils.clamp(
-					(9.4 - model.velocity.y) / 22,
-					0,
-					1,
-				)
-				applyDoubleJumpAnimation(model.rig, progress)
-				model.rig.root.position.y = 0
-			} else if (model.jump === 1) {
-				const progress = THREE.MathUtils.clamp(
-					(10.6 - model.velocity.y) / 23,
-					0,
-					1,
-				)
-				applyJumpAnimation(model.rig, progress)
-				model.rig.root.position.y = 0
+				layers.push(risingFallingAnimationLayer(airborneMotion))
+				const doubleJumpElapsed = animationTime - model.doubleJumpStartedAt
+				if (model.jump === 2 && doubleJumpElapsed < DOUBLE_JUMP_BURST_SECONDS) {
+					layers.push(doubleJumpBurstLayer(doubleJumpElapsed, airborneMotion))
+				}
+				let momentumWeight = 1
+				if (model.velocity.y < -0.1) {
+					const groundClearance = Math.max(
+						0,
+						model.position.y -
+							this.#heightAt(model.position.x, model.position.z),
+					)
+					const predictedImpactSeconds =
+						groundClearance / Math.max(0.1, -model.velocity.y)
+					if (predictedImpactSeconds < LANDING_PREP_SECONDS) {
+						momentumWeight =
+							predictedImpactSeconds / LANDING_PREP_SECONDS
+						layers.push(
+							landingPreparationLayer(
+								1 - predictedImpactSeconds / LANDING_PREP_SECONDS,
+								-model.velocity.y,
+								airborneMotion,
+							),
+						)
+					}
+				}
+				layers.push(airborneVelocityLayer(airborneMotion))
+				layers.push(airborneMomentumLayer(airborneMotion, momentumWeight))
+			} else if (model.crouching) {
+				if (horizontalSpeed > 0.35) {
+					layers.push(
+						crouchRunAnimationLayer(
+							animationTime,
+							THREE.MathUtils.clamp(horizontalSpeed / 6, 0.35, 1),
+							direction,
+						),
+					)
+				} else {
+					layers.push({
+						fadeSeconds: 0.14,
+						id: "draft:crouch-idle",
+						influence: FULL_BODY_INFLUENCE,
+						mode: "override",
+						pose: sampleDraftAnimation((rig) => {
+							applyCrouchIdleAnimation(rig, animationTime, 1)
+						}),
+					})
+				}
 			} else if (horizontalSpeed > 0.35) {
-				applyRunAnimation(
-					model.rig,
-					animationTime,
-					THREE.MathUtils.clamp(horizontalSpeed / 8, 0.3, 1),
-					direction,
+				layers.push(
+					runAnimationLayer(
+						animationTime,
+						THREE.MathUtils.clamp(horizontalSpeed / 8, 0.3, 1),
+						direction,
+					),
+				)
+			} else {
+				layers.push(idleAnimationLayer(animationTime))
+			}
+			const landingElapsed = animationTime - model.landingStartedAt
+			if (landingElapsed < LANDING_RECOVERY_SECONDS) {
+				layers.push(
+					landingRecoveryLayer(landingElapsed, model.landingImpactVelocity),
 				)
 			}
-			if (model.freeAim) {
-				applyFreeAimPose(model.rig, model.pitch, 0, 1)
+			const lookDirection = { pitch: model.pitch, yaw: 0 }
+			const waveElapsed = animationTime - model.emoteStartedAt
+			const waving =
+				model.emote === "wave" &&
+				waveElapsed >= 0 &&
+				waveElapsed < WAVE_DURATION_SECONDS
+			if (waving) {
+				layers.push(waveAnimationLayer(waveElapsed / WAVE_DURATION_SECONDS))
 			}
+			const localAimDirection = model.aimDirection
+				.clone()
+				.applyAxisAngle(new THREE.Vector3(0, 1, 0), -model.yaw)
+			const pointingDirection = {
+				pitch: Math.asin(THREE.MathUtils.clamp(localAimDirection.y, -1, 1)),
+				yaw: Math.atan2(-localAimDirection.x, -localAimDirection.z),
+			}
+			const weaponsFreeTarget = model.weaponsFree ? 1 : 0
+			const weaponsFreeTransition =
+				weaponsFreeTarget > model.weaponsFreeWeight ? 0.1 : 0.28
+			const weaponsFreeStep = delta / weaponsFreeTransition
+			model.weaponsFreeWeight =
+				weaponsFreeTarget > model.weaponsFreeWeight
+					? Math.min(
+							weaponsFreeTarget,
+							model.weaponsFreeWeight + weaponsFreeStep,
+						)
+					: Math.max(
+							weaponsFreeTarget,
+							model.weaponsFreeWeight - weaponsFreeStep,
+						)
+			if (model.weaponsFree) {
+				layers.push(
+					weaponsFreeLayer(pointingDirection.pitch, pointingDirection.yaw),
+				)
+			}
+			const constraints = [lookTowardConstraint(lookDirection, 0.92)]
+			if (waving) {
+				constraints.push(waveTowardConstraint(lookDirection, 0.9))
+			}
+			if (model.weaponsFreeWeight > 0 && !model.sprinting) {
+				constraints.push(
+					pointBlasterConstraint(pointingDirection, model.weaponsFreeWeight),
+				)
+			}
+			if (model.jump > 0) {
+				constraints.push(limitAirborneShoulderSpread)
+			}
+			model.animator.update(model.rig, layers, delta, constraints)
 			const visorTime = Date.now() / 1_000
 			model.rig.visorDisplay.setSignal(
 				"combat",
@@ -1009,6 +1269,7 @@ export class ArenaGame {
 		if (!this.#connected || this.#snapshotElapsed < 0.05) return
 		this.#snapshotElapsed = 0
 		const now = performance.now() / 1_000
+		const waving = now < this.#waveUntil
 		const horizontalSpeed = Math.hypot(
 			this.#player.velocity.x,
 			this.#player.velocity.z,
@@ -1016,19 +1277,24 @@ export class ArenaGame {
 		const visorExpression: VisorExpression =
 			now < this.#visorHurtUntil
 				? "hurt"
-				: this.#freeAim
-					? "focus"
-					: this.#fireCooldown > 0
-						? "angry"
-						: this.#sprinting || horizontalSpeed > 6
+				: waving
+					? "happy"
+					: this.#freeAim
+						? "focus"
+						: this.#fireCooldown > 0
 							? "angry"
-							: "neutral"
+							: this.#sprinting || horizontalSpeed > 6
+								? "angry"
+								: "neutral"
 		if (visorExpression !== this.#visorExpression) {
 			this.#visorExpression = visorExpression
 			this.#visorStartedAt = Date.now() / 1_000
 		}
 		this.#socket.emit("arena:move", {
+			aimDirection: this.#getAimDirection().toArray(),
 			crouching: this.#crouching,
+			emote: waving ? "wave" : null,
+			emoteStartedAt: this.#waveStartedAt,
 			freeAim: this.#freeAim,
 			jump: this.#player.jumps,
 			position: this.#player.position.toArray(),
@@ -1037,6 +1303,7 @@ export class ArenaGame {
 			velocity: this.#player.velocity.toArray(),
 			visorExpression: this.#visorExpression,
 			visorStartedAt: this.#visorStartedAt,
+			weaponsFree: now < this.#weaponsFreeUntil,
 		})
 	}
 
@@ -1071,11 +1338,15 @@ export class ArenaGame {
 		if (this.#disposed) return
 		this.#animationFrame = requestAnimationFrame(this.#animate)
 		const now = performance.now()
-		const delta = Math.min((now - this.#lastFrame) / 1000, 0.04)
+		const delta = Math.min(
+			(now - this.#lastFrame) / 1000,
+			JUMP_PHYSICS.maximumStepSeconds,
+		)
 		this.#lastFrame = now
 		this.#updatePhysics(delta)
 		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)
 		this.#drones.update(delta)
+		this.#updateMuzzleFlashes(delta)
 		this.#updateProjectiles(delta)
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)
