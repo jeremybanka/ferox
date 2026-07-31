@@ -710,6 +710,7 @@ export class ArenaGame {
 						: -PILOT_STANDING_EYE_HEIGHT,
 				)
 			if (isNew) model.position.copy(model.target)
+			const wasDead = model.dead
 			const previousJump = model.jump
 			const previousVerticalVelocity = model.velocity.y
 			const animationEventTime = performance.now() / 1_000
@@ -726,6 +727,7 @@ export class ArenaGame {
 			model.crouching = snapshot.crouching
 			model.dead = snapshot.dead === true
 			model.deathStartedAt = snapshot.deathStartedAt
+			if (wasDead && !model.dead) model.position.copy(model.target)
 			if (
 				snapshot.emote !== null &&
 				(model.emote !== snapshot.emote ||
