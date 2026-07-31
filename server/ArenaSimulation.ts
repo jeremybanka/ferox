@@ -755,10 +755,15 @@ export class ArenaSimulation {
 				headCollision.distanceSquared <
 				PLAYER_HEAD_HIT_RADIUS * PLAYER_HEAD_HIT_RADIUS
 			if (!hitsBody && !hitsHead) continue
-			const classification: DirectHitClassification = hitsHead
+			const hitsHeadFirst =
+				hitsHead &&
+				(!hitsBody ||
+					headCollision.firstTravelFraction <=
+						bodyCollision.firstTravelFraction + Number.EPSILON)
+			const classification: DirectHitClassification = hitsHeadFirst
 				? "headshot"
 				: "normal"
-			const travelFraction = hitsHead
+			const travelFraction = hitsHeadFirst
 				? headCollision.firstTravelFraction
 				: bodyCollision.firstTravelFraction
 			if (nearest === undefined || travelFraction < nearest.travelFraction) {

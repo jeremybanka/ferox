@@ -1,3 +1,4 @@
+import * as THREE from "three"
 import { expect, test } from "vitest"
 
 import type {
@@ -186,6 +187,44 @@ test("a closer body blocks a farther head region", () => {
 	expect(damage).toEqual([{ damage: 20, playerId: "near-body" }])
 	expect(hits[0]?.result.classification).toBe("normal")
 	expect(hits[0]?.result.targetId).toBe("near-body")
+})
+
+test("a pilot body blocks its head region along an oblique shot", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 1.72, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 1.72, -4],
+			velocity: [0, 0, 0],
+		},
+	]
+	const damage: number[] = []
+	const hits: Array<{ playerId: string; result: DirectHitResult }> = []
+	const simulation = makeSimulation(
+		players,
+		(_playerId, amount) => damage.push(amount),
+		[],
+		hits,
+	)
+
+	const direction = new THREE.Vector3(0, 1.05, -4).normalize()
+	expect(
+		simulation.fire("shooter", {
+			clientShotId: 8,
+			direction: direction.toArray(),
+			origin: [0, 0.5, 0],
+		}),
+	).toBe(true)
+	simulation.update(0.1)
+
+	expect(damage).toEqual([20])
+	expect(hits[0]?.result.classification).toBe("normal")
 })
 
 test("misses and self intersections produce no direct-hit result", () => {
