@@ -1,3 +1,5 @@
+import assert from "node:assert/strict"
+
 import * as THREE from "three"
 import { expect, test } from "vitest"
 
@@ -5,10 +7,20 @@ import type {
 	GrenadeExplodedSnapshot,
 	GrenadeSnapshot,
 	DirectHitResult,
+	MiniMissileEndedSnapshot,
+	MiniMissileExplodedSnapshot,
+	MiniMissileSnapshot,
 	PlayerDamageImpact,
 	ProjectileEndedSnapshot,
 } from "../src/arena-protocol.ts"
-import { grenadeDamageAtDistance } from "../src/game-constants.ts"
+import {
+	grenadeDamageAtDistance,
+	MINI_MISSILE_BLAST_RADIUS,
+	MINI_MISSILE_DAMAGE,
+	MINI_MISSILE_HOMING_RANGE,
+	MINI_MISSILE_MAX_TURN_RATE,
+	miniMissileDamageAtDistance,
+} from "../src/game-constants.ts"
 import { ArenaSimulation, type SimulationPlayer } from "./ArenaSimulation.ts"
 
 function makeSimulation(
@@ -25,11 +37,15 @@ function makeSimulation(
 		emitDroneDestroyed: () => undefined,
 		emitGrenade: () => undefined,
 		emitGrenadeExploded: () => undefined,
+		emitMiniMissile: () => undefined,
+		emitMiniMissileEnded: () => undefined,
+		emitMiniMissileExploded: () => undefined,
 		emitProjectile: () => undefined,
 		emitProjectileEnded: (snapshot) => endedProjectiles.push(snapshot),
 		getPlayers: () => players,
 		onDirectHit: (playerId, result) => directHits.push({ playerId, result }),
 		onDroneKilled: () => undefined,
+		onLockChanged: () => undefined,
 		onPlayerDamage,
 		seed: 7_431_905,
 	})
@@ -340,11 +356,15 @@ test("grenades broadcast their flight and damage pilots when they explode", () =
 		emitDroneDestroyed: () => undefined,
 		emitGrenade: (snapshot) => grenadeSnapshots.push(snapshot),
 		emitGrenadeExploded: (snapshot) => explosions.push(snapshot),
+		emitMiniMissile: () => undefined,
+		emitMiniMissileEnded: () => undefined,
+		emitMiniMissileExploded: () => undefined,
 		emitProjectile: () => undefined,
 		emitProjectileEnded: () => undefined,
 		getPlayers: () => players,
 		onDirectHit: () => undefined,
 		onDroneKilled: () => undefined,
+		onLockChanged: () => undefined,
 		onPlayerDamage: (playerId, amount, impact) =>
 			damage.push({ damage: amount, playerId, source: impact.source }),
 		seed: 7_431_905,
@@ -405,4 +425,279 @@ test("player projectiles cannot damage their owner", () => {
 	simulation.update(0.01)
 
 	expect(damage).toEqual([])
+})
+
+type MissileHarness = {
+	damage: Array<{ amount: number; playerId: string }>
+	ended: MiniMissileEndedSnapshot[]
+	explosions: MiniMissileExplodedSnapshot[]
+	locks: Array<{ attackerId: string; locked: boolean; targetId: string }>
+	missiles: MiniMissileSnapshot[]
+	simulation: ArenaSimulation
+}
+
+function makeMissileHarness(players: SimulationPlayer[]): MissileHarness {
+	const damage: MissileHarness["damage"] = []
+	const ended: MiniMissileEndedSnapshot[] = []
+	const explosions: MiniMissileExplodedSnapshot[] = []
+	const locks: MissileHarness["locks"] = []
+	const missiles: MiniMissileSnapshot[] = []
+	const simulation = new ArenaSimulation({
+		emitDroneDestroyed: () => undefined,
+		emitGrenade: () => undefined,
+		emitGrenadeExploded: () => undefined,
+		emitMiniMissile: (snapshot) => missiles.push(snapshot),
+		emitMiniMissileEnded: (snapshot) => ended.push(snapshot),
+		emitMiniMissileExploded: (snapshot) => explosions.push(snapshot),
+		emitProjectile: () => undefined,
+		emitProjectileEnded: () => undefined,
+		getPlayers: () => players,
+		onDirectHit: () => undefined,
+		onDroneKilled: () => undefined,
+		onLockChanged: (attackerId, targetId, locked) =>
+			locks.push({ attackerId, locked, targetId }),
+		onPlayerDamage: (playerId, amount) => damage.push({ amount, playerId }),
+		seed: 7_431_905,
+	})
+	return { damage, ended, explosions, locks, missiles, simulation }
+}
+
+test("mini-missiles acquire the nearest other pilot only within range", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 20, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "near",
+			position: [9, 20, -9],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "outside",
+			position: [MINI_MISSILE_HOMING_RANGE + 1, 20, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+
+	assert.equal(
+		harness.simulation.fireMiniMissile("owner", {
+			clientMissileId: 1,
+			direction: [0, 0, -1],
+			origin: [0, 20, 0],
+		}),
+		true,
+	)
+	assert.equal(harness.missiles[0]?.targetPlayerId, "near")
+	assert.deepEqual(harness.locks, [
+		{ attackerId: "owner", locked: true, targetId: "near" },
+	])
+})
+
+test("mini-missiles reject replayed intent IDs and do not lock out-of-range pilots", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 20, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "outside",
+			position: [MINI_MISSILE_HOMING_RANGE + 1, 20, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	const intent = {
+		clientMissileId: 4,
+		direction: [0, 1, 0] as [number, number, number],
+		origin: [0, 20, 0] as [number, number, number],
+	}
+	assert.equal(harness.simulation.fireMiniMissile("owner", intent), true)
+	assert.equal(harness.simulation.fireMiniMissile("owner", intent), false)
+	assert.equal(harness.missiles.length, 1)
+	assert.equal(harness.missiles[0]?.targetPlayerId, null)
+	assert.deepEqual(harness.locks, [])
+})
+
+test("mini-missile steering is turn-rate limited", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 20, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [10, 20, -10],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 20, 0],
+	})
+	harness.simulation.update(0.1)
+	const velocity = harness.simulation.snapshot().missiles[0]?.velocity
+	assert.ok(velocity !== undefined)
+	const turn = Math.acos(
+		Math.max(-1, Math.min(1, -velocity[2] / Math.hypot(...velocity))),
+	)
+	assert.ok(turn > 0)
+	assert.ok(turn <= MINI_MISSILE_MAX_TURN_RATE * 0.1 + 0.02)
+})
+
+test("target loss clears the lock and leaves the missile unguided", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 20, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 20, -12],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 20, 0],
+	})
+	players.splice(1, 1)
+	harness.simulation.update(0.1)
+
+	assert.equal(harness.simulation.snapshot().missiles[0]?.targetPlayerId, null)
+	assert.deepEqual(harness.locks, [
+		{ attackerId: "owner", locked: true, targetId: "target" },
+		{ attackerId: "owner", locked: false, targetId: "target" },
+	])
+})
+
+test("powered flight transitions to gravity and ends in one ground explosion", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 40, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 1, 0],
+		origin: [0, 40, 0],
+	})
+	for (let index = 0; index < 101; index += 1) harness.simulation.update(0.1)
+	const falling = harness.simulation.snapshot().missiles[0]
+	assert.equal(falling?.phase, "falling")
+	const verticalVelocity = falling?.velocity[1] ?? 0
+	harness.simulation.update(0.1)
+	assert.ok(
+		(harness.simulation.snapshot().missiles[0]?.velocity[1] ?? 0) <
+			verticalVelocity,
+	)
+	for (
+		let index = 0;
+		index < 200 && harness.explosions.length === 0;
+		index += 1
+	) {
+		harness.simulation.update(0.1)
+	}
+	assert.equal(harness.explosions.length, 1)
+	assert.equal(harness.ended.length, 1)
+	assert.equal(harness.simulation.snapshot().missiles.length, 0)
+})
+
+test("missile falloff is linear from exact center damage to zero at radius", () => {
+	assert.equal(miniMissileDamageAtDistance(0), MINI_MISSILE_DAMAGE)
+	assert.equal(miniMissileDamageAtDistance(MINI_MISSILE_BLAST_RADIUS / 2), 5)
+	assert.equal(miniMissileDamageAtDistance(MINI_MISSILE_BLAST_RADIUS), 0)
+	assert.equal(miniMissileDamageAtDistance(MINI_MISSILE_BLAST_RADIUS + 1), 0)
+})
+
+test("removing a shooter clears its lock and despawns missiles without explosion", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 20, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 20, -12],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 20, 0],
+	})
+	harness.simulation.removePlayer("owner")
+
+	assert.equal(harness.simulation.activeMissilesForOwner("owner"), 0)
+	assert.equal(harness.ended.length, 1)
+	assert.equal(harness.explosions.length, 0)
+	assert.equal(harness.locks.at(-1)?.locked, false)
+})
+
+test("contact explodes once, damages the victim once, and excludes owner splash", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 20, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 20, -4],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 20, 0],
+	})
+	for (
+		let index = 0;
+		index < 10 && harness.explosions.length === 0;
+		index += 1
+	) {
+		harness.simulation.update(0.05)
+	}
+	harness.simulation.update(0.2)
+
+	assert.equal(harness.explosions.length, 1)
+	assert.equal(harness.ended.length, 1)
+	assert.deepEqual(
+		harness.damage.map(({ playerId }) => playerId),
+		["target"],
+	)
+	assert.ok(harness.damage[0]?.amount !== undefined)
+	assert.ok((harness.damage[0]?.amount ?? 0) > 0)
+	assert.ok((harness.damage[0]?.amount ?? 0) <= MINI_MISSILE_DAMAGE)
 })

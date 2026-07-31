@@ -99,6 +99,20 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					</score-board>
 				</game-header>
 
+				<incoming-threat
+					data-active={hud.incomingLocks > 0}
+					role="status"
+					aria-live="assertive"
+					aria-hidden={hud.incomingLocks === 0}
+				>
+					<strong>⚠ MISSILE LOCK</strong>
+					<span>
+						{hud.incomingLocks === 1
+							? "1 INCOMING PILOT"
+							: `${hud.incomingLocks} INCOMING PILOTS`}
+					</span>
+				</incoming-threat>
+
 				<smart-target-zone data-state={hud.targeting} aria-hidden="true">
 					<free-aim-label>
 						<strong>FREE AIM</strong>
@@ -179,12 +193,22 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</player-vitals>
 
 				<weapon-status>
-					<small>ARC BLASTER</small>
+					<small>
+						{hud.weapon === "mini-missile" ? "MINI-MISSILE" : "ARC BLASTER"}
+					</small>
 					<ammo-count>
 						<strong>{String(hud.ammo).padStart(2, "0")}</strong>
-						<span>/ 28</span>
+						<span>/ {hud.weapon === "mini-missile" ? "06" : "28"}</span>
 					</ammo-count>
-					<em>{hud.ammo === 0 ? "PRESS RB / R TO RELOAD" : "PLASMA CELLS"}</em>
+					<em>
+						{hud.weapon === "mini-missile"
+							? hud.ammo === 0
+								? "ORDNANCE SPENT"
+								: "GUIDANCE ARMED • X TO DROP"
+							: hud.ammo === 0
+								? "PRESS RB / R TO RELOAD"
+								: "PLASMA CELLS"}
+					</em>
 				</weapon-status>
 
 				<game-footer>
@@ -208,6 +232,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>RELOAD</span>
 						<kbd>RMB / LT</kbd>
 						<span>GRENADE</span>
+						<kbd>E</kbd>
+						<span>PICK UP</span>
 						<kbd>D-PAD ↑</kbd>
 						<span>WAVE</span>
 						<kbd>◉</kbd>

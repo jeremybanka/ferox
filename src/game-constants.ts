@@ -26,6 +26,29 @@ export const GRENADE_RADIUS = 0.18
 export const GRENADE_RESTITUTION = 0.56
 export const GRENADE_THROW_SPEED = 17
 
+// Mini-missile defaults are centralized here so playtesting can tune the weapon
+// without changing protocol or simulation behavior. Locks represent launched,
+// powered missiles committed to another connected pilot. Drones are valid blast
+// victims but are not homing targets. Splash never damages the missile owner.
+export const MINI_MISSILE_AMMO = 6
+export const MINI_MISSILE_BLAST_RADIUS = 5
+export const MINI_MISSILE_DAMAGE = 10
+export const MINI_MISSILE_GRAVITY = 13
+export const MINI_MISSILE_HOMING_RANGE = 32
+export const MINI_MISSILE_MAX_TURN_RATE = 2.4
+export const MINI_MISSILE_PICKUP_POSITION: readonly [number, number] = [0, 0]
+export const MINI_MISSILE_PICKUP_RADIUS = 2.4
+export const MINI_MISSILE_PICKUP_RESPAWN_SECONDS = 12
+export const MINI_MISSILE_POWERED_SECONDS = 10
+export const MINI_MISSILE_RADIUS = 0.12
+export const MINI_MISSILE_SPEED = 11
+
+export function miniMissileDamageAtDistance(distance: number): number {
+	if (distance >= MINI_MISSILE_BLAST_RADIUS) return 0
+	const normalized = Math.max(0, distance) / MINI_MISSILE_BLAST_RADIUS
+	return MINI_MISSILE_DAMAGE * (1 - normalized)
+}
+
 export function grenadeDamageAtDistance(distance: number): number {
 	if (distance >= GRENADE_BLAST_RADIUS) return 0
 	const step = Math.floor(Math.max(0, distance) / GRENADE_DAMAGE_STEP_DISTANCE)

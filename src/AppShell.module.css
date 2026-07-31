@@ -288,6 +288,42 @@ app-shell.class {
 			}
 		}
 
+		> incoming-threat {
+			position: absolute;
+			top: clamp(5.2rem, 11vh, 7.8rem);
+			left: 50%;
+			display: grid;
+			justify-items: center;
+			padding: 0.55rem 1.3rem;
+			border: 1px solid #ff643f;
+			background: rgb(62 10 15 / 0.76);
+			clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+			color: #ff8d5f;
+			font-family: var(--font-mono);
+			opacity: 0;
+			translate: -50% -0.7rem;
+			transition: opacity 100ms linear, translate 100ms ease-out;
+
+			> strong {
+				font-size: 0.72rem;
+				letter-spacing: 0.2em;
+				text-shadow: 0 0 0.9rem currentcolor;
+			}
+
+			> span {
+				margin-top: 0.24rem;
+				color: #ffc3a8;
+				font-size: 0.45rem;
+				letter-spacing: 0.14em;
+			}
+
+			&[data-active="true"] {
+				opacity: 1;
+				translate: -50% 0;
+				box-shadow: 0 0 1.35rem rgb(255 76 45 / 0.55);
+			}
+		}
+
 		> cross-hair {
 			--recoil-gap: calc(0.83rem + var(--weapon-spread-offset));
 

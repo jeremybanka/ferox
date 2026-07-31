@@ -1,6 +1,7 @@
 import { atom } from "atom.io"
 
 import { ARENA_SEED } from "./game-constants.ts"
+import type { WeaponKind } from "./arena-protocol.ts"
 
 export type GameHudState = {
 	ammo: number
@@ -10,6 +11,7 @@ export type GameHudState = {
 	hitMarkerClassification: "headshot" | "normal"
 	hitMarkerSequence: number
 	hitMarkerVisible: boolean
+	incomingLocks: number
 	jump: 0 | 1 | 2
 	lockCountdown: number
 	players: number
@@ -21,6 +23,7 @@ export type GameHudState = {
 	sliding: boolean
 	speed: number
 	targeting: "acquired" | "escaping" | "free" | "idle" | "locked" | "lost"
+	weapon: WeaponKind
 }
 
 export const gameHudStateAtom = atom<GameHudState>({
@@ -33,6 +36,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 		hitMarkerClassification: "normal",
 		hitMarkerSequence: 0,
 		hitMarkerVisible: false,
+		incomingLocks: 0,
 		jump: 0,
 		lockCountdown: 0,
 		players: 1,
@@ -44,6 +48,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 		sliding: false,
 		speed: 0,
 		targeting: "idle",
+		weapon: "arc-blaster",
 	},
 })
 

@@ -12,6 +12,10 @@ import type {
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
 	GrenadeSnapshot,
+	MiniMissileEndedSnapshot,
+	MiniMissileExplodedSnapshot,
+	MiniMissileIntent,
+	MiniMissileSnapshot,
 	PlayerDamageImpact,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
@@ -33,6 +37,14 @@ import {
 	PLAYER_HEADSHOT_MULTIPLIER,
 	PLAYER_PROJECTILE_DAMAGE,
 	grenadeDamageAtDistance,
+	MINI_MISSILE_BLAST_RADIUS,
+	MINI_MISSILE_GRAVITY,
+	MINI_MISSILE_HOMING_RANGE,
+	MINI_MISSILE_MAX_TURN_RATE,
+	MINI_MISSILE_POWERED_SECONDS,
+	MINI_MISSILE_RADIUS,
+	MINI_MISSILE_SPEED,
+	miniMissileDamageAtDistance,
 } from "../src/game-constants.ts"
 
 export type SimulationPlayer = {
@@ -81,15 +93,29 @@ type GrenadeState = {
 	velocity: THREE.Vector3
 }
 
+type MiniMissileState = {
+	id: number
+	ownerId: string
+	phase: "falling" | "powered"
+	position: THREE.Vector3
+	poweredLife: number
+	targetPlayerId: string | null
+	velocity: THREE.Vector3
+}
+
 type ArenaSimulationOptions = {
 	emitDroneDestroyed: (snapshot: DroneDestroyedSnapshot) => void
 	emitGrenade: (snapshot: GrenadeSnapshot) => void
 	emitGrenadeExploded: (snapshot: GrenadeExplodedSnapshot) => void
+	emitMiniMissile: (snapshot: MiniMissileSnapshot) => void
+	emitMiniMissileEnded: (snapshot: MiniMissileEndedSnapshot) => void
+	emitMiniMissileExploded: (snapshot: MiniMissileExplodedSnapshot) => void
 	emitProjectile: (snapshot: ProjectileSnapshot) => void
 	emitProjectileEnded: (snapshot: ProjectileEndedSnapshot) => void
 	getPlayers: () => SimulationPlayer[]
 	onDirectHit: (playerId: string, result: DirectHitResult) => void
 	onDroneKilled: (playerId: string) => void
+	onLockChanged: (attackerId: string, targetId: string, locked: boolean) => void
 	onPlayerDamage: (
 		playerId: string,
 		damage: number,
@@ -127,12 +153,18 @@ export class ArenaSimulation {
 	readonly #emitDroneDestroyed: ArenaSimulationOptions["emitDroneDestroyed"]
 	readonly #emitGrenade: ArenaSimulationOptions["emitGrenade"]
 	readonly #emitGrenadeExploded: ArenaSimulationOptions["emitGrenadeExploded"]
+	readonly #emitMiniMissile: ArenaSimulationOptions["emitMiniMissile"]
+	readonly #emitMiniMissileEnded: ArenaSimulationOptions["emitMiniMissileEnded"]
+	readonly #emitMiniMissileExploded: ArenaSimulationOptions["emitMiniMissileExploded"]
 	readonly #emitProjectile: ArenaSimulationOptions["emitProjectile"]
 	readonly #emitProjectileEnded: ArenaSimulationOptions["emitProjectileEnded"]
 	readonly #getPlayers: ArenaSimulationOptions["getPlayers"]
 	readonly #grenades: GrenadeState[] = []
+	readonly #lastMissileIntent = new Map<string, number>()
+	readonly #missiles: MiniMissileState[] = []
 	readonly #onDroneKilled: ArenaSimulationOptions["onDroneKilled"]
 	readonly #onDirectHit: ArenaSimulationOptions["onDirectHit"]
+	readonly #onLockChanged: ArenaSimulationOptions["onLockChanged"]
 	readonly #onPlayerDamage: ArenaSimulationOptions["onPlayerDamage"]
 	readonly #projectiles: ProjectileState[] = []
 	readonly #playerNoiseUntil = new Map<string, number>()
@@ -140,6 +172,7 @@ export class ArenaSimulation {
 	#elapsed = 0
 	#nextDroneId = 1
 	#nextGrenadeId = 1
+	#nextMissileId = 1
 	#nextProjectileId = 1
 	#nextSpawn = 1.2
 	#sequence = 0
@@ -149,17 +182,45 @@ export class ArenaSimulation {
 		this.#emitDroneDestroyed = options.emitDroneDestroyed
 		this.#emitGrenade = options.emitGrenade
 		this.#emitGrenadeExploded = options.emitGrenadeExploded
+		this.#emitMiniMissile = options.emitMiniMissile
+		this.#emitMiniMissileEnded = options.emitMiniMissileEnded
+		this.#emitMiniMissileExploded = options.emitMiniMissileExploded
 		this.#emitProjectile = options.emitProjectile
 		this.#emitProjectileEnded = options.emitProjectileEnded
 		this.#getPlayers = options.getPlayers
 		this.#onDroneKilled = options.onDroneKilled
 		this.#onDirectHit = options.onDirectHit
+		this.#onLockChanged = options.onLockChanged
 		this.#onPlayerDamage = options.onPlayerDamage
 		this.#seed = options.seed
 	}
 
 	get droneCount(): number {
 		return this.#drones.length
+	}
+
+	activeMissilesForOwner(playerId: string): number {
+		return this.#missiles.filter((missile) => missile.ownerId === playerId)
+			.length
+	}
+
+	removePlayer(playerId: string): void {
+		this.#lastMissileIntent.delete(playerId)
+		for (let index = this.#missiles.length - 1; index >= 0; index -= 1) {
+			const missile = this.#missiles[index]
+			if (missile === undefined) continue
+			if (missile.ownerId === playerId) {
+				this.#endMissile(index, missile)
+			} else if (missile.targetPlayerId === playerId) {
+				this.#setMissileTarget(missile, null)
+			}
+		}
+	}
+
+	cancelLocksByOwner(playerId: string): void {
+		for (const missile of this.#missiles) {
+			if (missile.ownerId === playerId) this.#setMissileTarget(missile, null)
+		}
 	}
 
 	fire(playerId: string, intent: FireIntent): boolean {
@@ -233,10 +294,51 @@ export class ArenaSimulation {
 		return true
 	}
 
+	fireMiniMissile(playerId: string, intent: MiniMissileIntent): boolean {
+		const players = this.#getPlayers()
+		const player = players.find((candidate) => candidate.id === playerId)
+		if (player === undefined) return false
+		if (
+			!this.#isVector(intent.origin) ||
+			!this.#isVector(intent.direction) ||
+			!Number.isSafeInteger(intent.clientMissileId)
+		)
+			return false
+		if (
+			intent.clientMissileId <= (this.#lastMissileIntent.get(playerId) ?? -1)
+		) {
+			return false
+		}
+		const origin = new THREE.Vector3(...intent.origin)
+		if (origin.distanceTo(new THREE.Vector3(...player.position)) > 3)
+			return false
+		const direction = new THREE.Vector3(...intent.direction)
+		if (direction.lengthSq() < 0.8 || direction.lengthSq() > 1.2) return false
+		direction.normalize()
+		const target = this.#acquireMissileTarget(playerId, origin, players)
+		const missile: MiniMissileState = {
+			id: this.#nextMissileId,
+			ownerId: playerId,
+			phase: "powered",
+			position: origin,
+			poweredLife: MINI_MISSILE_POWERED_SECONDS,
+			targetPlayerId: null,
+			velocity: direction.multiplyScalar(MINI_MISSILE_SPEED),
+		}
+		this.#nextMissileId += 1
+		this.#lastMissileIntent.set(playerId, intent.clientMissileId)
+		this.#missiles.push(missile)
+		this.#setMissileTarget(missile, target?.id ?? null)
+		this.#playerNoiseUntil.set(playerId, this.#elapsed + 0.85)
+		this.#emitMiniMissile(this.#snapshotMissile(missile))
+		return true
+	}
+
 	snapshot(): ArenaSnapshot {
 		this.#sequence += 1
 		return {
 			drones: this.#drones.map((drone) => this.#snapshotDrone(drone)),
+			missiles: this.#missiles.map((missile) => this.#snapshotMissile(missile)),
 			sequence: this.#sequence,
 			serverTime: this.#elapsed * 1_000,
 		}
@@ -253,6 +355,7 @@ export class ArenaSimulation {
 		}
 		this.#updateProjectiles(delta, players)
 		this.#updateGrenades(delta, players)
+		this.#updateMissiles(delta, players)
 	}
 
 	#updateSpawning(delta: number, players: SimulationPlayer[]): void {
@@ -466,6 +569,183 @@ export class ArenaSimulation {
 		this.#fireAt(drone, targetPosition, 2.8, "#62a5ff")
 		drone.burstRounds -= 1
 		drone.attackCooldown = drone.burstRounds === 0 ? 1.7 : 0.12
+	}
+
+	#acquireMissileTarget(
+		ownerId: string,
+		origin: THREE.Vector3,
+		players: readonly SimulationPlayer[],
+	): SimulationPlayer | undefined {
+		let nearest: SimulationPlayer | undefined
+		let nearestDistance = MINI_MISSILE_HOMING_RANGE
+		for (const player of players) {
+			if (player.id === ownerId) continue
+			const distance = origin.distanceTo(new THREE.Vector3(...player.position))
+			if (distance >= nearestDistance) continue
+			nearest = player
+			nearestDistance = distance
+		}
+		return nearest
+	}
+
+	#updateMissiles(delta: number, players: readonly SimulationPlayer[]): void {
+		for (let index = this.#missiles.length - 1; index >= 0; index -= 1) {
+			const missile = this.#missiles[index]
+			if (missile === undefined) continue
+			const previousPosition = missile.position.clone()
+			if (missile.phase === "powered") {
+				missile.poweredLife -= delta
+				const target = players.find(
+					(player) => player.id === missile.targetPlayerId,
+				)
+				if (
+					target === undefined ||
+					missile.position.distanceTo(new THREE.Vector3(...target.position)) >
+						MINI_MISSILE_HOMING_RANGE
+				) {
+					this.#setMissileTarget(missile, null)
+				} else {
+					const desired = new THREE.Vector3(...target.position)
+						.add(new THREE.Vector3(0, -0.65, 0))
+						.sub(missile.position)
+						.normalize()
+					const current = missile.velocity.clone().normalize()
+					const angle = current.angleTo(desired)
+					if (angle > Number.EPSILON) {
+						current
+							.lerp(
+								desired,
+								Math.min(1, (MINI_MISSILE_MAX_TURN_RATE * delta) / angle),
+							)
+							.normalize()
+					}
+					missile.velocity.copy(current).multiplyScalar(MINI_MISSILE_SPEED)
+				}
+				if (missile.poweredLife <= 0) {
+					missile.phase = "falling"
+					this.#setMissileTarget(missile, null)
+				}
+			}
+			if (missile.phase === "falling") {
+				missile.velocity.y -= MINI_MISSILE_GRAVITY * delta
+			}
+			missile.position.addScaledVector(missile.velocity, delta)
+
+			const droneHit = this.#nearestDroneAlongSegment(
+				previousPosition,
+				missile.position,
+				1.2,
+			)
+			const playerHit = this.#nearestPlayerAlongSegment(
+				previousPosition,
+				missile.position,
+				players,
+				missile.ownerId,
+			)
+			const hitEntity = droneHit !== undefined || playerHit !== undefined
+			const hitGround =
+				missile.position.y <=
+				arenaHeightAt(this.#seed, missile.position.x, missile.position.z) +
+					MINI_MISSILE_RADIUS
+			if (hitEntity || hitGround) {
+				this.#explodeMissile(index, missile, players)
+			}
+		}
+	}
+
+	#explodeMissile(
+		index: number,
+		missile: MiniMissileState,
+		players: readonly SimulationPlayer[],
+	): void {
+		this.#setMissileTarget(missile, null)
+		this.#missiles.splice(index, 1)
+		for (
+			let droneIndex = this.#drones.length - 1;
+			droneIndex >= 0;
+			droneIndex -= 1
+		) {
+			const drone = this.#drones[droneIndex]
+			if (drone === undefined) continue
+			const damage = miniMissileDamageAtDistance(
+				missile.position.distanceTo(drone.position),
+			)
+			if (damage > 0) this.#damageDrone(drone, damage, missile.ownerId)
+		}
+		for (const player of players) {
+			if (player.id === missile.ownerId) continue
+			const bodyCenter = new THREE.Vector3(...player.position).add(
+				new THREE.Vector3(0, player.crouching ? -0.5 : -0.8, 0),
+			)
+			const damage = miniMissileDamageAtDistance(
+				missile.position.distanceTo(bodyCenter),
+			)
+			if (damage > 0) {
+				const direction = bodyCenter.clone().sub(missile.position)
+				if (direction.lengthSq() <= Number.EPSILON) {
+					direction.copy(missile.velocity)
+				}
+				this.#onPlayerDamage(player.id, damage, {
+					direction: direction.normalize().toArray(),
+					position: missile.position.toArray(),
+					source: "mini-missile",
+				})
+			}
+		}
+		this.#emitMiniMissileExploded({
+			id: missile.id,
+			position: missile.position.toArray(),
+			radius: MINI_MISSILE_BLAST_RADIUS,
+		})
+		this.#emitMiniMissileEnded({ id: missile.id })
+	}
+
+	#endMissile(index: number, missile: MiniMissileState): void {
+		this.#setMissileTarget(missile, null)
+		this.#missiles.splice(index, 1)
+		this.#emitMiniMissileEnded({ id: missile.id })
+	}
+
+	#setMissileTarget(
+		missile: MiniMissileState,
+		targetPlayerId: string | null,
+	): void {
+		const previousTarget = missile.targetPlayerId
+		if (previousTarget === targetPlayerId) return
+		if (previousTarget !== null) {
+			const hasAnotherLock = this.#missiles.some(
+				(candidate) =>
+					candidate !== missile &&
+					candidate.ownerId === missile.ownerId &&
+					candidate.targetPlayerId === previousTarget,
+			)
+			if (!hasAnotherLock) {
+				this.#onLockChanged(missile.ownerId, previousTarget, false)
+			}
+		}
+		missile.targetPlayerId = targetPlayerId
+		if (targetPlayerId !== null) {
+			const alreadyLocked = this.#missiles.some(
+				(candidate) =>
+					candidate !== missile &&
+					candidate.ownerId === missile.ownerId &&
+					candidate.targetPlayerId === targetPlayerId,
+			)
+			if (!alreadyLocked) {
+				this.#onLockChanged(missile.ownerId, targetPlayerId, true)
+			}
+		}
+	}
+
+	#snapshotMissile(missile: MiniMissileState): MiniMissileSnapshot {
+		return {
+			id: missile.id,
+			ownerId: missile.ownerId,
+			phase: missile.phase,
+			position: missile.position.toArray(),
+			targetPlayerId: missile.targetPlayerId,
+			velocity: missile.velocity.toArray(),
+		}
 	}
 
 	#fireAt(

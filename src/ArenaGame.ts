@@ -6,10 +6,17 @@ import type {
 	CombatSnapshot,
 	DirectHitResult,
 	DroneDestroyedSnapshot,
+	EquipmentSnapshot,
 	FireIntent,
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
 	GrenadeSnapshot,
+	IncomingLockSnapshot,
+	MiniMissileEndedSnapshot,
+	MiniMissileExplodedSnapshot,
+	MiniMissileIntent,
+	MiniMissilePickupSnapshot,
+	MiniMissileSnapshot,
 	PlayerMoveSnapshot,
 	PlayerDamageSnapshot,
 	PlayerSnapshot,
@@ -17,6 +24,7 @@ import type {
 	ProjectileSnapshot,
 	PilotEmote,
 	VisorExpression,
+	WeaponKind,
 } from "./arena-protocol.ts"
 import { isVisorExpression } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
@@ -30,6 +38,7 @@ import {
 	GRENADE_RADIUS,
 	GRENADE_RESTITUTION,
 	HIT_MARKER_DURATION_SECONDS,
+	MINI_MISSILE_PICKUP_POSITION,
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
@@ -116,6 +125,14 @@ type Projectile = {
 	velocity: THREE.Vector3
 }
 
+type MiniMissileVisual = {
+	id: number
+	mesh: THREE.Group
+	phase: "falling" | "powered"
+	target: THREE.Vector3
+	velocity: THREE.Vector3
+}
+
 type Grenade = {
 	id: number
 	life: number
@@ -173,6 +190,7 @@ type RemotePilot = {
 	visorStartedAt: number
 	weaponsFree: boolean
 	weaponsFreeWeight: number
+	weapon: WeaponKind
 	yaw: number
 }
 
@@ -203,6 +221,8 @@ export class ArenaGame {
 		jumps: 0 as 0 | 1 | 2,
 	}
 	readonly #muzzleFlashes: MuzzleFlash[] = []
+	readonly #missiles = new Map<number, MiniMissileVisual>()
+	readonly #missilePickup = new THREE.Group()
 	readonly #projectiles: Projectile[] = []
 	readonly #pendingShotIds = new Set<number>()
 	readonly #remotePlayers = new Map<string, RemotePilot>()
@@ -230,6 +250,7 @@ export class ArenaGame {
 	#hitMarkerClassification: DirectHitResult["classification"] = "normal"
 	#hitMarkerSequence = 0
 	#hitMarkerUntil = 0
+	#incomingLocks = 0
 	#hudElapsed = 0
 	#jumpQueued = false
 	#lastFrame = performance.now()
@@ -246,6 +267,7 @@ export class ArenaGame {
 	#rightBumperHeld = false
 	#score = 0
 	#shotSequence = 0
+	#missileSequence = 0
 	#shotHeld = false
 	#slide = false
 	#snapshotElapsed = 0
@@ -259,6 +281,7 @@ export class ArenaGame {
 	#waveStartedAt = 0
 	#waveUntil = 0
 	#weaponsFreeUntil = 0
+	#weaponKind: WeaponKind = "arc-blaster"
 
 	constructor(options: ArenaGameOptions) {
 		this.#canvas = options.canvas
@@ -312,6 +335,12 @@ export class ArenaGame {
 		this.#socket.off("arena:drone-destroyed", this.#onDroneDestroyed)
 		this.#socket.off("arena:grenade", this.#onGrenade)
 		this.#socket.off("arena:grenade-exploded", this.#onGrenadeExploded)
+		this.#socket.off("arena:equipment", this.#onEquipment)
+		this.#socket.off("arena:incoming-lock", this.#onIncomingLock)
+		this.#socket.off("arena:mini-missile", this.#onMiniMissile)
+		this.#socket.off("arena:mini-missile-ended", this.#onMiniMissileEnded)
+		this.#socket.off("arena:mini-missile-exploded", this.#onMiniMissileExploded)
+		this.#socket.off("arena:mini-missile-pickup", this.#onMiniMissilePickup)
 		this.#socket.off("arena:projectile", this.#onProjectile)
 		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
@@ -329,7 +358,25 @@ export class ArenaGame {
 	readonly #onKeyDown = (event: KeyboardEvent): void => {
 		this.#keys.add(event.code)
 		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
-		if (event.code === "KeyR" && this.#ammo < 28) this.#ammo = 28
+		if (
+			event.code === "KeyR" &&
+			this.#weaponKind === "arc-blaster" &&
+			this.#ammo < 28
+		)
+			this.#ammo = 28
+		if (event.code === "KeyE" && !event.repeat) {
+			this.#socket.emit("arena:collect-mini-missile")
+		}
+		if (
+			event.code === "KeyX" &&
+			!event.repeat &&
+			this.#weaponKind !== "arc-blaster"
+		) {
+			this.#socket.emit("arena:equip", {
+				ammo: 0,
+				weapon: "arc-blaster",
+			} satisfies EquipmentSnapshot)
+		}
 	}
 
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
@@ -391,6 +438,10 @@ export class ArenaGame {
 			this.#scene.remove(model.rig.root)
 		}
 		this.#remotePlayers.clear()
+		for (const missile of this.#missiles.values())
+			this.#scene.remove(missile.mesh)
+		this.#missiles.clear()
+		this.#incomingLocks = 0
 	}
 
 	readonly #onSpawn = (spawn: SpawnSnapshot): void => {
@@ -476,6 +527,7 @@ export class ArenaGame {
 					visorStartedAt: Date.now() / 1_000,
 					weaponsFree: false,
 					weaponsFreeWeight: 0,
+					weapon: snapshot.equippedWeapon,
 					yaw: 0,
 				}
 				this.#remotePlayers.set(snapshot.id, model)
@@ -549,6 +601,12 @@ export class ArenaGame {
 			}
 			model.sprinting = snapshot.sprinting
 			model.weaponsFree = snapshot.weaponsFree === true
+			model.weapon = snapshot.equippedWeapon
+			model.rig.weapon.scale.set(
+				model.weapon === "mini-missile" ? 1.22 : 1,
+				model.weapon === "mini-missile" ? 0.72 : 1,
+				model.weapon === "mini-missile" ? 1.4 : 1,
+			)
 			if (
 				isVisorExpression(snapshot.visorExpression) &&
 				Number.isFinite(snapshot.visorStartedAt)
@@ -649,6 +707,57 @@ export class ArenaGame {
 		this.#spawnGrenadeExplosion(explosion)
 	}
 
+	readonly #onEquipment = (equipment: EquipmentSnapshot): void => {
+		if (
+			(equipment.weapon !== "arc-blaster" &&
+				equipment.weapon !== "mini-missile") ||
+			!Number.isSafeInteger(equipment.ammo) ||
+			equipment.ammo < 0
+		)
+			return
+		this.#weaponKind = equipment.weapon
+		this.#ammo = equipment.ammo
+		this.#weapon.scale.set(
+			equipment.weapon === "mini-missile" ? 1.18 : 1,
+			equipment.weapon === "mini-missile" ? 0.78 : 1,
+			equipment.weapon === "mini-missile" ? 1.32 : 1,
+		)
+	}
+
+	readonly #onIncomingLock = (lock: IncomingLockSnapshot): void => {
+		if (!Number.isSafeInteger(lock.attackers) || lock.attackers < 0) return
+		this.#incomingLocks = lock.attackers
+	}
+
+	readonly #onMiniMissilePickup = (pickup: MiniMissilePickupSnapshot): void => {
+		if (
+			!Array.isArray(pickup.position) ||
+			pickup.position.length !== 3 ||
+			pickup.position.some((component) => !Number.isFinite(component))
+		)
+			return
+		this.#missilePickup.position.set(...pickup.position)
+		this.#missilePickup.visible = pickup.available
+	}
+
+	readonly #onMiniMissile = (missile: MiniMissileSnapshot): void => {
+		this.#applyMissileSnapshot(missile)
+	}
+
+	readonly #onMiniMissileEnded = (ended: MiniMissileEndedSnapshot): void => {
+		const missile = this.#missiles.get(ended.id)
+		if (missile === undefined) return
+		this.#scene.remove(missile.mesh)
+		this.#missiles.delete(ended.id)
+	}
+
+	readonly #onMiniMissileExploded = (
+		explosion: MiniMissileExplodedSnapshot,
+	): void => {
+		this.#onMiniMissileEnded({ id: explosion.id })
+		this.#spawnGrenadeExplosion(explosion)
+	}
+
 	readonly #onProjectile = (projectile: ProjectileSnapshot): void => {
 		const origin = new THREE.Vector3(...projectile.origin)
 		const direction = new THREE.Vector3(...projectile.direction)
@@ -668,6 +777,16 @@ export class ArenaGame {
 
 	readonly #onSnapshot = (snapshot: ArenaSnapshot): void => {
 		this.#drones.applySnapshot(snapshot)
+		const activeMissiles = new Set<number>()
+		for (const missile of snapshot.missiles) {
+			activeMissiles.add(missile.id)
+			this.#applyMissileSnapshot(missile)
+		}
+		for (const [id, missile] of this.#missiles) {
+			if (activeMissiles.has(id)) continue
+			this.#scene.remove(missile.mesh)
+			this.#missiles.delete(id)
+		}
 	}
 
 	#bindEvents(): void {
@@ -687,6 +806,12 @@ export class ArenaGame {
 		this.#socket.on("arena:drone-destroyed", this.#onDroneDestroyed)
 		this.#socket.on("arena:grenade", this.#onGrenade)
 		this.#socket.on("arena:grenade-exploded", this.#onGrenadeExploded)
+		this.#socket.on("arena:equipment", this.#onEquipment)
+		this.#socket.on("arena:incoming-lock", this.#onIncomingLock)
+		this.#socket.on("arena:mini-missile", this.#onMiniMissile)
+		this.#socket.on("arena:mini-missile-ended", this.#onMiniMissileEnded)
+		this.#socket.on("arena:mini-missile-exploded", this.#onMiniMissileExploded)
+		this.#socket.on("arena:mini-missile-pickup", this.#onMiniMissilePickup)
 		this.#socket.on("arena:projectile", this.#onProjectile)
 		this.#socket.on("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.on("arena:snapshot", this.#onSnapshot)
@@ -770,6 +895,33 @@ export class ArenaGame {
 			crystal.rotation.y = angle
 			this.#scene.add(crystal)
 		}
+
+		const pickupShell = new THREE.Mesh(
+			new THREE.CylinderGeometry(0.24, 0.34, 1.35, 10),
+			new THREE.MeshStandardMaterial({
+				color: "#435063",
+				emissive: "#51221b",
+				emissiveIntensity: 0.7,
+				metalness: 0.75,
+				roughness: 0.26,
+			}),
+		)
+		pickupShell.rotation.x = Math.PI / 2
+		const pickupBand = new THREE.Mesh(
+			new THREE.TorusGeometry(0.3, 0.055, 7, 16),
+			new THREE.MeshBasicMaterial({ color: "#ff7549" }),
+		)
+		pickupBand.rotation.x = Math.PI / 2
+		const pickupLight = new THREE.PointLight("#ff7549", 5, 8)
+		this.#missilePickup.add(pickupShell, pickupBand, pickupLight)
+		const [pickupX, pickupZ] = MINI_MISSILE_PICKUP_POSITION
+		this.#missilePickup.position.set(
+			pickupX,
+			this.#heightAt(pickupX, pickupZ) + 0.72,
+			pickupZ,
+		)
+		this.#missilePickup.rotation.z = Math.PI / 2
+		this.#scene.add(this.#missilePickup)
 
 		const ring = new THREE.Mesh(
 			new THREE.TorusGeometry(5.4, 0.26, 8, 48),
@@ -903,7 +1055,12 @@ export class ArenaGame {
 			this.#freeAim = false
 		}
 		this.#leftBumperHeld = freeAimPressed
-		if (gamepad.reload && !this.#rightBumperHeld) this.#ammo = 28
+		if (
+			gamepad.reload &&
+			!this.#rightBumperHeld &&
+			this.#weaponKind === "arc-blaster"
+		)
+			this.#ammo = 28
 		this.#rightBumperHeld = gamepad.reload
 		const lookSensitivity = this.#freeAim ? 1.15 : 2.7
 		this.#player.yaw -= this.#lookGamepad.x * delta * lookSensitivity
@@ -1030,32 +1187,43 @@ export class ArenaGame {
 			!this.#freeAim
 		)
 			return
-		this.#fireCooldown = 0.13
+		this.#fireCooldown = this.#weaponKind === "mini-missile" ? 0.72 : 0.13
 		this.#weaponsFreeUntil =
 			performance.now() / 1_000 + WEAPONS_FREE_COOLDOWN_SECONDS
-		this.#ammo -= 1
+		if (this.#weaponKind === "arc-blaster") this.#ammo -= 1
 		this.#camera.position.copy(this.#player.position)
 		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
 		this.#camera.updateMatrixWorld(true)
 		const origin = this.#weaponMuzzle.getWorldPosition(new THREE.Vector3())
-		this.#recoilState = addRecoilShot(this.#recoilState)
-		const direction = spreadDirection(
-			this.#getAimDirection(origin),
-			this.#recoilState.spreadRadians,
-		)
+		const aimDirection = this.#getAimDirection(origin)
 		this.#noiseTimer = 0.85
 		this.#weapon.position.z += 0.12
 		this.#shotSequence += 1
-		this.#recoilPulse += 1
-		this.#pendingShotIds.add(this.#shotSequence)
-		for (const shotId of this.#pendingShotIds) {
-			if (shotId < this.#shotSequence - 128) this.#pendingShotIds.delete(shotId)
+		if (this.#weaponKind === "mini-missile") {
+			this.#missileSequence += 1
+			this.#socket.emit("arena:fire-mini-missile", {
+				clientMissileId: this.#missileSequence,
+				direction: aimDirection.toArray(),
+				origin: origin.toArray(),
+			} satisfies MiniMissileIntent)
+		} else {
+			this.#recoilState = addRecoilShot(this.#recoilState)
+			const direction = spreadDirection(
+				aimDirection,
+				this.#recoilState.spreadRadians,
+			)
+			this.#recoilPulse += 1
+			this.#pendingShotIds.add(this.#shotSequence)
+			for (const shotId of this.#pendingShotIds) {
+				if (shotId < this.#shotSequence - 128)
+					this.#pendingShotIds.delete(shotId)
+			}
+			this.#socket.emit("arena:fire", {
+				clientShotId: this.#shotSequence,
+				direction: direction.toArray(),
+				origin: origin.toArray(),
+			} satisfies FireIntent)
 		}
-		this.#socket.emit("arena:fire", {
-			clientShotId: this.#shotSequence,
-			direction: direction.toArray(),
-			origin: origin.toArray(),
-		} satisfies FireIntent)
 	}
 
 	#throwGrenade(): void {
@@ -1129,6 +1297,73 @@ export class ArenaGame {
 			mesh,
 			radius: explosion.radius,
 		})
+	}
+
+	#applyMissileSnapshot(snapshot: MiniMissileSnapshot): void {
+		if (
+			!Number.isSafeInteger(snapshot.id) ||
+			!Array.isArray(snapshot.position) ||
+			!Array.isArray(snapshot.velocity) ||
+			snapshot.position.length !== 3 ||
+			snapshot.velocity.length !== 3 ||
+			[...snapshot.position, ...snapshot.velocity].some(
+				(component) => !Number.isFinite(component),
+			)
+		)
+			return
+		let missile = this.#missiles.get(snapshot.id)
+		if (missile === undefined) {
+			const mesh = new THREE.Group()
+			const body = new THREE.Mesh(
+				new THREE.CapsuleGeometry(0.075, 0.22, 3, 7),
+				new THREE.MeshStandardMaterial({
+					color: "#d7e1e3",
+					emissive: "#762f19",
+					emissiveIntensity: 0.9,
+					metalness: 0.7,
+					roughness: 0.25,
+				}),
+			)
+			body.rotation.x = Math.PI / 2
+			const exhaust = new THREE.Mesh(
+				new THREE.ConeGeometry(0.07, 0.24, 7),
+				new THREE.MeshBasicMaterial({ color: "#ff7b3c" }),
+			)
+			exhaust.position.z = 0.28
+			exhaust.rotation.x = -Math.PI / 2
+			const light = new THREE.PointLight("#ff6c35", 3.5, 4)
+			mesh.add(body, exhaust, light)
+			mesh.position.set(...snapshot.position)
+			this.#scene.add(mesh)
+			missile = {
+				id: snapshot.id,
+				mesh,
+				phase: snapshot.phase,
+				target: new THREE.Vector3(...snapshot.position),
+				velocity: new THREE.Vector3(...snapshot.velocity),
+			}
+			this.#missiles.set(snapshot.id, missile)
+		}
+		missile.phase = snapshot.phase
+		missile.target.set(...snapshot.position)
+		missile.velocity.set(...snapshot.velocity)
+	}
+
+	#updateMiniMissiles(delta: number): void {
+		const forward = new THREE.Vector3(0, 0, -1)
+		for (const missile of this.#missiles.values()) {
+			missile.target.addScaledVector(missile.velocity, delta)
+			missile.mesh.position.lerp(missile.target, Math.min(1, delta * 18))
+			if (missile.velocity.lengthSq() > 0.01) {
+				missile.mesh.quaternion.setFromUnitVectors(
+					forward,
+					missile.velocity.clone().normalize(),
+				)
+			}
+			const exhaust = missile.mesh.children[1]
+			if (exhaust !== undefined) exhaust.visible = missile.phase === "powered"
+		}
+		this.#missilePickup.rotation.y += delta * 1.8
 	}
 
 	#updateGrenades(delta: number): void {
@@ -1669,6 +1904,7 @@ export class ArenaGame {
 			hitMarkerClassification: this.#hitMarkerClassification,
 			hitMarkerSequence: this.#hitMarkerSequence,
 			hitMarkerVisible: performance.now() / 1_000 < this.#hitMarkerUntil,
+			incomingLocks: this.#incomingLocks,
 			drones: this.#drones.count,
 			jump: this.#player.jumps,
 			lockCountdown: Math.ceil(this.#targetEscapeRemaining),
@@ -1683,6 +1919,7 @@ export class ArenaGame {
 				Math.hypot(this.#player.velocity.x, this.#player.velocity.z) * 3.6,
 			),
 			targeting: this.#targetingState,
+			weapon: this.#weaponKind,
 		})
 	}
 
@@ -1707,6 +1944,7 @@ export class ArenaGame {
 		this.#damageEffects.update(delta)
 		this.#updateProjectiles(delta)
 		this.#updateGrenades(delta)
+		this.#updateMiniMissiles(delta)
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)
 		this.#updateTargeting(delta)

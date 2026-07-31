@@ -33,6 +33,7 @@ export type PlayerSnapshot = {
 	crouching: boolean
 	emote: PilotEmote | null
 	emoteStartedAt: number
+	equippedWeapon: WeaponKind
 	freeAim: boolean
 	id: string
 	jump: 0 | 1 | 2
@@ -50,7 +51,7 @@ export type PlayerSnapshot = {
 
 export type PlayerMoveSnapshot = Omit<
 	PlayerSnapshot,
-	"id" | "lifeSequence" | "recoilSequence" | "recoilStartedAt"
+	"equippedWeapon" | "id" | "lifeSequence" | "recoilSequence" | "recoilStartedAt"
 >
 
 export function nextAcceptedRecoilSignal(
@@ -80,8 +81,54 @@ export type DroneSnapshot = {
 
 export type ArenaSnapshot = {
 	drones: DroneSnapshot[]
+	missiles: MiniMissileSnapshot[]
 	sequence: number
 	serverTime: number
+}
+
+export type WeaponKind = "arc-blaster" | "mini-missile"
+
+export type MiniMissileIntent = {
+	clientMissileId: number
+	direction: Vector3Tuple
+	origin: Vector3Tuple
+}
+
+export type MiniMissilePhase = "falling" | "powered"
+
+export type MiniMissileSnapshot = {
+	id: number
+	ownerId: string
+	phase: MiniMissilePhase
+	position: Vector3Tuple
+	targetPlayerId: string | null
+	velocity: Vector3Tuple
+}
+
+export type MiniMissileEndedSnapshot = {
+	id: number
+}
+
+export type MiniMissileExplodedSnapshot = {
+	id: number
+	position: Vector3Tuple
+	radius: number
+}
+
+export type MiniMissilePickupSnapshot = {
+	available: boolean
+	ownerId: string | null
+	position: Vector3Tuple
+	respawnAt: number | null
+}
+
+export type EquipmentSnapshot = {
+	ammo: number
+	weapon: WeaponKind
+}
+
+export type IncomingLockSnapshot = {
+	attackers: number
 }
 
 export type FireIntent = {
@@ -105,7 +152,7 @@ export type DirectHitResult = {
 export type PlayerDamageImpact = {
 	direction: Vector3Tuple
 	position: Vector3Tuple
-	source: "grenade" | "kamikaze" | "projectile"
+	source: "grenade" | "kamikaze" | "mini-missile" | "projectile"
 }
 
 export type PlayerDamageSnapshot = PlayerDamageImpact & {
