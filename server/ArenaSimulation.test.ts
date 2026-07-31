@@ -1,5 +1,4 @@
-import assert from "node:assert/strict"
-import test from "node:test"
+import { expect, test } from "vitest"
 
 import type {
 	GrenadeExplodedSnapshot,
@@ -50,18 +49,17 @@ test("player projectiles damage another pilot across a simulation tick", () => {
 		endedProjectiles,
 	)
 
-	assert.equal(
+	expect(
 		simulation.fire("shooter", {
 			clientShotId: 1,
 			direction: [0, 0, -1],
 			origin: [0, 1.72, 0],
 		}),
-		true,
-	)
+	).toBe(true)
 	simulation.update(0.1)
 
-	assert.deepEqual(damage, [{ damage: 20, playerId: "target" }])
-	assert.deepEqual(endedProjectiles, [{ id: 1 }])
+	expect(damage).toEqual([{ damage: 20, playerId: "target" }])
+	expect(endedProjectiles).toEqual([{ id: 1 }])
 })
 
 test("grenades broadcast their flight and damage pilots when they explode", () => {
@@ -95,32 +93,32 @@ test("grenades broadcast their flight and damage pilots when they explode", () =
 		seed: 7_431_905,
 	})
 
-	assert.equal(
+	expect(
 		simulation.throwGrenade("thrower", {
 			clientGrenadeId: 1,
 			direction: [0, 1, 0],
 			origin: [0, -0.88, 0],
 		}),
-		true,
-	)
+	).toBe(true)
 	for (let index = 0; index < 23; index += 1) simulation.update(0.1)
 
-	assert.equal(grenadeSnapshots.length, 1)
-	assert.equal(grenadeSnapshots[0]?.ownerId, "thrower")
-	assert.equal(explosions.length, 1)
-	assert.equal(explosions[0]?.id, grenadeSnapshots[0]?.id)
-	assert.deepEqual(damage.map(({ playerId }) => playerId).sort(), [
+	expect(grenadeSnapshots).toHaveLength(1)
+	expect(grenadeSnapshots[0]?.ownerId).toBe("thrower")
+	expect(explosions).toHaveLength(1)
+	expect(explosions[0]?.id).toBe(grenadeSnapshots[0]?.id)
+	expect(damage.map(({ playerId }) => playerId).sort()).toEqual([
 		"target",
 		"thrower",
 	])
-	assert.ok(damage.every(({ damage: amount }) => amount > 0 && amount <= 120))
+	expect(
+		damage.every(({ damage: amount }) => amount > 0 && amount <= 120),
+	).toBe(true)
 })
 
 test("grenade damage drops by 20 for every meter from the blast center", () => {
-	assert.deepEqual(
+	expect(
 		[0, 0.99, 1, 1.99, 2, 3, 4, 5, 5.99, 6].map(grenadeDamageAtDistance),
-		[120, 120, 100, 100, 80, 60, 40, 20, 20, 0],
-	)
+	).toEqual([120, 120, 100, 100, 80, 60, 40, 20, 20, 0])
 })
 
 test("player projectiles cannot damage their owner", () => {
@@ -139,15 +137,14 @@ test("player projectiles cannot damage their owner", () => {
 		[],
 	)
 
-	assert.equal(
+	expect(
 		simulation.fire("shooter", {
 			clientShotId: 1,
 			direction: [0, 0, -1],
 			origin: [0, 1.72, 0],
 		}),
-		true,
-	)
+	).toBe(true)
 	simulation.update(0.01)
 
-	assert.deepEqual(damage, [])
+	expect(damage).toEqual([])
 })

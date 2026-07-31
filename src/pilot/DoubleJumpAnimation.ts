@@ -193,13 +193,12 @@ const aerialFollowThroughPose: DoubleJumpPose = {
 	rootY: 0,
 }
 
-const DOUBLE_JUMP_KEYFRAMES: ReadonlyArray<
-	readonly [number, DoubleJumpPose]
-> = [
-	[0, secondaryAnticipationPose],
-	[0.5, boostActionPose],
-	[1, aerialFollowThroughPose],
-]
+const DOUBLE_JUMP_KEYFRAMES: ReadonlyArray<readonly [number, DoubleJumpPose]> =
+	[
+		[0, secondaryAnticipationPose],
+		[0.5, boostActionPose],
+		[1, aerialFollowThroughPose],
+	]
 
 const DOUBLE_JUMP_KEYFRAME_LABELS = [
 	"secondary anticipation",

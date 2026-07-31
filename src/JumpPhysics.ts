@@ -39,8 +39,7 @@ export function isJumpGrounded(
 	groundHeight: number,
 ): boolean {
 	return (
-		state.positionY <=
-			groundHeight + JUMP_PHYSICS.groundContactTolerance &&
+		state.positionY <= groundHeight + JUMP_PHYSICS.groundContactTolerance &&
 		state.velocityY <= 0
 	)
 }

@@ -189,10 +189,7 @@ export function pointBlasterConstraint(
 				.invert()
 				.multiply(shoulderCorrection)
 				.multiply(currentShoulderWorld)
-			rig.rightShoulder.quaternion.slerp(
-				desiredShoulderLocal,
-				iterationWeight,
-			)
+			rig.rightShoulder.quaternion.slerp(desiredShoulderLocal, iterationWeight)
 		}
 	}
 }
