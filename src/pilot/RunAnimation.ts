@@ -1,6 +1,12 @@
 import * as THREE from "three"
 
-import { alignBlasterHand } from "./BlasterPose.ts"
+import {
+	applyPilotPose,
+	definePilotPose,
+	RUN_INFLUENCE,
+	type PilotAnimationLayer,
+	type PilotPose,
+} from "./PilotAnimation.ts"
 import type { PilotRig } from "./PilotModel.ts"
 
 export type RunDirection = "backward" | "forward" | "left" | "right"
@@ -112,6 +118,23 @@ const RUN_KEYFRAMES: ReadonlyArray<readonly [number, RunPose]> = [
 	[1, contactPose],
 ]
 
+const RUN_KEYFRAME_LABELS = [
+	"contact L",
+	"passing L",
+	"push L",
+	"flight L",
+	"contact R",
+	"passing R",
+	"push R",
+	"flight R",
+	"loop",
+] as const
+
+export const RUN_KEYFRAME_MARKERS = RUN_KEYFRAMES.map(([progress], index) => ({
+	label: RUN_KEYFRAME_LABELS[index] ?? `pose ${index + 1}`,
+	progress,
+}))
+
 function blend(from: number, to: number, amount: number): number {
 	return from + (to - from) * amount
 }
@@ -161,20 +184,96 @@ function sampleRunPose(progress: number): RunPose {
 	}
 }
 
-function applyLegPose(
-	rig: PilotRig,
-	side: "left" | "right",
-	pose: LegPose,
+export function sampleRunAnimationPose(
+	time: number,
 	intensity: number,
-): void {
-	const legRig = side === "left" ? rig.leftLeg : rig.rightLeg
-	const kneeRig = side === "left" ? rig.leftKnee : rig.rightKnee
-	const footRig = side === "left" ? rig.leftFoot : rig.rightFoot
-	const toeRig = side === "left" ? rig.leftToe : rig.rightToe
-	legRig.rotation.x = pose.hip * intensity
-	kneeRig.rotation.x = pose.knee * intensity
-	footRig.rotation.x = pose.foot * intensity
-	toeRig.rotation.x = pose.toe * intensity
+	direction: RunDirection,
+): PilotPose {
+	const directionSign = direction === "backward" ? -1 : 1
+	const progress = (time * 11 * directionSign) / (Math.PI * 2)
+	const pose = sampleRunPose(progress)
+	const strafe = direction === "left" ? -1 : direction === "right" ? 1 : 0
+	const forward =
+		direction === "forward" ? 1 : direction === "backward" ? -1 : 0
+	return definePilotPose({
+		body: {
+			position: { y: pose.bodyY * intensity },
+			rotation: {
+				x: -forward * 0.1 * intensity,
+				y: pose.bodyYaw * intensity,
+				z: -strafe * 0.13 * intensity,
+			},
+		},
+		head: {
+			rotation: {
+				y: -pose.bodyYaw * 0.34 * intensity,
+				z: strafe * 0.04 * intensity,
+			},
+		},
+		hips: {
+			position: { y: 1.72 + pose.hipsY * intensity },
+			rotation: {
+				x: -0.55 * intensity,
+				y: pose.hipsYaw * intensity,
+				z: (pose.hipsRoll - strafe * 0.08) * intensity,
+			},
+		},
+		leftArm: { rotation: { x: pose.leftArm.swing * intensity } },
+		leftElbow: { rotation: { x: pose.leftArm.elbow * intensity } },
+		leftFoot: { rotation: { x: pose.leftLeg.foot * intensity } },
+		leftKnee: { rotation: { x: pose.leftLeg.knee * intensity } },
+		leftLeg: {
+			rotation: {
+				x: pose.leftLeg.hip * intensity,
+				z: strafe * 0.16 * intensity,
+			},
+		},
+		leftShoulder: {
+			rotation: { y: -0.6 * intensity, z: -0.6 * intensity },
+		},
+		leftToe: { rotation: { x: pose.leftLeg.toe * intensity } },
+		neck: {
+			rotation: {
+				x: 0.55 * intensity,
+				y: -pose.bodyYaw * 0.24 * intensity,
+				z: strafe * 0.03 * intensity,
+			},
+		},
+		rightArm: {
+			rotation: { x: pose.rightArm.swing * 0.72 * intensity },
+		},
+		rightElbow: {
+			rotation: { x: pose.rightArm.elbow * 0.88 * intensity },
+		},
+		rightFoot: { rotation: { x: pose.rightLeg.foot * intensity } },
+		rightHand: { rotation: { x: -pose.bodyY * 0.4 * intensity } },
+		rightKnee: { rotation: { x: pose.rightLeg.knee * intensity } },
+		rightLeg: {
+			rotation: {
+				x: pose.rightLeg.hip * intensity,
+				z: strafe * 0.16 * intensity,
+			},
+		},
+		rightShoulder: {
+			rotation: { y: 0.6 * intensity, z: 0.2 * intensity },
+		},
+		rightToe: { rotation: { x: pose.rightLeg.toe * intensity } },
+		root: { rotation: { z: -strafe * 0.045 * intensity } },
+	})
+}
+
+export function runAnimationLayer(
+	time: number,
+	intensity: number,
+	direction: RunDirection,
+): PilotAnimationLayer {
+	return {
+		fadeSeconds: 0.12,
+		id: `locomotion:${direction}`,
+		influence: RUN_INFLUENCE,
+		mode: "override",
+		pose: sampleRunAnimationPose(time, intensity, direction),
+	}
 }
 
 export function applyRunAnimation(
@@ -183,47 +282,5 @@ export function applyRunAnimation(
 	intensity: number,
 	direction: RunDirection,
 ): void {
-	const directionSign = direction === "backward" ? -1 : 1
-	const progress = (time * 11 * directionSign) / (Math.PI * 2)
-	const pose = sampleRunPose(progress)
-	const strafe = direction === "left" ? -1 : direction === "right" ? 1 : 0
-	const forward =
-		direction === "forward" ? 1 : direction === "backward" ? -1 : 0
-
-	applyLegPose(rig, "left", pose.leftLeg, intensity)
-	applyLegPose(rig, "right", pose.rightLeg, intensity)
-	rig.leftArm.rotation.x = pose.leftArm.swing * intensity
-	rig.rightArm.rotation.x = pose.rightArm.swing * 0.72 * intensity
-	rig.leftElbow.rotation.x = pose.leftArm.elbow * intensity
-	rig.rightElbow.rotation.x = pose.rightArm.elbow * 0.88 * intensity
-
-	rig.hips.position.y = 1.72 + pose.hipsY * intensity
-	rig.hips.rotation.y = pose.hipsYaw * intensity
-	rig.hips.rotation.z = (pose.hipsRoll - strafe * 0.08) * intensity
-	rig.hips.rotation.x = -0.55 * intensity
-	rig.body.position.y = pose.bodyY * intensity
-	rig.body.rotation.x = -forward * 0.1 * intensity
-	rig.body.rotation.y = pose.bodyYaw * intensity
-	rig.body.rotation.z = -strafe * 0.13 * intensity
-
-	// The shoulders arrive a fraction behind the pelvis, while the head
-	// stabilizes toward travel direction instead of following the pendulum.
-	rig.leftShoulder.rotation.y = -0.6 * intensity
-	rig.leftShoulder.rotation.z = -0.6 * intensity
-	rig.rightShoulder.rotation.y = 0.6 * intensity
-	rig.rightShoulder.rotation.z = 0.2 * intensity
-	// rig.rightShoulder.rotation.x = -pose.bodyYaw * 0.3 * intensity
-	rig.neck.rotation.y = -pose.bodyYaw * 0.24 * intensity
-	rig.neck.rotation.x = 0.55 * intensity
-	rig.head.rotation.y = -pose.bodyYaw * 0.34 * intensity
-	rig.neck.rotation.z = strafe * 0.03 * intensity
-	rig.head.rotation.z = strafe * 0.04 * intensity
-	rig.root.rotation.z = -strafe * 0.045 * intensity
-
-	if (strafe !== 0) {
-		rig.leftLeg.rotation.z = strafe * 0.16 * intensity
-		rig.rightLeg.rotation.z = strafe * 0.16 * intensity
-	}
-
-	alignBlasterHand(rig, -pose.bodyY * 0.4 * intensity)
+	applyPilotPose(rig, sampleRunAnimationPose(time, intensity, direction))
 }

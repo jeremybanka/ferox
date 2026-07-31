@@ -39,7 +39,7 @@ const CLIPS: Readonly<Record<VisorExpression, VisorClip>> = {
 	angry: { frames: [6, 7], framesPerSecond: 5, loop: true },
 	boot: { frames: [28, 29, 30, 31], framesPerSecond: 9, loop: false },
 	defeated: { frames: [12, 13], framesPerSecond: 3, loop: true },
-	focus: { frames: [4, 5], framesPerSecond: 3, loop: true },
+	focus: { frames: [4, 4, 5], framesPerSecond: 0.25, loop: true },
 	happy: { frames: [8, 9], framesPerSecond: 4, loop: true },
 	hurt: { frames: [20, 21, 22, 23], framesPerSecond: 12, loop: false },
 	neutral: { frames: [0], framesPerSecond: 1, loop: true },
@@ -71,9 +71,7 @@ function setFrameUvs(geometry: THREE.BufferGeometry, frame: number): void {
 		(column * FACE_SIZE + EYE_SAFE_AREA.x + EYE_SAFE_AREA.width) / atlasWidth
 	const top = 1 - (row * FACE_SIZE + EYE_SAFE_AREA.y) / atlasHeight
 	const bottom =
-		1 -
-		(row * FACE_SIZE + EYE_SAFE_AREA.y + EYE_SAFE_AREA.height) /
-			atlasHeight
+		1 - (row * FACE_SIZE + EYE_SAFE_AREA.y + EYE_SAFE_AREA.height) / atlasHeight
 	const uvs = geometry.getAttribute("uv")
 	uvs.setXY(0, left, top)
 	uvs.setXY(1, right, top)
