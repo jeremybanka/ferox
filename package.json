@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "tsc --noEmit && vite build",
+		"build": "pnpm visor:generate && tsc --noEmit && vite build",
 		"check": "vp check --no-fmt && tsc --noEmit && eslint . && lasertag check",
 		"dev": "node scripts/dev.ts",
 		"dev:client": "vite",
@@ -13,7 +13,9 @@
 		"lint": "vp lint && eslint . && lasertag check",
 		"preview": "vite preview",
 		"spellcheck": "cspell .",
-		"test": "node --test server/*.test.ts"
+		"test": "node --test server/*.test.ts",
+		"visor:generate": "node scripts/generate-visor-atlas.ts",
+		"visor:watch": "node scripts/watch-visor-atlas.ts"
 	},
 	"dependencies": {
 		"atom.io": "0.50.1",

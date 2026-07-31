@@ -5,10 +5,12 @@ import type { UserKey } from "atom.io/realtime"
 import { Server, type Socket as IoSocket } from "socket.io"
 
 import {
+	isPilotEmote,
 	isVisorExpression,
 	type CombatSnapshot,
 	type FireIntent,
 	type GrenadeIntent,
+	type PilotEmote,
 	type VisorExpression,
 } from "../src/arena-protocol.ts"
 import {
@@ -19,7 +21,10 @@ import {
 import { ArenaSimulation } from "./ArenaSimulation.ts"
 
 type PlayerSnapshot = {
+	aimDirection: [number, number, number]
 	crouching: boolean
+	emote: PilotEmote | null
+	emoteStartedAt: number
 	freeAim: boolean
 	id: string
 	jump: 0 | 1 | 2
@@ -29,6 +34,7 @@ type PlayerSnapshot = {
 	velocity: [number, number, number]
 	visorExpression: VisorExpression
 	visorStartedAt: number
+	weaponsFree: boolean
 }
 
 type MovePayload = Omit<PlayerSnapshot, "id">
@@ -151,7 +157,10 @@ realtime(
 		playerHealth.set(socketId, 100)
 		playerScores.set(socketId, 0)
 		players.set(socketId, {
+			aimDirection: [-Math.sin(spawnYaw), 0, -Math.cos(spawnYaw)],
 			crouching: false,
+			emote: null,
+			emoteStartedAt: 0,
 			freeAim: false,
 			id: socketId,
 			jump: 0,
@@ -161,6 +170,7 @@ realtime(
 			velocity: [0, 0, 0],
 			visorExpression: "boot",
 			visorStartedAt: Date.now() / 1_000,
+			weaponsFree: false,
 		})
 		const onReady = (): void => {
 			gameSocket.emit("arena:spawn", spawnPayload)
@@ -173,17 +183,25 @@ realtime(
 
 		const onMove = (payload: MovePayload): void => {
 			if (
+				!Array.isArray(payload.aimDirection) ||
 				!Array.isArray(payload.position) ||
 				!Array.isArray(payload.rotation) ||
 				!Array.isArray(payload.velocity) ||
+				typeof payload.weaponsFree !== "boolean" ||
+				(payload.emote !== null && !isPilotEmote(payload.emote)) ||
+				!Number.isFinite(payload.emoteStartedAt) ||
+				payload.aimDirection.length !== 3 ||
 				payload.position.length !== 3 ||
 				payload.rotation.length !== 2 ||
 				payload.velocity.length !== 3 ||
 				!isVisorExpression(payload.visorExpression) ||
 				!Number.isFinite(payload.visorStartedAt) ||
-				[...payload.position, ...payload.rotation, ...payload.velocity].some(
-					(value) => !Number.isFinite(value),
-				)
+				[
+					...payload.aimDirection,
+					...payload.position,
+					...payload.rotation,
+					...payload.velocity,
+				].some((value) => !Number.isFinite(value))
 			)
 				return
 			players.set(socketId, { ...payload, id: socketId })

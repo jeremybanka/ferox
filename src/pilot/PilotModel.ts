@@ -38,6 +38,7 @@ export type PilotRig = {
 	leftLeg: THREE.Group
 	leftShoulder: THREE.Group
 	leftToe: THREE.Group
+	muzzle: THREE.Group
 	neck: THREE.Group
 	rightArm: THREE.Group
 	rightElbow: THREE.Group
@@ -125,7 +126,10 @@ function joint(radius: number, materials: PilotMaterials): THREE.Mesh {
 	return mesh
 }
 
-function makeArm(side: -1 | 1, materials: PilotMaterials): {
+function makeArm(
+	side: -1 | 1,
+	materials: PilotMaterials,
+): {
 	arm: THREE.Group
 	elbow: THREE.Group
 	hand: THREE.Group
@@ -175,7 +179,10 @@ function makeArm(side: -1 | 1, materials: PilotMaterials): {
 	return { arm, elbow, hand, shoulder }
 }
 
-function makeLeg(side: -1 | 1, materials: PilotMaterials): {
+function makeLeg(
+	side: -1 | 1,
+	materials: PilotMaterials,
+): {
 	foot: THREE.Group
 	knee: THREE.Group
 	leg: THREE.Group
@@ -210,16 +217,18 @@ function makeLeg(side: -1 | 1, materials: PilotMaterials): {
 	const boot = box(0.5, 0.28, 0.73, materials.armor)
 	boot.position.set(0, -0.06, -0.11)
 	const toe = new THREE.Group()
-	toe.position.set(0, -0.1, -0.28)
-	const toePlate = box(0.52, 0.2, 0.32, materials.armor)
-	toePlate.position.z = -0.16
+	toe.position.set(0, -0.05, -0.5)
+	const toePlate = box(0.52, 0.28, 0.32, materials.armor)
 	toe.add(toePlate)
 	foot.add(boot, toe)
 	knee.add(foot)
 	return { foot, knee, leg, toe }
 }
 
-function makeWeapon(materials: PilotMaterials): THREE.Group {
+function makeWeapon(materials: PilotMaterials): {
+	muzzle: THREE.Group
+	weapon: THREE.Group
+} {
 	const weapon = new THREE.Group()
 	weapon.name = "blaster trigger attachment"
 	const triggerPoint = new THREE.Vector3(0, -0.1, 0.04)
@@ -241,7 +250,11 @@ function makeWeapon(materials: PilotMaterials): THREE.Group {
 	for (const part of weapon.children) {
 		part.position.sub(triggerPoint)
 	}
-	return weapon
+	const muzzle = new THREE.Group()
+	muzzle.name = "blaster muzzle"
+	muzzle.position.set(0, 0.1, -0.975)
+	weapon.add(muzzle)
+	return { muzzle, weapon }
 }
 
 export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
@@ -301,14 +314,14 @@ export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
 	const jaw = box(0.58, 0.22, 0.5, materials.armorDark)
 	jaw.position.set(0, -0.26, -0.08)
 	const visor = box(0.68, 0.34, 0.12, materials.visor)
-	visor.position.set(0, 0.06, -0.46)
+	visor.position.set(0, 0.06, -0.415)
 	visor.rotation.x = -0.08
 	const visorDisplay = new VisorDisplay({
 		background: theme.visorBackground,
 		glow: theme.visorGlow,
 		pixels: theme.visorPixels,
 	})
-	visorDisplay.group.position.set(0, 0.06, -0.525)
+	visorDisplay.group.position.set(0, 0.06, -0.48)
 	visorDisplay.group.rotation.x = -0.08
 	const visorBrow = box(0.75, 0.1, 0.28, materials.armorDark)
 	visorBrow.position.set(0, 0.22, -0.43)
@@ -323,7 +336,7 @@ export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
 	const rightLeg = makeLeg(1, materials)
 	hips.add(leftLeg.leg, rightLeg.leg)
 
-	const weapon = makeWeapon(materials)
+	const { muzzle, weapon } = makeWeapon(materials)
 	const weaponMount = new THREE.Group()
 	weaponMount.name = "right index-finger weapon socket"
 	weaponMount.position.set(0, -0.08, -0.16)
@@ -351,6 +364,7 @@ export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
 		leftLeg: leftLeg.leg,
 		leftShoulder: left.shoulder,
 		leftToe: leftLeg.toe,
+		muzzle,
 		neck,
 		rightArm: right.arm,
 		rightElbow: right.elbow,

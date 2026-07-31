@@ -194,6 +194,10 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>RELOAD</span>
 						<kbd>RMB / LT</kbd>
 						<span>GRENADE</span>
+						<kbd>D-PAD ↑</kbd>
+						<span>WAVE</span>
+						<kbd>◉</kbd>
+						<span>GAMEPAD READY</span>
 					</control-hint>
 				</game-footer>
 			</game-hud>
