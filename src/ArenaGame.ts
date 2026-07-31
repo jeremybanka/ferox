@@ -48,9 +48,9 @@ import {
 	HIT_MARKER_DURATION_SECONDS,
 	MINI_MISSILE_PICKUP_POSITION,
 	MINI_MISSILE_PICKUP_RADIUS,
+	PLAYER_CROUCH_BASE_SPEED_LIMIT,
 	PLAYER_SLIDE_DUST_BUDGET,
 	PLAYER_SLIDE_DUST_LIFETIME_SECONDS,
-	PLAYER_SLIDE_SPEED_THRESHOLD,
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
@@ -123,6 +123,7 @@ import {
 	type ReloadState,
 } from "./ReloadState.ts"
 import { stepSlideDust } from "./SlideDustState.ts"
+import { sampleTerrainGradient, stepSlidePhysics } from "./SlidePhysics.ts"
 import {
 	airborneMomentumLayer,
 	airborneVelocityLayer,
@@ -1337,10 +1338,26 @@ export class ArenaGame {
 		)
 		const crouch =
 			this.#keys.has("ControlLeft") || this.#keys.has("KeyC") || gamepad.crouch
+		const previousEye = this.#crouching
+			? PILOT_CROUCH_EYE_HEIGHT
+			: PILOT_STANDING_EYE_HEIGHT
+		const terrainHeight = this.#heightAt(
+			this.#player.position.x,
+			this.#player.position.z,
+		)
+		const wasGrounded = isJumpGrounded(
+			{
+				positionY: this.#player.position.y,
+				velocityY: this.#player.velocity.y,
+			},
+			terrainHeight + previousEye,
+		)
 		this.#crouching = crouch
 		const eye = crouch ? PILOT_CROUCH_EYE_HEIGHT : PILOT_STANDING_EYE_HEIGHT
-		const ground =
-			this.#heightAt(this.#player.position.x, this.#player.position.z) + eye
+		if (wasGrounded && eye !== previousEye) {
+			this.#player.position.y += eye - previousEye
+		}
+		const ground = terrainHeight + eye
 		const grounded = isJumpGrounded(
 			{
 				positionY: this.#player.position.y,
@@ -1348,9 +1365,26 @@ export class ArenaGame {
 			},
 			ground,
 		)
-		const speed = Math.hypot(this.#player.velocity.x, this.#player.velocity.z)
-		this.#slide = grounded && crouch && speed > PLAYER_SLIDE_SPEED_THRESHOLD
-		this.#updateLocalSlideDust(delta)
+		const slideStep = stepSlidePhysics(
+			{
+				sliding: this.#slide,
+				x: this.#player.velocity.x,
+				z: this.#player.velocity.z,
+			},
+			{
+				crouching: crouch,
+				delta,
+				grounded,
+				terrainGradient: sampleTerrainGradient(
+					(x, z) => this.#heightAt(x, z),
+					this.#player.position.x,
+					this.#player.position.z,
+				),
+			},
+		)
+		this.#player.velocity.x = slideStep.x
+		this.#player.velocity.z = slideStep.z
+		this.#slide = slideStep.sliding
 
 		const keyboardX =
 			Number(this.#keys.has("KeyD")) - Number(this.#keys.has("KeyA"))
@@ -1365,7 +1399,8 @@ export class ArenaGame {
 			this.#keys.has("ShiftLeft") ||
 			this.#keys.has("ShiftRight") ||
 			gamepad.sprint
-		this.#sprinting = grounded && sprint && input.lengthSq() > 0 && !this.#slide
+		this.#sprinting =
+			grounded && !crouch && sprint && input.lengthSq() > 0 && !this.#slide
 		if (grounded && input.lengthSq() > 0 && !this.#slide) {
 			const forward = new THREE.Vector3(
 				-Math.sin(this.#player.yaw),
@@ -1381,12 +1416,12 @@ export class ArenaGame {
 				.multiplyScalar(-input.y)
 				.add(right.multiplyScalar(input.x))
 				.normalize()
-			const acceleration = sprint ? 31 : 23
+			const acceleration = crouch ? 18 : sprint ? 31 : 23
 			this.#player.velocity.addScaledVector(force, acceleration * delta)
 		}
 		const friction = grounded
 			? this.#slide
-				? 1.05
+				? 0
 				: input.lengthSq() > 0
 					? 1.7
 					: 8.5
@@ -1394,7 +1429,13 @@ export class ArenaGame {
 		const damping = Math.exp(-friction * delta)
 		this.#player.velocity.x *= damping
 		this.#player.velocity.z *= damping
-		const cap = sprint || this.#slide ? 14.8 : 9.2
+		const cap = this.#slide
+			? 14.8
+			: crouch
+				? PLAYER_CROUCH_BASE_SPEED_LIMIT
+				: this.#sprinting
+					? 14.8
+					: 9.2
 		const horizontalSpeed = Math.hypot(
 			this.#player.velocity.x,
 			this.#player.velocity.z,
@@ -1435,6 +1476,8 @@ export class ArenaGame {
 		)
 		this.#jumpQueued = false
 		this.#player.jumps = jumpStep.jumpCount
+		if (jumpStep.impulse !== null) this.#slide = false
+		this.#updateLocalSlideDust(delta)
 		this.#player.position.set(nextX, jumpStep.positionY, nextZ)
 		this.#player.velocity.y = jumpStep.velocityY
 		const trigger = gamepad.fire || this.#keys.has("KeyF")

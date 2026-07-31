@@ -82,7 +82,11 @@ export function stepJumpPhysics(
 	if (!groundedBefore) {
 		velocityY -= JUMP_PHYSICS.gravity * options.delta
 	}
-	positionY += velocityY * options.delta
+	if (groundedBefore && impulse === null) {
+		positionY = options.groundAfter
+	} else {
+		positionY += velocityY * options.delta
+	}
 
 	const landedAfter = positionY < options.groundAfter
 	const landed = landedBefore || landedAfter
