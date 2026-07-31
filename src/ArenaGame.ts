@@ -352,6 +352,7 @@ export class ArenaGame {
 			flash.material.dispose()
 		}
 		this.#muzzleFlashes.length = 0
+		for (const id of this.#missiles.keys()) this.#removeMiniMissileVisual(id)
 		this.#renderer.dispose()
 	}
 
@@ -438,9 +439,7 @@ export class ArenaGame {
 			this.#scene.remove(model.rig.root)
 		}
 		this.#remotePlayers.clear()
-		for (const missile of this.#missiles.values())
-			this.#scene.remove(missile.mesh)
-		this.#missiles.clear()
+		for (const id of this.#missiles.keys()) this.#removeMiniMissileVisual(id)
 		this.#incomingLocks = 0
 	}
 
@@ -745,10 +744,7 @@ export class ArenaGame {
 	}
 
 	readonly #onMiniMissileEnded = (ended: MiniMissileEndedSnapshot): void => {
-		const missile = this.#missiles.get(ended.id)
-		if (missile === undefined) return
-		this.#scene.remove(missile.mesh)
-		this.#missiles.delete(ended.id)
+		this.#removeMiniMissileVisual(ended.id)
 	}
 
 	readonly #onMiniMissileExploded = (
@@ -782,10 +778,9 @@ export class ArenaGame {
 			activeMissiles.add(missile.id)
 			this.#applyMissileSnapshot(missile)
 		}
-		for (const [id, missile] of this.#missiles) {
+		for (const id of this.#missiles.keys()) {
 			if (activeMissiles.has(id)) continue
-			this.#scene.remove(missile.mesh)
-			this.#missiles.delete(id)
+			this.#removeMiniMissileVisual(id)
 		}
 	}
 
@@ -1347,6 +1342,21 @@ export class ArenaGame {
 		missile.phase = snapshot.phase
 		missile.target.set(...snapshot.position)
 		missile.velocity.set(...snapshot.velocity)
+	}
+
+	#removeMiniMissileVisual(id: number): void {
+		const missile = this.#missiles.get(id)
+		if (missile === undefined) return
+		this.#scene.remove(missile.mesh)
+		missile.mesh.traverse((object) => {
+			if (!(object instanceof THREE.Mesh)) return
+			object.geometry.dispose()
+			const materials = Array.isArray(object.material)
+				? object.material
+				: [object.material]
+			for (const material of materials) material.dispose()
+		})
+		this.#missiles.delete(id)
 	}
 
 	#updateMiniMissiles(delta: number): void {

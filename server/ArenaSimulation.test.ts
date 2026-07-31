@@ -493,9 +493,14 @@ test("mini-missiles acquire the nearest other pilot only within range", () => {
 		}),
 		true,
 	)
-	assert.equal(harness.missiles[0]?.targetPlayerId, "near")
 	assert.deepEqual(harness.locks, [
 		{ attackerId: "owner", locked: true, targetId: "near" },
+	])
+	assert.deepEqual(Object.keys(harness.missiles[0] ?? {}).sort(), [
+		"id",
+		"phase",
+		"position",
+		"velocity",
 	])
 })
 
@@ -515,6 +520,10 @@ test("mini-missiles reject replayed intent IDs and do not lock out-of-range pilo
 		},
 	]
 	const harness = makeMissileHarness(players)
+	assert.equal(
+		harness.simulation.fireMiniMissile("owner", null as never),
+		false,
+	)
 	const intent = {
 		clientMissileId: 4,
 		direction: [0, 1, 0] as [number, number, number],
@@ -523,7 +532,6 @@ test("mini-missiles reject replayed intent IDs and do not lock out-of-range pilo
 	assert.equal(harness.simulation.fireMiniMissile("owner", intent), true)
 	assert.equal(harness.simulation.fireMiniMissile("owner", intent), false)
 	assert.equal(harness.missiles.length, 1)
-	assert.equal(harness.missiles[0]?.targetPlayerId, null)
 	assert.deepEqual(harness.locks, [])
 })
 
@@ -558,6 +566,38 @@ test("mini-missile steering is turn-rate limited", () => {
 	assert.ok(turn <= MINI_MISSILE_MAX_TURN_RATE * 0.1 + 0.02)
 })
 
+test("mini-missiles begin a limited turn toward a target directly behind", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 20, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 20, 10],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = makeMissileHarness(players)
+	harness.simulation.fireMiniMissile("owner", {
+		clientMissileId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 20, 0],
+	})
+	harness.simulation.update(0.1)
+
+	const velocity = harness.simulation.snapshot().missiles[0]?.velocity
+	assert.ok(velocity !== undefined)
+	const turn = new THREE.Vector3(0, 0, -1).angleTo(
+		new THREE.Vector3(...velocity),
+	)
+	assert.ok(turn > 0)
+	assert.ok(turn <= MINI_MISSILE_MAX_TURN_RATE * 0.1 + Number.EPSILON)
+})
+
 test("target loss clears the lock and leaves the missile unguided", () => {
 	const players: SimulationPlayer[] = [
 		{
@@ -582,7 +622,7 @@ test("target loss clears the lock and leaves the missile unguided", () => {
 	players.splice(1, 1)
 	harness.simulation.update(0.1)
 
-	assert.equal(harness.simulation.snapshot().missiles[0]?.targetPlayerId, null)
+	assert.equal(harness.simulation.snapshot().missiles.length, 1)
 	assert.deepEqual(harness.locks, [
 		{ attackerId: "owner", locked: true, targetId: "target" },
 		{ attackerId: "owner", locked: false, targetId: "target" },

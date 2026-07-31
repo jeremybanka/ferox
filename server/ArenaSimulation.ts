@@ -299,6 +299,8 @@ export class ArenaSimulation {
 		const player = players.find((candidate) => candidate.id === playerId)
 		if (player === undefined) return false
 		if (
+			intent === null ||
+			typeof intent !== "object" ||
 			!this.#isVector(intent.origin) ||
 			!this.#isVector(intent.direction) ||
 			!Number.isSafeInteger(intent.clientMissileId)
@@ -612,12 +614,15 @@ export class ArenaSimulation {
 					const current = missile.velocity.clone().normalize()
 					const angle = current.angleTo(desired)
 					if (angle > Number.EPSILON) {
-						current
-							.lerp(
-								desired,
-								Math.min(1, (MINI_MISSILE_MAX_TURN_RATE * delta) / angle),
-							)
-							.normalize()
+						const fullTurn = new THREE.Quaternion().setFromUnitVectors(
+							current,
+							desired,
+						)
+						const limitedTurn = new THREE.Quaternion().slerp(
+							fullTurn,
+							Math.min(1, (MINI_MISSILE_MAX_TURN_RATE * delta) / angle),
+						)
+						current.applyQuaternion(limitedTurn).normalize()
 					}
 					missile.velocity.copy(current).multiplyScalar(MINI_MISSILE_SPEED)
 				}
@@ -740,10 +745,8 @@ export class ArenaSimulation {
 	#snapshotMissile(missile: MiniMissileState): MiniMissileSnapshot {
 		return {
 			id: missile.id,
-			ownerId: missile.ownerId,
 			phase: missile.phase,
 			position: missile.position.toArray(),
-			targetPlayerId: missile.targetPlayerId,
 			velocity: missile.velocity.toArray(),
 		}
 	}

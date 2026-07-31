@@ -98,10 +98,8 @@ export type MiniMissilePhase = "falling" | "powered"
 
 export type MiniMissileSnapshot = {
 	id: number
-	ownerId: string
 	phase: MiniMissilePhase
 	position: Vector3Tuple
-	targetPlayerId: string | null
 	velocity: Vector3Tuple
 }
 
