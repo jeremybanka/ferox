@@ -10,6 +10,7 @@ import {
 	PLAYER_POPULATION_CAP,
 } from "./game-constants.ts"
 import { arenaSeedAtom, gameHudStateAtom } from "./game-state.ts"
+import { gunDefinition } from "./guns/GunDefinitions.ts"
 
 type AppShellProps = {
 	socket: Socket
@@ -24,6 +25,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 	const seed = useO(arenaSeedAtom)
 	const setHud = useI(gameHudStateAtom)
 	const incomingThreats = hud.incomingMissileLocks + hud.incomingStandardLocks
+	const gun = gunDefinition(hud.weapon)
 	const incomingThreatKind =
 		hud.incomingMissileLocks > 0 && hud.incomingStandardLocks > 0
 			? "combined"
@@ -227,15 +229,13 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</player-vitals>
 
 				<weapon-status>
-					<small>
-						{hud.weapon === "mini-missile" ? "MINI-MISSILE" : "ARC BLASTER"}
-					</small>
+					<small>{gun.name}</small>
 					<ammo-count>
 						<strong>{String(hud.ammo).padStart(2, "0")}</strong>
-						<span>/ {hud.weapon === "mini-missile" ? "06" : "28"}</span>
+						<span>/ {String(gun.magazineSize).padStart(2, "0")}</span>
 					</ammo-count>
 					<em>
-						{hud.weapon === "mini-missile"
+						{gun.fire.type === "guided-missile"
 							? hud.ammo === 0
 								? "ORDNANCE SPENT"
 								: "GUIDANCE ARMED • X TO DROP"

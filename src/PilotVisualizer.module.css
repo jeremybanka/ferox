@@ -53,6 +53,7 @@ pilot-visualizer.class {
 
 	> animation-stack {
 		position: absolute;
+		z-index: 1;
 		bottom: 14.9rem;
 		left: clamp(1.2rem, 4vw, 4rem);
 		display: grid;

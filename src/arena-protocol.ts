@@ -1,3 +1,5 @@
+import { isGunId, type GunId } from "./guns/GunDefinitions.ts"
+
 export type Vector3Tuple = [number, number, number]
 
 export const VISOR_EXPRESSIONS = [
@@ -90,7 +92,7 @@ export type ArenaSnapshot = {
 	serverTime: number
 }
 
-export type WeaponKind = "arc-blaster" | "mini-missile"
+export type WeaponKind = GunId
 
 export type MiniMissileTargetRef =
 	| { id: number; kind: "drone" }
@@ -175,6 +177,35 @@ export type MiniMissilePickupSnapshot = {
 export type EquipmentSnapshot = {
 	ammo: number
 	weapon: WeaponKind
+}
+
+export type EquipIntent = {
+	weapon: WeaponKind
+}
+
+export function isEquipIntent(value: unknown): value is EquipIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 1 &&
+		Object.hasOwn(record, "weapon") &&
+		isGunId(record["weapon"])
+	)
+}
+
+export function isEquipmentSnapshot(
+	value: unknown,
+): value is EquipmentSnapshot {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).every((key) => key === "ammo" || key === "weapon") &&
+		Object.hasOwn(record, "ammo") &&
+		Object.hasOwn(record, "weapon") &&
+		isGunId(record["weapon"]) &&
+		Number.isSafeInteger(record["ammo"]) &&
+		(record["ammo"] as number) >= 0
+	)
 }
 
 export type IncomingLockSnapshot = {

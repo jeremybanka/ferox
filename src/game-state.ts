@@ -1,6 +1,7 @@
 import { atom } from "atom.io"
 
 import { ARENA_SEED } from "./game-constants.ts"
+import { DEFAULT_GUN_ID, gunDefinition } from "./guns/GunDefinitions.ts"
 import type { WeaponKind } from "./arena-protocol.ts"
 
 export type GameHudState = {
@@ -31,7 +32,7 @@ export type GameHudState = {
 export const gameHudStateAtom = atom<GameHudState>({
 	key: "gameHudState",
 	default: {
-		ammo: 28,
+		ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
 		connection: "connecting",
 		drones: 0,
 		health: 100,
@@ -52,7 +53,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 		sliding: false,
 		speed: 0,
 		targeting: "idle",
-		weapon: "arc-blaster",
+		weapon: DEFAULT_GUN_ID,
 	},
 })
 

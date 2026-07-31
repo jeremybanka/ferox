@@ -6,10 +6,10 @@ import type {
 	WeaponKind,
 } from "../src/arena-protocol.ts"
 import {
-	MINI_MISSILE_AMMO,
 	MINI_MISSILE_PICKUP_RADIUS,
 	MINI_MISSILE_PICKUP_RESPAWN_SECONDS,
 } from "../src/game-constants.ts"
+import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
 
 export type LockUpdate = {
 	playerId: string
@@ -30,7 +30,7 @@ export class MiniMissileArmory {
 	}
 
 	connect(playerId: string): EquipmentSnapshot {
-		this.#weapons.set(playerId, "arc-blaster")
+		this.#weapons.set(playerId, DEFAULT_GUN_ID)
 		return this.equipment(playerId)
 	}
 
@@ -50,7 +50,7 @@ export class MiniMissileArmory {
 		if (distance > MINI_MISSILE_PICKUP_RADIUS) return false
 		this.#available = false
 		this.#ownerId = playerId
-		this.#ammo = MINI_MISSILE_AMMO
+		this.#ammo = gunDefinition("mini-missile").magazineSize
 		this.#respawnAt = null
 		this.#weapons.set(playerId, "mini-missile")
 		return true
@@ -81,7 +81,10 @@ export class MiniMissileArmory {
 
 	restoreMiniMissile(playerId: string): void {
 		if (this.#ownerId === playerId)
-			this.#ammo = Math.min(MINI_MISSILE_AMMO, this.#ammo + 1)
+			this.#ammo = Math.min(
+				gunDefinition("mini-missile").magazineSize,
+				this.#ammo + 1,
+			)
 	}
 
 	releaseIfSpent(
@@ -102,7 +105,7 @@ export class MiniMissileArmory {
 		this.#ammo = 0
 		this.#available = false
 		this.#respawnAt = now + MINI_MISSILE_PICKUP_RESPAWN_SECONDS * 1_000
-		this.#weapons.set(playerId, "arc-blaster")
+		this.#weapons.set(playerId, DEFAULT_GUN_ID)
 		return true
 	}
 
@@ -114,12 +117,12 @@ export class MiniMissileArmory {
 	}
 
 	equipment(playerId: string): EquipmentSnapshot {
-		const weapon = this.#weapons.get(playerId) ?? "arc-blaster"
+		const weapon = this.#weapons.get(playerId) ?? DEFAULT_GUN_ID
 		return {
 			ammo:
 				weapon === "mini-missile" && this.#ownerId === playerId
 					? this.#ammo
-					: 28,
+					: gunDefinition(weapon).magazineSize,
 			weapon,
 		}
 	}

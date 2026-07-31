@@ -6,7 +6,7 @@ import type {
 	CombatSnapshot,
 	DirectHitResult,
 	DroneDestroyedSnapshot,
-	EquipmentSnapshot,
+	EquipIntent,
 	FireIntent,
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
@@ -29,7 +29,7 @@ import type {
 	VisorExpression,
 	WeaponKind,
 } from "./arena-protocol.ts"
-import { isVisorExpression } from "./arena-protocol.ts"
+import { isEquipmentSnapshot, isVisorExpression } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
 import { DamageParticleBurst } from "./DamageParticles.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
@@ -53,6 +53,17 @@ import {
 	isPickupKeyboardInput,
 } from "./game-input.ts"
 import type { GameHudState } from "./game-state.ts"
+import {
+	DEFAULT_GUN_ID,
+	gunDefinition,
+	gunPresentation,
+	isGunId,
+} from "./guns/GunDefinitions.ts"
+import {
+	applyGunPresentation,
+	reconcileMountedGun,
+	type GunModel,
+} from "./guns/GunModel.ts"
 import { isJumpGrounded, JUMP_PHYSICS, stepJumpPhysics } from "./JumpPhysics.ts"
 import {
 	addRecoilShot,
@@ -106,7 +117,12 @@ import {
 } from "./pilot/DirectionalConstraints.ts"
 import { idleAnimationLayer } from "./pilot/IdleAnimation.ts"
 import { PILOT_MODEL_SCALE } from "./pilot/PilotDimensions.ts"
-import { createPilotModel, type PilotRig } from "./pilot/PilotModel.ts"
+import {
+	createPilotModel,
+	disposePilotModel,
+	setPilotGun,
+	type PilotRig,
+} from "./pilot/PilotModel.ts"
 import {
 	FULL_BODY_INFLUENCE,
 	PilotAnimationMixer,
@@ -250,8 +266,9 @@ export class ArenaGame {
 	readonly #seed: number
 	readonly #socket: Socket
 	readonly #weapon = new THREE.Group()
-	readonly #weaponMuzzle = new THREE.Group()
-	#ammo = 28
+	#gunModel: GunModel | null = null
+	#weaponMuzzle = new THREE.Group()
+	#ammo = gunDefinition(DEFAULT_GUN_ID).magazineSize
 	#acquiredTargetId: SmartTargetRef | null = null
 	#animationFrame = 0
 	#bumperTapTargetId: SmartTargetRef | null = null
@@ -308,7 +325,7 @@ export class ArenaGame {
 	#waveStartedAt = 0
 	#waveUntil = 0
 	#weaponsFreeUntil = 0
-	#weaponKind: WeaponKind = "arc-blaster"
+	#weaponKind: WeaponKind = DEFAULT_GUN_ID
 
 	constructor(options: ArenaGameOptions) {
 		this.#canvas = options.canvas
@@ -383,29 +400,39 @@ export class ArenaGame {
 			flash.material.dispose()
 		}
 		this.#muzzleFlashes.length = 0
+		if (this.#gunModel !== null) {
+			this.#weapon.remove(this.#gunModel.root)
+			this.#gunModel.dispose()
+			this.#gunModel = null
+		}
 		for (const id of this.#missiles.keys()) this.#removeMiniMissileVisual(id)
+		for (const model of this.#remotePlayers.values()) {
+			this.#scene.remove(model.rig.root)
+			disposePilotModel(model.rig)
+		}
+		this.#remotePlayers.clear()
 		this.#renderer.dispose()
 	}
 
 	readonly #onKeyDown = (event: KeyboardEvent): void => {
 		this.#keys.add(event.code)
 		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
+		const gun = gunDefinition(this.#weaponKind)
 		if (
 			event.code === "KeyR" &&
-			this.#weaponKind === "arc-blaster" &&
-			this.#ammo < 28
+			gun.capabilities.reload &&
+			this.#ammo < gun.magazineSize
 		)
-			this.#ammo = 28
+			this.#ammo = gun.magazineSize
 		if (isPickupKeyboardInput(event.code, event.repeat)) this.#requestPickup()
 		if (
 			event.code === "KeyX" &&
 			!event.repeat &&
-			this.#weaponKind !== "arc-blaster"
+			this.#weaponKind !== DEFAULT_GUN_ID
 		) {
 			this.#socket.emit("arena:equip", {
-				ammo: 0,
-				weapon: "arc-blaster",
-			} satisfies EquipmentSnapshot)
+				weapon: DEFAULT_GUN_ID,
+			} satisfies EquipIntent)
 		}
 	}
 
@@ -518,11 +545,12 @@ export class ArenaGame {
 		const active = new Set<string>()
 		for (const snapshot of players) {
 			if (snapshot.id === this.#socket.id) continue
+			if (!isGunId(snapshot.equippedWeapon)) continue
 			active.add(snapshot.id)
 			let model = this.#remotePlayers.get(snapshot.id)
 			let isNew = false
 			if (model === undefined) {
-				const rig = createPilotModel()
+				const rig = createPilotModel(undefined, snapshot.equippedWeapon)
 				rig.root.scale.setScalar(PILOT_MODEL_SCALE)
 				const marker = new THREE.Mesh(
 					REMOTE_MARKER_GEOMETRY,
@@ -638,11 +666,7 @@ export class ArenaGame {
 			model.sprinting = snapshot.sprinting
 			model.weaponsFree = snapshot.weaponsFree === true
 			model.weapon = snapshot.equippedWeapon
-			model.rig.weapon.scale.set(
-				model.weapon === "mini-missile" ? 1.22 : 1,
-				model.weapon === "mini-missile" ? 0.72 : 1,
-				model.weapon === "mini-missile" ? 1.4 : 1,
-			)
+			setPilotGun(model.rig, model.weapon)
 			if (
 				isVisorExpression(snapshot.visorExpression) &&
 				Number.isFinite(snapshot.visorStartedAt)
@@ -655,6 +679,7 @@ export class ArenaGame {
 			if (!active.has(id)) {
 				this.#clearDamageEffects(id)
 				this.#scene.remove(model.rig.root)
+				disposePilotModel(model.rig)
 				this.#remotePlayers.delete(id)
 			}
 		}
@@ -743,21 +768,11 @@ export class ArenaGame {
 		this.#spawnGrenadeExplosion(explosion)
 	}
 
-	readonly #onEquipment = (equipment: EquipmentSnapshot): void => {
-		if (
-			(equipment.weapon !== "arc-blaster" &&
-				equipment.weapon !== "mini-missile") ||
-			!Number.isSafeInteger(equipment.ammo) ||
-			equipment.ammo < 0
-		)
-			return
+	readonly #onEquipment = (equipment: unknown): void => {
+		if (!isEquipmentSnapshot(equipment)) return
 		this.#weaponKind = equipment.weapon
 		this.#ammo = equipment.ammo
-		this.#weapon.scale.set(
-			equipment.weapon === "mini-missile" ? 1.18 : 1,
-			equipment.weapon === "mini-missile" ? 0.78 : 1,
-			equipment.weapon === "mini-missile" ? 1.32 : 1,
-		)
+		this.#setLocalGunModel(equipment.weapon)
 	}
 
 	readonly #onIncomingLock = (lock: IncomingLockSnapshot): void => {
@@ -990,33 +1005,17 @@ export class ArenaGame {
 	}
 
 	#buildWeapon(): void {
-		const dark = new THREE.MeshStandardMaterial({
-			color: "#26303b",
-			metalness: 0.72,
-			roughness: 0.3,
-		})
-		const accent = new THREE.MeshStandardMaterial({
-			color: "#e86d3f",
-			emissive: "#a72819",
-			emissiveIntensity: 0.8,
-			metalness: 0.45,
-			roughness: 0.28,
-		})
-		const body = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.62), dark)
-		const barrel = new THREE.Mesh(
-			new THREE.CylinderGeometry(0.07, 0.09, 0.46, 10),
-			accent,
-		)
-		barrel.rotation.x = Math.PI / 2
-		barrel.position.set(0, 0.03, -0.47)
-		const sight = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.12), accent)
-		sight.position.set(0, 0.14, -0.1)
-		this.#weaponMuzzle.name = "first-person blaster muzzle"
-		this.#weaponMuzzle.position.set(0, 0.03, -0.7)
-		this.#weapon.add(body, barrel, sight, this.#weaponMuzzle)
-		this.#weapon.position.set(0.35, -0.31, -0.7)
+		this.#weapon.name = "first-person equipped gun"
+		this.#setLocalGunModel(this.#weaponKind)
 		this.#camera.add(this.#weapon)
 		this.#scene.add(this.#camera)
+	}
+
+	#setLocalGunModel(gunId: WeaponKind): void {
+		const reconciled = reconcileMountedGun(this.#weapon, this.#gunModel, gunId)
+		this.#gunModel = reconciled.model
+		this.#weaponMuzzle = reconciled.model.muzzle
+		applyGunPresentation(this.#weapon, gunId, "firstPerson")
 	}
 
 	#pollGamepad(): {
@@ -1111,9 +1110,9 @@ export class ArenaGame {
 		if (
 			gamepad.reload &&
 			!this.#rightBumperHeld &&
-			this.#weaponKind === "arc-blaster"
+			gunDefinition(this.#weaponKind).capabilities.reload
 		)
-			this.#ammo = 28
+			this.#ammo = gunDefinition(this.#weaponKind).magazineSize
 		this.#rightBumperHeld = gamepad.reload
 		const lookSensitivity = this.#freeAim ? 1.15 : 2.7
 		this.#player.yaw -= this.#lookGamepad.x * delta * lookSensitivity
@@ -1247,10 +1246,11 @@ export class ArenaGame {
 			!this.#freeAim
 		)
 			return
-		this.#fireCooldown = this.#weaponKind === "mini-missile" ? 0.72 : 0.13
+		const gun = gunDefinition(this.#weaponKind)
+		this.#fireCooldown = gun.fire.clientCooldownSeconds
 		this.#weaponsFreeUntil =
 			performance.now() / 1_000 + WEAPONS_FREE_COOLDOWN_SECONDS
-		if (this.#weaponKind === "arc-blaster") this.#ammo -= 1
+		if (gun.fire.type === "projectile") this.#ammo -= 1
 		this.#camera.position.copy(this.#player.position)
 		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
 		this.#camera.updateMatrixWorld(true)
@@ -1259,7 +1259,7 @@ export class ArenaGame {
 		this.#noiseTimer = 0.85
 		this.#weapon.position.z += 0.12
 		this.#shotSequence += 1
-		if (this.#weaponKind === "mini-missile") {
+		if (gun.fire.type === "guided-missile") {
 			this.#missileSequence += 1
 			this.#socket.emit("arena:fire-mini-missile", {
 				clientMissileId: this.#missileSequence,
@@ -1597,14 +1597,15 @@ export class ArenaGame {
 		const speed = Math.hypot(this.#player.velocity.x, this.#player.velocity.z)
 		const bob =
 			Math.sin(performance.now() * 0.012) * Math.min(speed * 0.002, 0.025)
+		const presentation = gunPresentation(this.#weaponKind, "firstPerson")
 		this.#weapon.position.y = THREE.MathUtils.lerp(
 			this.#weapon.position.y,
-			-0.31 + bob,
+			presentation.position[1] + bob,
 			delta * 8,
 		)
 		this.#weapon.position.z = THREE.MathUtils.lerp(
 			this.#weapon.position.z,
-			-0.7,
+			presentation.position[2],
 			delta * 18,
 		)
 		const targetFov = speed > 10 ? 83 : 76
@@ -1693,9 +1694,10 @@ export class ArenaGame {
 	}
 
 	#syncStandardLockIntent(): void {
+		const gun = gunDefinition(this.#weaponKind)
 		const active =
 			this.#connected &&
-			this.#weaponKind === "arc-blaster" &&
+			gun.fire.type === "projectile" &&
 			this.#targetingState === "locked" &&
 			this.#lockedTargetId?.kind === "pilot"
 		if (active === this.#standardLockReported) return
@@ -1777,13 +1779,18 @@ export class ArenaGame {
 	}
 
 	#updateWeaponPosture(delta: number): void {
-		const desired = new THREE.Quaternion()
+		const presentation = gunPresentation(this.#weaponKind, "firstPerson")
+		const desired = new THREE.Quaternion().setFromEuler(
+			new THREE.Euler(...presentation.rotation),
+		)
 		const targetPosition =
 			this.#acquiredTargetId === null
 				? null
 				: this.#getSmartTargetPosition(this.#acquiredTargetId)
 		if (this.#sprinting) {
-			desired.setFromEuler(new THREE.Euler(1.05, 0, 0))
+			desired.multiply(
+				new THREE.Quaternion().setFromEuler(new THREE.Euler(1.05, 0, 0)),
+			)
 		} else if (targetPosition !== null) {
 			const localTarget = this.#camera.worldToLocal(targetPosition)
 			const direction = localTarget.sub(this.#weapon.position).normalize()
@@ -2030,7 +2037,8 @@ export class ArenaGame {
 			lockCountdown: Math.ceil(this.#targetEscapeRemaining),
 			players: this.#remotePlayers.size + 1,
 			pickup:
-				this.#weaponKind === "mini-missile" || this.#pickupOwnerId !== null
+				gunDefinition(this.#weaponKind).capabilities.pickup ||
+				this.#pickupOwnerId !== null
 					? "carried"
 					: pickupNearby
 						? "nearby"

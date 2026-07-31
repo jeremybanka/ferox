@@ -1,5 +1,13 @@
 import * as THREE from "three"
 
+import { DEFAULT_GUN_ID, type GunId } from "../guns/GunDefinitions.ts"
+import {
+	applyGunPresentation,
+	createGunModel,
+	reconcileMountedGun,
+	type GunModel,
+	type GunPalette,
+} from "../guns/GunModel.ts"
 import {
 	PILOT_RIG_HEAD_OFFSET,
 	PILOT_RIG_NECK_HEIGHT,
@@ -50,6 +58,9 @@ export type PilotRig = {
 	leftToe: THREE.Group
 	muzzle: THREE.Group
 	neck: THREE.Group
+	gunId: GunId
+	gunModel: GunModel
+	gunPalette: GunPalette
 	rightArm: THREE.Group
 	rightElbow: THREE.Group
 	rightFoot: THREE.Group
@@ -70,7 +81,6 @@ type PilotMaterials = {
 	armorDark: THREE.MeshStandardMaterial
 	undersuit: THREE.MeshStandardMaterial
 	visor: THREE.MeshStandardMaterial
-	weapon: THREE.MeshStandardMaterial
 }
 
 const materialCache = new WeakMap<PilotTheme, PilotMaterials>()
@@ -107,11 +117,6 @@ function getPilotMaterials(theme: PilotTheme): PilotMaterials {
 			emissiveIntensity: 0.72,
 			metalness: 0.48,
 			roughness: 0.12,
-		}),
-		weapon: new THREE.MeshStandardMaterial({
-			color: theme.weapon,
-			metalness: 0.75,
-			roughness: 0.36,
 		}),
 	} satisfies PilotMaterials
 	materialCache.set(theme, materials)
@@ -235,39 +240,10 @@ function makeLeg(
 	return { foot, knee, leg, toe }
 }
 
-function makeWeapon(materials: PilotMaterials): {
-	muzzle: THREE.Group
-	weapon: THREE.Group
-} {
-	const weapon = new THREE.Group()
-	weapon.name = "blaster trigger attachment"
-	const triggerPoint = new THREE.Vector3(0, -0.1, 0.04)
-	const body = box(0.25, 0.26, 0.88, materials.weapon)
-	const shroud = box(0.31, 0.18, 0.48, materials.weapon)
-	shroud.position.set(0, 0.06, -0.17)
-	const barrel = new THREE.Mesh(
-		new THREE.CylinderGeometry(0.075, 0.095, 0.55, 8),
-		materials.weapon,
-	)
-	barrel.rotation.x = Math.PI / 2
-	barrel.position.z = -0.66
-	const grip = box(0.15, 0.38, 0.2, materials.weapon)
-	grip.position.set(0, -0.25, 0.12)
-	grip.rotation.x = -0.22
-	const trigger = box(0.045, 0.1, 0.05, materials.weapon)
-	trigger.position.copy(triggerPoint)
-	weapon.add(body, shroud, barrel, grip, trigger) // , emitter
-	for (const part of weapon.children) {
-		part.position.sub(triggerPoint)
-	}
-	const muzzle = new THREE.Group()
-	muzzle.name = "blaster muzzle"
-	muzzle.position.set(0, 0.1, -0.975)
-	weapon.add(muzzle)
-	return { muzzle, weapon }
-}
-
-export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
+export function createPilotModel(
+	theme = DEFAULT_PILOT_THEME,
+	gunId: GunId = DEFAULT_GUN_ID,
+): PilotRig {
 	const materials = getPilotMaterials(theme)
 	const root = new THREE.Group()
 	root.name = "FEROX pilot"
@@ -355,11 +331,20 @@ export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
 	const rightLeg = makeLeg(1, materials)
 	hips.add(leftLeg.leg, rightLeg.leg)
 
-	const { muzzle, weapon } = makeWeapon(materials)
 	const weaponMount = new THREE.Group()
 	weaponMount.name = "right index-finger weapon socket"
-	weaponMount.position.set(0, -0.08, -0.16)
-	weaponMount.rotation.x = -Math.PI / 2
+	// Animation layers target this stable group. Gun swaps replace only its visual
+	// child so recoil, aim, and future reload layers keep the same joint contract.
+	const weapon = new THREE.Group()
+	weapon.name = "equipped gun motion"
+	const gunPalette = {
+		accent: theme.accent,
+		accentEmissive: theme.accentEmissive,
+		body: theme.weapon,
+	} satisfies GunPalette
+	const gunModel = createGunModel(gunId, gunPalette)
+	weapon.add(gunModel.root)
+	applyGunPresentation(weaponMount, gunId, "thirdPerson")
 	weaponMount.add(weapon)
 	// Trigger and index-finger sockets coincide. Aim and recoil are wrist motion.
 	right.hand.add(weaponMount)
@@ -383,7 +368,10 @@ export function createPilotModel(theme = DEFAULT_PILOT_THEME): PilotRig {
 		leftLeg: leftLeg.leg,
 		leftShoulder: left.shoulder,
 		leftToe: leftLeg.toe,
-		muzzle,
+		gunId,
+		gunModel,
+		gunPalette,
+		muzzle: gunModel.muzzle,
 		neck,
 		rightArm: right.arm,
 		rightElbow: right.elbow,
@@ -425,8 +413,28 @@ export function resetPilotPose(rig: PilotRig): void {
 	rig.rightFoot.rotation.set(0, 0, 0)
 	rig.leftToe.rotation.set(0, 0, 0)
 	rig.rightToe.rotation.set(0, 0, 0)
-	rig.weaponMount.position.set(0, -0.08, -0.16)
-	rig.weaponMount.rotation.set(-Math.PI / 2, 0, 0)
+	applyGunPresentation(rig.weaponMount, rig.gunId, "thirdPerson")
 	rig.weapon.position.set(0, 0, 0)
 	rig.weapon.rotation.set(0, 0, 0)
+	rig.weapon.scale.set(1, 1, 1)
+}
+
+export function setPilotGun(rig: PilotRig, gunId: GunId): boolean {
+	const reconciled = reconcileMountedGun(
+		rig.weapon,
+		rig.gunModel,
+		gunId,
+		rig.gunPalette,
+	)
+	if (!reconciled.changed) return false
+	rig.gunModel = reconciled.model
+	rig.gunId = gunId
+	rig.muzzle = reconciled.model.muzzle
+	applyGunPresentation(rig.weaponMount, gunId, "thirdPerson")
+	return true
+}
+
+export function disposePilotModel(rig: PilotRig): void {
+	rig.weapon.remove(rig.gunModel.root)
+	rig.gunModel.dispose()
 }

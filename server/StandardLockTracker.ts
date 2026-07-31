@@ -8,11 +8,12 @@ import {
 	STANDARD_LOCK_MAX_RANGE,
 } from "../src/game-constants.ts"
 import { pilotTorsoTargetFromEye } from "../src/pilot-targeting.ts"
+import { gunDefinition, type GunId } from "../src/guns/GunDefinitions.ts"
 
 export type StandardLockPilotState = {
 	aimDirection: Vector3Tuple
 	crouching: boolean
-	equippedWeapon: "arc-blaster" | "mini-missile"
+	equippedWeapon: GunId
 	freeAim: boolean
 	id: string
 	position: Vector3Tuple
@@ -33,7 +34,7 @@ export function selectValidatedStandardLockTarget(
 	pilots: ReadonlyMap<string, StandardLockPilotState>,
 ): string | null {
 	if (
-		attacker.equippedWeapon !== "arc-blaster" ||
+		gunDefinition(attacker.equippedWeapon).fire.type !== "projectile" ||
 		attacker.freeAim ||
 		attacker.sprinting
 	)

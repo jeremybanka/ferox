@@ -75,3 +75,39 @@ test("disconnect releases inventory and clears attacker and victim lock state", 
 		weapon: "arc-blaster",
 	})
 })
+
+test("depletion waits for active missiles before resetting to the default gun", () => {
+	const armory = new MiniMissileArmory([0, 0, 0])
+	armory.connect("holder")
+	armory.collect("holder", [0, 0, 0])
+	for (let shot = 0; shot < MINI_MISSILE_AMMO; shot += 1) {
+		assert.equal(armory.consumeMiniMissile("holder"), true)
+	}
+	assert.equal(armory.releaseIfSpent("holder", 1, 1_000), false)
+	assert.deepEqual(armory.equipment("holder"), {
+		ammo: 0,
+		weapon: "mini-missile",
+	})
+	assert.equal(armory.releaseIfSpent("holder", 0, 1_001), true)
+	assert.deepEqual(armory.equipment("holder"), {
+		ammo: 28,
+		weapon: "arc-blaster",
+	})
+})
+
+test("death release and reconnect both restore a clean blaster loadout", () => {
+	const armory = new MiniMissileArmory([0, 0, 0])
+	armory.connect("pilot")
+	armory.collect("pilot", [0, 0, 0])
+	assert.equal(armory.release("pilot", 2_000), true)
+	assert.deepEqual(armory.equipment("pilot"), {
+		ammo: 28,
+		weapon: "arc-blaster",
+	})
+
+	armory.disconnect("pilot", 2_001)
+	assert.deepEqual(armory.connect("pilot"), {
+		ammo: 28,
+		weapon: "arc-blaster",
+	})
+})

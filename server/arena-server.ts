@@ -7,10 +7,10 @@ import { Server, type Socket as IoSocket } from "socket.io"
 import {
 	isPilotEmote,
 	isNewMiniMissilePickupIntent,
+	isEquipIntent,
 	isVisorExpression,
 	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
-	type EquipmentSnapshot,
 	type FireIntent,
 	type GrenadeIntent,
 	type MiniMissileIntent,
@@ -26,6 +26,7 @@ import {
 	PLAYER_SPAWN_ORDER,
 	PLAYER_SPAWN_POINTS,
 } from "../src/game-constants.ts"
+import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
 import { MiniMissileArmory, type LockUpdate } from "./MiniMissileArmory.ts"
 import {
@@ -242,7 +243,7 @@ realtime(
 			crouching: false,
 			emote: null,
 			emoteStartedAt: 0,
-			equippedWeapon: "arc-blaster",
+			equippedWeapon: DEFAULT_GUN_ID,
 			freeAim: false,
 			id: socketId,
 			jump: 0,
@@ -320,10 +321,11 @@ realtime(
 			emitStandardLockUpdates(standardLocks.reconcile(players))
 		}
 		const onFire = (payload: FireIntent): void => {
-			if (armory.equipment(socketId).weapon !== "arc-blaster") return
+			const equipped = gunDefinition(armory.equipment(socketId).weapon)
+			if (equipped.fire.type !== "projectile") return
 			const now = performance.now()
 			const previous = lastPlayerFire.get(socketId) ?? Number.NEGATIVE_INFINITY
-			if (now - previous < 110) return
+			if (now - previous < equipped.fire.serverMinimumIntervalMs) return
 			if (!simulation.fire(socketId, payload)) return
 			lastPlayerFire.set(socketId, now)
 			const player = players.get(socketId)
@@ -335,10 +337,16 @@ realtime(
 			}
 		}
 		const onFireMiniMissile = (payload: MiniMissileIntent): void => {
+			const equipped = gunDefinition(armory.equipment(socketId).weapon)
+			if (equipped.fire.type !== "guided-missile") return
 			const now = performance.now()
 			const previous =
 				lastPlayerMissile.get(socketId) ?? Number.NEGATIVE_INFINITY
-			if (now - previous < 650 || !armory.consumeMiniMissile(socketId)) return
+			if (
+				now - previous < equipped.fire.serverMinimumIntervalMs ||
+				!armory.consumeMiniMissile(socketId)
+			)
+				return
 			if (!simulation.fireMiniMissile(socketId, payload)) {
 				armory.restoreMiniMissile(socketId)
 				return
@@ -357,13 +365,8 @@ realtime(
 			emitPickup()
 			io.emit("arena:players", [...players.values()])
 		}
-		const onEquip = (payload: EquipmentSnapshot): void => {
-			if (
-				payload === null ||
-				typeof payload !== "object" ||
-				(payload.weapon !== "arc-blaster" && payload.weapon !== "mini-missile")
-			)
-				return
+		const onEquip = (payload: unknown): void => {
+			if (!isEquipIntent(payload)) return
 			const previousWeapon = armory.equipment(socketId).weapon
 			if (!armory.equip(socketId, payload.weapon, Date.now())) return
 			if (previousWeapon !== payload.weapon)
