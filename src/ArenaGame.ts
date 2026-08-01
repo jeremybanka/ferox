@@ -36,6 +36,8 @@ import {
 	isVisorExpression,
 } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
+import { GameAudio } from "./audio/GameAudio.ts"
+import type { GameAudioDefinition } from "./audio/GameAudioDefinitions.ts"
 import { DamageParticleBurst } from "./DamageParticles.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
 import {
@@ -166,6 +168,7 @@ type SpawnSnapshot = {
 }
 
 type ArenaGameOptions = {
+	audioDefinition?: GameAudioDefinition
 	canvas: HTMLCanvasElement
 	onHud: (state: GameHudState) => void
 	seed: number
@@ -258,6 +261,7 @@ const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
 })
 
 export class ArenaGame {
+	readonly #audio: GameAudio
 	readonly #canvas: HTMLCanvasElement
 	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 280)
 	readonly #drones: DroneBotSystem
@@ -289,6 +293,8 @@ export class ArenaGame {
 	#ammo = gunDefinition(DEFAULT_GUN_ID).magazineSize
 	#acquiredTargetId: SmartTargetRef | null = null
 	#animationFrame = 0
+	#audioJumpImpulse: 1 | 2 | null = null
+	#audioLandingImpact = 0
 	#bumperTapTargetId: SmartTargetRef | null = null
 	#connected = false
 	#crouching = false
@@ -358,6 +364,10 @@ export class ArenaGame {
 	]
 
 	constructor(options: ArenaGameOptions) {
+		this.#audio =
+			options.audioDefinition === undefined
+				? new GameAudio(options.seed)
+				: new GameAudio(options.seed, options.audioDefinition)
 		this.#canvas = options.canvas
 		this.#onHud = options.onHud
 		this.#seed = options.seed
@@ -386,12 +396,14 @@ export class ArenaGame {
 	}
 
 	start(): void {
+		void this.#audio.start()
 		this.#canvas.focus()
 		void this.#canvas.requestPointerLock().catch(() => undefined)
 	}
 
 	dispose(): void {
 		this.#disposed = true
+		this.#audio.dispose()
 		cancelAnimationFrame(this.#animationFrame)
 		window.removeEventListener("keydown", this.#onKeyDown)
 		window.removeEventListener("keyup", this.#onKeyUp)
@@ -742,6 +754,9 @@ export class ArenaGame {
 		this.#hitMarkerSequence += 1
 		this.#hitMarkerUntil =
 			performance.now() / 1_000 + HIT_MARKER_DURATION_SECONDS
+		this.#audio.playEffect("hit-confirm", {
+			gain: result.classification === "headshot" ? 1.2 : 0.86,
+		})
 	}
 
 	readonly #onPlayerDamaged = (event: PlayerDamageSnapshot): void => {
@@ -754,6 +769,10 @@ export class ArenaGame {
 			)
 			this.#localDamageTracker = observed.tracker
 			if (!observed.accepted) return
+			this.#audio.playEffect("damage", {
+				gain: event.fatal ? 1.25 : 0.75 + Math.min(0.35, event.damage / 100),
+			})
+			this.#noiseTimer = 0.85
 			this.#visorHurtUntil = performance.now() / 1_000 + 0.45
 			const localEffectPosition = this.#camera.position
 				.clone()
@@ -806,6 +825,9 @@ export class ArenaGame {
 
 	readonly #onEquipment = (equipment: unknown): void => {
 		if (!isNewEquipmentSnapshot(equipment, this.#equipmentRevision)) return
+		const previousRevision = this.#equipmentRevision
+		const previousActiveSlot = this.#activeSlot
+		const previouslyCarriedMissile = this.#equipmentSlots[1] !== null
 		this.#equipmentRevision = equipment.revision
 		this.#activeSlot = equipment.activeSlot
 		this.#equipmentSlots = [
@@ -816,10 +838,20 @@ export class ArenaGame {
 		this.#weaponKind = active.weapon
 		this.#ammo = active.ammo
 		this.#setLocalGunModel(active.weapon)
+		if (previousRevision >= 0) {
+			if (!previouslyCarriedMissile && equipment.slots[1] !== null) {
+				this.#audio.playEffect("pickup")
+			} else if (previousActiveSlot !== equipment.activeSlot) {
+				this.#audio.playEffect("weapon-switch")
+			}
+		}
 	}
 
 	readonly #onIncomingLock = (lock: IncomingLockSnapshot): void => {
 		if (!Number.isSafeInteger(lock.attackers) || lock.attackers < 0) return
+		if (lock.attackers > this.#incomingMissileLocks) {
+			this.#audio.playEffect("target-lock", { gain: 1.15 })
+		}
 		this.#incomingMissileLocks = lock.attackers
 	}
 
@@ -827,6 +859,9 @@ export class ArenaGame {
 		lock: IncomingStandardLockSnapshot,
 	): void => {
 		if (!Number.isSafeInteger(lock.attackers) || lock.attackers < 0) return
+		if (lock.attackers > this.#incomingStandardLocks) {
+			this.#audio.playEffect("target-lock")
+		}
 		this.#incomingStandardLocks = lock.attackers
 	}
 
@@ -1287,6 +1322,9 @@ export class ArenaGame {
 		this.#player.jumps = jumpStep.jumpCount
 		this.#player.position.set(nextX, jumpStep.positionY, nextZ)
 		this.#player.velocity.y = jumpStep.velocityY
+		this.#audioJumpImpulse =
+			jumpStep.impulse === 1 || jumpStep.impulse === 2 ? jumpStep.impulse : null
+		this.#audioLandingImpact = jumpStep.landed ? jumpStep.impactVelocity : 0
 		const trigger = gamepad.fire || this.#keys.has("KeyF")
 		if (trigger && this.#fireCooldown <= 0) this.#fire()
 		if (gamepad.grenade && !this.#grenadeHeld) this.#throwGrenade()
@@ -1342,6 +1380,7 @@ export class ArenaGame {
 			this.#ammo >= gun.magazineSize
 		)
 			return
+		this.#audio.playEffect("reload")
 		this.#socket.emit("arena:inventory-action", {
 			clientActionId: this.#nextInventoryActionId(),
 			type: "reload",
@@ -1358,6 +1397,7 @@ export class ArenaGame {
 		)
 			return
 		const gun = gunDefinition(this.#weaponKind)
+		this.#audio.playWeapon(this.#weaponKind)
 		this.#fireCooldown = gun.fire.clientCooldownSeconds
 		this.#weaponsFreeUntil =
 			performance.now() / 1_000 + WEAPONS_FREE_COOLDOWN_SECONDS
@@ -1402,6 +1442,7 @@ export class ArenaGame {
 	#throwGrenade(): void {
 		if (this.#grenadeCooldown > 0) return
 		this.#grenadeCooldown = 1
+		this.#audio.playEffect("grenade-throw")
 		const direction = new THREE.Vector3(0, 0, -1).applyEuler(
 			new THREE.Euler(this.#player.pitch, this.#player.yaw, 0, "YXZ"),
 		)
@@ -1448,6 +1489,7 @@ export class ArenaGame {
 	}
 
 	#spawnGrenadeExplosion(explosion: GrenadeExplodedSnapshot): void {
+		this.#audio.playEffect("explosion")
 		const material = new THREE.MeshBasicMaterial({
 			blending: THREE.AdditiveBlending,
 			color: "#ff8a46",
@@ -2189,6 +2231,26 @@ export class ArenaGame {
 		})
 	}
 
+	#audioEngagement(): number {
+		const targeting =
+			this.#targetingState === "locked"
+				? 1
+				: this.#targetingState === "escaping"
+					? 0.86
+					: this.#targetingState === "acquired"
+						? 0.62
+						: this.#targetingState === "free"
+							? 0.3
+							: this.#targetingState === "lost"
+								? 0.16
+								: 0
+		const incoming = Math.min(
+			1,
+			(this.#incomingMissileLocks + this.#incomingStandardLocks) * 0.68,
+		)
+		return Math.max(targeting, incoming, this.#noiseTimer > 0 ? 0.78 : 0)
+	}
+
 	#animate = (): void => {
 		if (this.#disposed) return
 		this.#animationFrame = requestAnimationFrame(this.#animate)
@@ -2199,6 +2261,25 @@ export class ArenaGame {
 		)
 		this.#lastFrame = now
 		this.#updatePhysics(delta)
+		this.#audio.update({
+			combatHeat: this.#noiseTimer / 0.85,
+			connected: this.#connected,
+			delta,
+			engagement: this.#audioEngagement(),
+			grounded: this.#player.jumps === 0,
+			health: this.#health,
+			horizontalSpeed: Math.hypot(
+				this.#player.velocity.x,
+				this.#player.velocity.z,
+			),
+			jumpImpulse: this.#audioJumpImpulse,
+			landingImpact: this.#audioLandingImpact,
+			sliding: this.#slide,
+			sprinting: this.#sprinting,
+			threats: this.#incomingMissileLocks + this.#incomingStandardLocks,
+		})
+		this.#audioJumpImpulse = null
+		this.#audioLandingImpact = 0
 		this.#recoilState = recoverRecoilSpread(this.#recoilState, delta)
 		this.#localDamageTracker = {
 			...this.#localDamageTracker,
