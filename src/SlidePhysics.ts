@@ -5,10 +5,14 @@ import {
 } from "./game-constants.ts"
 
 export const SLIDE_PHYSICS = {
+	entryPlanarSpeed: PLAYER_RUN_SPEED_LIMIT,
+	entrySlopeDegrees: 30,
+	entrySlopeNormalUpDot: Math.cos(Math.PI / 6),
+	entrySlopeRadians: Math.PI / 6,
 	flatFriction: 1.05,
 	gravity: 23,
 	maximumSpeed: PLAYER_SPRINT_SPEED_LIMIT,
-	minimumSlopeGrade: 0.015,
+	minimumDynamicSlopeGrade: 0.015,
 	exitSpeed: PLAYER_CROUCH_BASE_SPEED_LIMIT * 0.5,
 	terrainSampleDistance: 0.4,
 } as const
@@ -32,6 +36,7 @@ export type MovementState = "airborne" | "crouching" | "running" | "sliding"
 export type SlidePhysicsStep = SlidePhysicsState & {
 	downhillAcceleration: PlanarVelocity
 	movementState: MovementState
+	slopeAngleRadians: number
 	slopeGrade: number
 }
 
@@ -39,19 +44,34 @@ export function resolveMovementState(options: {
 	crouching: boolean
 	grounded: boolean
 	planarSpeed: number
-	slopeGrade: number
+	slopeNormalUpDot: number
 	wasSliding: boolean
 }): MovementState {
 	if (!options.grounded) return "airborne"
 	if (!options.crouching) return "running"
 	if (
-		options.slopeGrade >= SLIDE_PHYSICS.minimumSlopeGrade ||
-		options.planarSpeed > PLAYER_CROUCH_BASE_SPEED_LIMIT ||
+		options.slopeNormalUpDot <= SLIDE_PHYSICS.entrySlopeNormalUpDot ||
+		options.planarSpeed > SLIDE_PHYSICS.entryPlanarSpeed ||
 		(options.wasSliding && options.planarSpeed > SLIDE_PHYSICS.exitSpeed)
 	) {
 		return "sliding"
 	}
 	return "crouching"
+}
+
+export function slopeAngleFromTerrainGradient(
+	terrainGradient: TerrainGradient,
+): number {
+	return Math.acos(slopeNormalUpDotFromTerrainGradient(terrainGradient))
+}
+
+export function slopeNormalUpDotFromTerrainGradient(
+	terrainGradient: TerrainGradient,
+): number {
+	const normalLength = Math.hypot(terrainGradient.x, 1, terrainGradient.z)
+	if (Number.isNaN(normalLength)) return 1
+	if (!Number.isFinite(normalLength)) return 0
+	return Math.min(1, Math.max(-1, 1 / normalLength))
 }
 
 export function movementSpeedLimit(options: {
@@ -95,13 +115,18 @@ export function stepSlidePhysics(
 		options.terrainGradient.x,
 		options.terrainGradient.z,
 	)
+	const slopeNormalUpDot = slopeNormalUpDotFromTerrainGradient(
+		options.terrainGradient,
+	)
+	const slopeAngleRadians = Math.acos(slopeNormalUpDot)
 	const speed = Math.hypot(state.x, state.z)
-	const slopeCanInitiate = slopeGrade >= SLIDE_PHYSICS.minimumSlopeGrade
+	const slopeAffectsMotion =
+		slopeGrade >= SLIDE_PHYSICS.minimumDynamicSlopeGrade
 	const movementState = resolveMovementState({
 		crouching: options.crouching,
 		grounded: options.grounded,
 		planarSpeed: speed,
-		slopeGrade,
+		slopeNormalUpDot,
 		wasSliding: state.sliding,
 	})
 	const sliding = movementState === "sliding"
@@ -110,6 +135,7 @@ export function stepSlidePhysics(
 		return {
 			downhillAcceleration: { x: 0, z: 0 },
 			movementState,
+			slopeAngleRadians,
 			slopeGrade,
 			sliding: false,
 			x: state.x,
@@ -117,11 +143,12 @@ export function stepSlidePhysics(
 		}
 	}
 
-	if (!slopeCanInitiate) {
+	if (!slopeAffectsMotion) {
 		const damping = Math.exp(-SLIDE_PHYSICS.flatFriction * delta)
 		return limitSlideSpeed({
 			downhillAcceleration: { x: 0, z: 0 },
 			movementState,
+			slopeAngleRadians,
 			slopeGrade,
 			sliding: true,
 			x: state.x * damping,
@@ -150,6 +177,7 @@ export function stepSlidePhysics(
 	return limitSlideSpeed({
 		downhillAcceleration,
 		movementState,
+		slopeAngleRadians,
 		slopeGrade,
 		sliding: true,
 		x: directionX * downhillSpeed + crossSlopeX * crossSlopeDamping,
