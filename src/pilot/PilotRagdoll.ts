@@ -1,5 +1,6 @@
 import * as THREE from "three"
 
+import { JUMP_PHYSICS } from "../JumpPhysics.ts"
 import {
 	DEATH_RAGDOLL_HANDOFF_SECONDS,
 	sampleDeathAnimationPose,
@@ -45,7 +46,22 @@ export type PilotRagdollDebugState = {
 	maxAngularSpeed: number
 	minimumGroundClearance: number
 	rootSpeed: number
+	verticalVelocity: number
 }
+
+export const PILOT_RAGDOLL_PHYSICS = {
+	airborneAngularDrag: 1.2,
+	airbornePlanarDrag: 0.12,
+	angularGravityScale: 0.03,
+	contactAngularDamping: 6.5,
+	contactFriction: 0.7,
+	contactJointVelocityRetention: 0.58,
+	contactPlanarDrag: 0.32,
+	gravity: JUMP_PHYSICS.gravity,
+	penetrationAngularCoupling: 0.28,
+	penetrationCorrectionStrength: 18,
+	restitution: 0.08,
+} as const
 
 const UNBOUNDED: AxisLimits = {
 	x: [-Math.PI, Math.PI],
@@ -193,7 +209,7 @@ const CONTROLLED_JOINTS = [
 
 const FIXED_STEP_SECONDS = 1 / 120
 const MAX_STEPS_PER_FRAME = 12
-const GRAVITY = new THREE.Vector3(0, -9.81, 0)
+const GRAVITY = new THREE.Vector3(0, -PILOT_RAGDOLL_PHYSICS.gravity, 0)
 const ZERO = new THREE.Vector3()
 
 function finiteVector(vector: THREE.Vector3): boolean {
@@ -286,6 +302,7 @@ export class PilotRagdollPresentation {
 	#accumulator = 0
 	#active = false
 	#disposed = false
+	#grounded = false
 	#previous: RigSnapshot | null = null
 	readonly #rootVelocity = new THREE.Vector3()
 	#sleepSeconds = 0
@@ -389,6 +406,7 @@ export class PilotRagdollPresentation {
 			maxAngularSpeed,
 			minimumGroundClearance,
 			rootSpeed: this.#rootVelocity.length(),
+			verticalVelocity: this.#rootVelocity.y,
 		}
 	}
 
@@ -399,6 +417,7 @@ export class PilotRagdollPresentation {
 		this.#previous = null
 		this.#rootVelocity.set(0, 0, 0)
 		this.#accumulator = 0
+		this.#grounded = false
 	}
 
 	#activate(rig: PilotRig, carrierVelocity: THREE.Vector3): void {
@@ -458,11 +477,25 @@ export class PilotRagdollPresentation {
 	): void {
 		if (this.#sleepSeconds >= 0.45) return
 		this.#rootVelocity.addScaledVector(GRAVITY, delta)
-		this.#rootVelocity.x *= Math.exp(-0.32 * delta)
-		this.#rootVelocity.z *= Math.exp(-0.32 * delta)
+		const planarDrag = this.#grounded
+			? PILOT_RAGDOLL_PHYSICS.contactPlanarDrag
+			: PILOT_RAGDOLL_PHYSICS.airbornePlanarDrag
+		this.#rootVelocity.x *= Math.exp(-planarDrag * delta)
+		this.#rootVelocity.z *= Math.exp(-planarDrag * delta)
 		rig.root.position.addScaledVector(this.#rootVelocity, delta)
 
-		this.#integrateJoint(rig, "root", UNBOUNDED, 0, delta)
+		const angularDamping = this.#grounded
+			? PILOT_RAGDOLL_PHYSICS.contactAngularDamping
+			: PILOT_RAGDOLL_PHYSICS.airborneAngularDrag
+		this.#integrateJoint(
+			rig,
+			"root",
+			UNBOUNDED,
+			0,
+			delta,
+			undefined,
+			angularDamping,
+		)
 		for (const config of JOINT_PHYSICS) {
 			this.#integrateJoint(
 				rig,
@@ -471,6 +504,7 @@ export class PilotRagdollPresentation {
 				config.torque,
 				delta,
 				config.end,
+				angularDamping,
 			)
 		}
 		rig.root.updateMatrixWorld(true)
@@ -492,28 +526,44 @@ export class PilotRagdollPresentation {
 			contactCount += 1
 			contactNormal.add(terrainNormal(groundHeightAt, point.x, point.z))
 			const lever = point.sub(rootPosition)
-			const impulse = new THREE.Vector3(0, penetration * 18, 0)
-			rootAngularVelocity.addScaledVector(lever.cross(impulse), delta * 0.28)
-			this.#angularVelocity.get(collider.joint)?.multiplyScalar(0.58)
+			const impulse = new THREE.Vector3(
+				0,
+				penetration * PILOT_RAGDOLL_PHYSICS.penetrationCorrectionStrength,
+				0,
+			)
+			rootAngularVelocity.addScaledVector(
+				lever.cross(impulse),
+				delta * PILOT_RAGDOLL_PHYSICS.penetrationAngularCoupling,
+			)
+			this.#angularVelocity
+				.get(collider.joint)
+				?.multiplyScalar(PILOT_RAGDOLL_PHYSICS.contactJointVelocityRetention)
 		}
 		if (maximumPenetration > 0) {
 			rig.root.position.y += maximumPenetration + 1e-4
 			contactNormal.normalize()
 			const intoGround = this.#rootVelocity.dot(contactNormal)
 			if (intoGround < 0) {
-				this.#rootVelocity.addScaledVector(contactNormal, -intoGround * 1.08)
+				this.#rootVelocity.addScaledVector(
+					contactNormal,
+					-intoGround * (1 + PILOT_RAGDOLL_PHYSICS.restitution),
+				)
 			}
 			const normalSpeed = this.#rootVelocity.dot(contactNormal)
 			const tangent = this.#rootVelocity
 				.clone()
 				.addScaledVector(contactNormal, -normalSpeed)
-			this.#rootVelocity.addScaledVector(tangent, -0.7)
+			this.#rootVelocity.addScaledVector(
+				tangent,
+				-PILOT_RAGDOLL_PHYSICS.contactFriction,
+			)
 			const downhillGravity = GRAVITY.clone().addScaledVector(
 				contactNormal,
 				-GRAVITY.dot(contactNormal),
 			)
 			this.#rootVelocity.addScaledVector(downhillGravity, delta * 0.22)
 		}
+		this.#grounded = contactCount > 0
 		rootAngularVelocity.clampLength(0, 10)
 		const maxAngularSpeed = Math.max(
 			...Array.from(this.#angularVelocity.values(), (velocity) =>
@@ -538,6 +588,7 @@ export class PilotRagdollPresentation {
 		torque: number,
 		delta: number,
 		end: readonly [number, number, number] = [0, 1, 0],
+		angularDamping: number = PILOT_RAGDOLL_PHYSICS.airborneAngularDrag,
 	): void {
 		const joint = rig[jointName]
 		const angularVelocity = this.#angularVelocity.get(jointName)
@@ -545,7 +596,9 @@ export class PilotRagdollPresentation {
 		if (torque > 0) {
 			const worldQuaternion = joint.getWorldQuaternion(new THREE.Quaternion())
 			const lever = new THREE.Vector3(...end).applyQuaternion(worldQuaternion)
-			const torqueWorld = lever.cross(GRAVITY).multiplyScalar(torque * 0.07)
+			const torqueWorld = lever
+				.cross(GRAVITY)
+				.multiplyScalar(torque * PILOT_RAGDOLL_PHYSICS.angularGravityScale)
 			const parentQuaternion =
 				joint.parent?.getWorldQuaternion(new THREE.Quaternion()) ??
 				new THREE.Quaternion()
@@ -554,7 +607,9 @@ export class PilotRagdollPresentation {
 				delta,
 			)
 		}
-		angularVelocity.multiplyScalar(Math.exp(-6.5 * delta)).clampLength(0, 14)
+		angularVelocity
+			.multiplyScalar(Math.exp(-angularDamping * delta))
+			.clampLength(0, 14)
 		const angle = angularVelocity.length() * delta
 		if (angle > 1e-7) {
 			joint.quaternion

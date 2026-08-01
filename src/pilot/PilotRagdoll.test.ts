@@ -13,7 +13,10 @@ import {
 	disposePilotModel,
 	type PilotRig,
 } from "./PilotModel.ts"
-import { PilotRagdollPresentation } from "./PilotRagdoll.ts"
+import {
+	PILOT_RAGDOLL_PHYSICS,
+	PilotRagdollPresentation,
+} from "./PilotRagdoll.ts"
 
 function applyAuthoredDeath(rig: PilotRig, elapsedSeconds: number): void {
 	const layer = deathAnimationLayer(elapsedSeconds)
@@ -82,6 +85,102 @@ test("ragdoll activation preserves the exact authored handoff transform", () => 
 	)
 	assert.equal(ragdoll.active, true)
 	assertNear(snapshot(rig), handoff)
+
+	ragdoll.dispose()
+	disposePilotModel(rig)
+})
+
+test("airborne root preserves handoff momentum and falls with world gravity", () => {
+	const rig = createDeathRig()
+	const ragdoll = new PilotRagdollPresentation()
+	applyAuthoredDeath(rig, DEATH_RAGDOLL_HANDOFF_SECONDS - 1 / 120)
+	ragdoll.observeAuthored(rig, DEATH_RAGDOLL_HANDOFF_SECONDS - 1 / 120)
+	applyAuthoredDeath(rig, DEATH_RAGDOLL_HANDOFF_SECONDS)
+	const handoffY = rig.root.position.y
+	ragdoll.update(rig, {
+		delta: 0,
+		elapsedSeconds: DEATH_RAGDOLL_HANDOFF_SECONDS,
+		groundHeightAt: () => -100,
+	})
+	const handoffVelocity = ragdoll.debugState(rig, () => -100).verticalVelocity
+	assert.ok(handoffVelocity < -0.3)
+	assert.ok(handoffVelocity > -0.5)
+
+	const samples = new Map<number, { displacement: number; velocity: number }>()
+	const sampleSteps = new Set([12, 30, 60])
+	for (let step = 1; step <= 60; step += 1) {
+		ragdoll.update(rig, {
+			delta: 1 / 120,
+			elapsedSeconds: DEATH_RAGDOLL_HANDOFF_SECONDS + step / 120,
+			groundHeightAt: () => -100,
+		})
+		if (sampleSteps.has(step)) {
+			samples.set(step, {
+				displacement: rig.root.position.y - handoffY,
+				velocity: ragdoll.debugState(rig, () => -100).verticalVelocity,
+			})
+		}
+	}
+
+	for (const step of sampleSteps) {
+		const sample = samples.get(step)!
+		const delta = 1 / 120
+		const elapsed = step * delta
+		const expectedVelocity =
+			handoffVelocity - PILOT_RAGDOLL_PHYSICS.gravity * elapsed
+		const expectedDisplacement =
+			handoffVelocity * elapsed -
+			(PILOT_RAGDOLL_PHYSICS.gravity * delta * delta * step * (step + 1)) / 2
+		assert.ok(Math.abs(sample.velocity - expectedVelocity) < 1e-9)
+		assert.ok(Math.abs(sample.displacement - expectedDisplacement) < 1e-9)
+	}
+	assert.ok(samples.get(12)!.displacement < -0.15)
+	assert.ok(samples.get(30)!.displacement < -0.8)
+	assert.ok(samples.get(60)!.displacement < -3)
+
+	ragdoll.dispose()
+	disposePilotModel(rig)
+})
+
+test("one metre of clearance reaches terrain with decisive weight", () => {
+	const rig = createDeathRig()
+	const ragdoll = new PilotRagdollPresentation()
+	applyAuthoredDeath(rig, DEATH_RAGDOLL_HANDOFF_SECONDS - 1 / 120)
+	ragdoll.observeAuthored(rig, DEATH_RAGDOLL_HANDOFF_SECONDS - 1 / 120)
+	applyAuthoredDeath(rig, DEATH_RAGDOLL_HANDOFF_SECONDS)
+	const clearanceAtZero = ragdoll.debugState(
+		rig,
+		() => 0,
+	).minimumGroundClearance
+	const groundHeight = clearanceAtZero - 1
+	const groundHeightAt = () => groundHeight
+	ragdoll.update(rig, {
+		delta: 0,
+		elapsedSeconds: DEATH_RAGDOLL_HANDOFF_SECONDS,
+		groundHeightAt,
+	})
+	assert.ok(
+		Math.abs(
+			ragdoll.debugState(rig, groundHeightAt).minimumGroundClearance - 1,
+		) < 1e-9,
+	)
+	let contactSeconds: number | null = null
+	for (let step = 1; step <= 60; step += 1) {
+		ragdoll.update(rig, {
+			delta: 1 / 120,
+			elapsedSeconds: DEATH_RAGDOLL_HANDOFF_SECONDS + step / 120,
+			groundHeightAt,
+		})
+		if (
+			ragdoll.debugState(rig, groundHeightAt).minimumGroundClearance <= 0.001
+		) {
+			contactSeconds = step / 120
+			break
+		}
+	}
+	assert.ok(contactSeconds !== null)
+	assert.ok(contactSeconds >= 0.2)
+	assert.ok(contactSeconds <= 0.3)
 
 	ragdoll.dispose()
 	disposePilotModel(rig)
@@ -209,6 +308,7 @@ test("disposed ragdoll releases state and rejects later updates", () => {
 			minimumGroundClearance: ragdoll.debugState(rig, () => 0)
 				.minimumGroundClearance,
 			rootSpeed: 0,
+			verticalVelocity: 0,
 		},
 	)
 	disposePilotModel(rig)
