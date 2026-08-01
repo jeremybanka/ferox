@@ -25,6 +25,10 @@ import type {
 import { isMiniMissileTargetRef } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
 import {
+	ARENA_PLAYABLE_HALF_EXTENT,
+	resolveArenaMotion,
+} from "../src/ArenaWorld.ts"
+import {
 	DRONE_AUDITORY_RADIUS,
 	DRONE_POPULATION_CAP,
 	DRONE_VISION_DISTANCE,
@@ -447,13 +451,13 @@ export class ArenaSimulation {
 		const radius = 22 + Math.random() * 23
 		const x = THREE.MathUtils.clamp(
 			anchor[0] + Math.cos(angle) * radius,
-			-52,
-			52,
+			-ARENA_PLAYABLE_HALF_EXTENT,
+			ARENA_PLAYABLE_HALF_EXTENT,
 		)
 		const z = THREE.MathUtils.clamp(
 			anchor[2] + Math.sin(angle) * radius,
-			-52,
-			52,
+			-ARENA_PLAYABLE_HALF_EXTENT,
+			ARENA_PLAYABLE_HALF_EXTENT,
 		)
 		this.#drones.push({
 			attackCooldown: Math.random(),
@@ -602,7 +606,27 @@ export class ArenaSimulation {
 		desired.y = 0
 		if (desired.lengthSq() > 0.001) desired.normalize().multiplyScalar(speed)
 		drone.velocity.lerp(desired, Math.min(1, delta * 3.6))
+		const droneStartX = drone.position.x
+		const droneStartZ = drone.position.z
 		drone.position.addScaledVector(drone.velocity, delta)
+		const droneMotion = resolveArenaMotion(
+			this.#seed,
+			[droneStartX, droneStartZ],
+			[drone.position.x, drone.position.z],
+			drone.position.y,
+			0.7,
+		)
+		drone.position.x = droneMotion.x
+		drone.position.z = droneMotion.z
+		if (droneMotion.contact !== null) {
+			const [normalX, , normalZ] = droneMotion.contact.normal
+			const inward = Math.min(
+				0,
+				drone.velocity.x * normalX + drone.velocity.z * normalZ,
+			)
+			drone.velocity.x -= normalX * inward
+			drone.velocity.z -= normalZ * inward
+		}
 		const hoverHeight =
 			arenaHeightAt(this.#seed, drone.position.x, drone.position.z) +
 			3.2 +
@@ -767,7 +791,15 @@ export class ArenaSimulation {
 				missile.position.y <=
 				arenaHeightAt(this.#seed, missile.position.x, missile.position.z) +
 					MINI_MISSILE_RADIUS
-			if (hitEntity || hitGround) {
+			const hitObstacle =
+				resolveArenaMotion(
+					this.#seed,
+					[previousPosition.x, previousPosition.z],
+					[missile.position.x, missile.position.z],
+					(previousPosition.y + missile.position.y) * 0.5,
+					MINI_MISSILE_RADIUS,
+				).contact !== null
+			if (hitEntity || hitGround || hitObstacle) {
 				this.#explodeMissile(index, missile, players)
 			}
 		}
@@ -934,7 +966,29 @@ export class ArenaSimulation {
 			if (grenade === undefined) continue
 			grenade.life -= delta
 			grenade.velocity.y -= GRENADE_GRAVITY * delta
+			const previousX = grenade.position.x
+			const previousZ = grenade.position.z
 			grenade.position.addScaledVector(grenade.velocity, delta)
+			const grenadeMotion = resolveArenaMotion(
+				this.#seed,
+				[previousX, previousZ],
+				[grenade.position.x, grenade.position.z],
+				grenade.position.y,
+				GRENADE_RADIUS,
+			)
+			grenade.position.x = grenadeMotion.x
+			grenade.position.z = grenadeMotion.z
+			if (grenadeMotion.contact !== null) {
+				const [normalX, , normalZ] = grenadeMotion.contact.normal
+				const normalSpeed =
+					grenade.velocity.x * normalX + grenade.velocity.z * normalZ
+				if (normalSpeed < 0) {
+					grenade.velocity.x -=
+						(1 + GRENADE_RESTITUTION) * normalSpeed * normalX
+					grenade.velocity.z -=
+						(1 + GRENADE_RESTITUTION) * normalSpeed * normalZ
+				}
+			}
 			const ground =
 				arenaHeightAt(this.#seed, grenade.position.x, grenade.position.z) +
 				GRENADE_RADIUS
@@ -1096,7 +1150,15 @@ export class ArenaSimulation {
 					projectile.position.z,
 				) +
 					0.12
-			if (projectile.life <= 0 || hit || hitGround) {
+			const hitObstacle =
+				resolveArenaMotion(
+					this.#seed,
+					[previousPosition.x, previousPosition.z],
+					[projectile.position.x, projectile.position.z],
+					(previousPosition.y + projectile.position.y) * 0.5,
+					0.12,
+				).contact !== null
+			if (projectile.life <= 0 || hit || hitGround || hitObstacle) {
 				this.#projectiles.splice(index, 1)
 				this.#emitProjectileEnded({ id: projectile.id })
 			}

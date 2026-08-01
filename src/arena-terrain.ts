@@ -19,7 +19,7 @@ function smoothNoise(seed: number, x: number, z: number): number {
 
 export function arenaHeightAt(seed: number, x: number, z: number): number {
 	const radial = Math.sqrt(x * x + z * z)
-	const rim = Math.max(0, (radial - 42) / 11)
+	const rim = Math.max(0, (radial - 72) / 14)
 	let height = -1.4
 	let amplitude = 7.2
 	let frequency = 0.026

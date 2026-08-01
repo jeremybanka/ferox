@@ -213,11 +213,15 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<i style={{ "--speed": `${Math.min(hud.speed / 54, 1)}` }} />
 					</velocity-bar>
 					<em>
-						{hud.sliding
-							? "SLIDE VECTOR"
-							: hud.jump === 2
-								? "DOUBLE JUMP"
-								: "SURFACE LOCK"}
+						{hud.wallTraversal === "run"
+							? "WALL RUN"
+							: hud.wallTraversal === "slide"
+								? "WALL SLIDE"
+								: hud.sliding
+									? "SLIDE VECTOR"
+									: hud.jump === 2
+										? "DOUBLE JUMP"
+										: "SURFACE LOCK"}
 					</em>
 				</speed-readout>
 
@@ -283,6 +287,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>MOVE</span>
 						<kbd>SHIFT</kbd>
 						<span>SPRINT</span>
+						<kbd>V / CAPS / LS</kbd>
+						<span>FREERUN</span>
 						<kbd>SPACE ×2</kbd>
 						<span>DOUBLE JUMP</span>
 						<kbd>C</kbd>

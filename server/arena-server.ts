@@ -8,6 +8,7 @@ import {
 	activeEquipmentSlot,
 	isNewInventoryActionIntent,
 	isVisorExpression,
+	isWallTraversalSnapshot,
 	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
 	type FireIntent,
@@ -20,6 +21,7 @@ import {
 	type PlayerSnapshot,
 } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
+import { resolveArenaMotion } from "../src/ArenaWorld.ts"
 import {
 	ARENA_SEED,
 	MINI_MISSILE_PICKUP_POSITION,
@@ -117,6 +119,7 @@ const applyPlayerDamage = (
 				sliding: false,
 				sprinting: false,
 				velocity: [0, 0, 0],
+				wallTraversal: { mode: "none", normal: [0, 0, 0] },
 				visorExpression: "defeated",
 				visorStartedAt: nowMs / 1_000,
 				weaponsFree: false,
@@ -351,6 +354,7 @@ realtime(
 			sliding: false,
 			sprinting: false,
 			velocity: [0, 0, 0],
+			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 			visorExpression: "boot",
 			visorStartedAt: Date.now() / 1_000,
 			weaponsFree: false,
@@ -388,6 +392,7 @@ realtime(
 				typeof payload.freeAim !== "boolean" ||
 				typeof payload.sliding !== "boolean" ||
 				typeof payload.sprinting !== "boolean" ||
+				!isWallTraversalSnapshot(payload.wallTraversal) ||
 				typeof payload.weaponsFree !== "boolean" ||
 				(payload.jump !== 0 && payload.jump !== 1 && payload.jump !== 2) ||
 				payload.aimDirection.length !== 3 ||
@@ -406,9 +411,16 @@ realtime(
 				return
 			const current = players.get(socketId)
 			if (current === undefined) return
+			const resolvedMotion = resolveArenaMotion(
+				ARENA_SEED,
+				[current.position[0], current.position[2]],
+				[payload.position[0], payload.position[2]],
+				payload.position[1] - 0.86,
+			)
 			players.set(socketId, {
 				...current,
 				...payload,
+				position: [resolvedMotion.x, payload.position[1], resolvedMotion.z],
 				equippedWeapon: armory.activeWeapon(socketId),
 				dead: false,
 				deathStartedAt: null,
@@ -618,6 +630,7 @@ setInterval(() => {
 			sliding: false,
 			sprinting: false,
 			velocity: [0, 0, 0],
+			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 			visorExpression: "boot",
 			visorStartedAt: Date.now() / 1_000,
 			weaponsFree: false,
