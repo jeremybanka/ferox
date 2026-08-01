@@ -83,6 +83,14 @@ test("death cadence hesitates before the knees then flows through an acceleratin
 	assert.equal(kneeDrop.easingFromPrevious, "smoothstep")
 	assert.equal(forwardFall.easingFromPrevious, "linear")
 	assert.equal(finalProne.easingFromPrevious, "linear")
+	assert.ok(
+		(DEATH_BOTH_KNEES_DROP_POSE.root?.position?.z ?? 0) >
+			(DEATH_FORWARD_FALL_ARMS_UP_POSE.root?.position?.z ?? 0),
+	)
+	assert.ok(
+		(DEATH_FORWARD_FALL_ARMS_UP_POSE.root?.position?.z ?? 0) >
+			(DEATH_FINAL_PRONE_ARMS_UP_POSE.root?.position?.z ?? 0),
+	)
 
 	const sampleRootPitch = (atSeconds: number) =>
 		sampleDeathAnimationPose(atSeconds).root?.rotation?.x ?? 0
@@ -100,6 +108,53 @@ test("death cadence hesitates before the knees then flows through an acceleratin
 		Math.abs(sampleRootPitch(forwardFall.atSeconds + epsilon) - fallPitch) >
 			0.01,
 	)
+
+	const dominantJoints = [
+		"root",
+		"hips",
+		"body",
+		"neck",
+		"head",
+		"leftShoulder",
+		"leftArm",
+		"leftElbow",
+		"rightShoulder",
+		"rightArm",
+		"rightElbow",
+		"leftLeg",
+		"leftKnee",
+		"rightLeg",
+		"rightKnee",
+	] as const
+	const visualVector = (atSeconds: number) => {
+		const pose = sampleDeathAnimationPose(atSeconds)
+		return dominantJoints.flatMap((joint) =>
+			(["position", "rotation"] as const).flatMap((kind) =>
+				(["x", "y", "z"] as const).map(
+					(axis) => pose[joint]?.[kind]?.[axis] ?? 0,
+				),
+			),
+		)
+	}
+	const visualMotion = (fromSeconds: number, toSeconds: number) => {
+		const from = visualVector(fromSeconds)
+		const to = visualVector(toSeconds)
+		return Math.hypot(...to.map((value, index) => value - from[index]!))
+	}
+	const arrivingMotion = visualMotion(
+		forwardFall.atSeconds - epsilon,
+		forwardFall.atSeconds,
+	)
+	const departingMotion = visualMotion(
+		forwardFall.atSeconds,
+		forwardFall.atSeconds + epsilon,
+	)
+	const motionRatio =
+		Math.min(arrivingMotion, departingMotion) /
+		Math.max(arrivingMotion, departingMotion)
+	assert.ok(arrivingMotion / epsilon > 4)
+	assert.ok(departingMotion / epsilon > 4)
+	assert.ok(motionRatio > 0.9)
 })
 
 test("death shuffle and kneel use forward-flexing knees", () => {

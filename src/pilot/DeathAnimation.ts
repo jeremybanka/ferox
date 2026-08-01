@@ -74,7 +74,7 @@ export const DEATH_BOTH_KNEES_DROP_POSE = definePilotPose({
 })
 
 export const DEATH_FORWARD_FALL_ARMS_UP_POSE = definePilotPose({
-	root: { position: { y: -0.68, z: 0.34 }, rotation: { x: -0.9 } },
+	root: { position: { y: -0.68, z: 0.45 }, rotation: { x: -0.9 } },
 	hips: { position: { y: 1.28, z: 0.08 }, rotation: { x: -0.42 } },
 	body: { rotation: { x: 0.34 } },
 	neck: { rotation: { x: 0.38 } },
@@ -208,6 +208,146 @@ const DEATH_KEYFRAMES = definePilotKeyframes({
 	loop: false,
 })
 
+const CONTINUOUS_FALL_JOINTS = [
+	"root",
+	"hips",
+	"body",
+	"neck",
+	"head",
+	"leftShoulder",
+	"leftArm",
+	"leftElbow",
+	"rightShoulder",
+	"rightArm",
+	"rightElbow",
+	"leftLeg",
+	"leftKnee",
+	"leftFoot",
+	"rightLeg",
+	"rightKnee",
+	"rightFoot",
+] as const
+
+const fallKneePhase = DEATH_ANIMATION_TIMELINE.find(
+	({ id }) => id === "knee-drop",
+)!
+const fallPassThroughPhase = DEATH_ANIMATION_TIMELINE.find(
+	({ id }) => id === "forward-fall",
+)!
+const fallPronePhase = DEATH_ANIMATION_TIMELINE.find(
+	({ id }) => id === "final-prone",
+)!
+
+const fallControlPoses = [
+	fallKneePhase,
+	fallPassThroughPhase,
+	fallPronePhase,
+].map(({ atSeconds }) =>
+	samplePilotKeyframes(
+		DEATH_KEYFRAMES,
+		atSeconds / DEATH_ANIMATION_DURATION_SECONDS,
+	),
+)
+
+function monotonePassThroughTangent(
+	from: number,
+	through: number,
+	to: number,
+	beforeSeconds: number,
+	afterSeconds: number,
+): number {
+	const beforeSlope = (through - from) / beforeSeconds
+	const afterSlope = (to - through) / afterSeconds
+	if (beforeSlope * afterSlope <= 0) return 0
+	return (
+		(beforeSeconds + afterSeconds) /
+		(beforeSeconds / beforeSlope + afterSeconds / afterSlope)
+	)
+}
+
+function hermiteChannel(
+	from: number,
+	to: number,
+	fromTangent: number,
+	toTangent: number,
+	duration: number,
+	progress: number,
+): number {
+	const squared = progress * progress
+	const cubed = squared * progress
+	return (
+		(2 * cubed - 3 * squared + 1) * from +
+		(cubed - 2 * squared + progress) * duration * fromTangent +
+		(-2 * cubed + 3 * squared) * to +
+		(cubed - squared) * duration * toTangent
+	)
+}
+
+function sampleContinuousFallPose(elapsedSeconds: number): PilotPose | null {
+	if (
+		elapsedSeconds < fallKneePhase.atSeconds ||
+		elapsedSeconds > fallPronePhase.atSeconds
+	)
+		return null
+	const kneeToPassSeconds =
+		fallPassThroughPhase.atSeconds - fallKneePhase.atSeconds
+	const passToProneSeconds =
+		fallPronePhase.atSeconds - fallPassThroughPhase.atSeconds
+	const beforePassThrough = elapsedSeconds <= fallPassThroughPhase.atSeconds
+	const duration = beforePassThrough ? kneeToPassSeconds : passToProneSeconds
+	const progress = Math.max(
+		0,
+		Math.min(
+			1,
+			beforePassThrough
+				? (elapsedSeconds - fallKneePhase.atSeconds) / duration
+				: (elapsedSeconds - fallPassThroughPhase.atSeconds) / duration,
+		),
+	)
+	const result: PilotPose = {}
+	for (const joint of CONTINUOUS_FALL_JOINTS) {
+		for (const kind of ["position", "rotation"] as const) {
+			for (const axis of ["x", "y", "z"] as const) {
+				const authored = fallControlPoses.map(
+					(pose) => pose[joint]?.[kind]?.[axis],
+				)
+				if (authored.every((value) => value === undefined)) continue
+				const [knee = 0, passThrough = 0, prone = 0] = authored
+				const kneeSlope = (passThrough - knee) / kneeToPassSeconds
+				const proneSlope = (prone - passThrough) / passToProneSeconds
+				const passThroughTangent = monotonePassThroughTangent(
+					knee,
+					passThrough,
+					prone,
+					kneeToPassSeconds,
+					passToProneSeconds,
+				)
+				const value = beforePassThrough
+					? hermiteChannel(
+							knee,
+							passThrough,
+							kneeSlope,
+							passThroughTangent,
+							kneeToPassSeconds,
+							progress,
+						)
+					: hermiteChannel(
+							passThrough,
+							prone,
+							passThroughTangent,
+							proneSlope,
+							passToProneSeconds,
+							progress,
+						)
+				const jointPose = (result[joint] ??= {})
+				const channels = (jointPose[kind] ??= {})
+				channels[axis] = value
+			}
+		}
+	}
+	return result
+}
+
 export function deathAnimationProgress(elapsedSeconds: number): number {
 	return Math.max(
 		0,
@@ -226,6 +366,8 @@ export function deathAnimationPhase(progress: number): DeathAnimationPhase {
 }
 
 export function sampleDeathAnimationPose(elapsedSeconds: number): PilotPose {
+	const continuousFall = sampleContinuousFallPose(elapsedSeconds)
+	if (continuousFall !== null) return continuousFall
 	return samplePilotKeyframes(
 		DEATH_KEYFRAMES,
 		deathAnimationProgress(elapsedSeconds),
