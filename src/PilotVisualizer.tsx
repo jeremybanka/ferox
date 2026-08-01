@@ -20,6 +20,13 @@ import {
 	simulateFlatGroundJump,
 } from "./JumpPhysics.ts"
 import {
+	DEFAULT_GUN_ID,
+	GUN_IDS,
+	gunDefinition,
+	isGunId,
+	type GunId,
+} from "./guns/GunDefinitions.ts"
+import {
 	AIRBORNE_VELOCITY_MODEL,
 	airborneMomentumLayer,
 	airborneVelocityLayer,
@@ -60,7 +67,11 @@ import {
 	sampleDraftAnimation,
 	type PilotAnimationLayer,
 } from "./pilot/PilotAnimation.ts"
-import { createPilotModel } from "./pilot/PilotModel.ts"
+import {
+	createPilotModel,
+	disposePilotModel,
+	setPilotGun,
+} from "./pilot/PilotModel.ts"
 import {
 	damageFlinchAnimationLayer,
 	DAMAGE_PREVIEW_CYCLE_SECONDS,
@@ -670,6 +681,7 @@ export function PilotVisualizer(): VNode {
 		targetYaw,
 		yaw,
 	} = controls
+	const gunId = isGunId(controls.gunId) ? controls.gunId : DEFAULT_GUN_ID
 	const timelineRef = useRef(selectedTime)
 	const controlsRef = useRef<PilotVisualizerControls>(controls)
 	controlsRef.current = controls
@@ -691,6 +703,9 @@ export function PilotVisualizer(): VNode {
 		next: boolean | ((current: boolean) => boolean),
 	): void => {
 		setControl("bunnyhopping", next)
+	}
+	const setGunId = (next: GunId): void => {
+		setControl("gunId", next)
 	}
 	const setIsPlaying = (next: boolean): void => {
 		setControl("isPlaying", next)
@@ -807,7 +822,10 @@ export function PilotVisualizer(): VNode {
 		rim.position.set(-5, 3, -4)
 		scene.add(ambient, hemisphere, key, rim)
 
-		const rig = createPilotModel()
+		const initialGunId = isGunId(controlsRef.current.gunId)
+			? controlsRef.current.gunId
+			: DEFAULT_GUN_ID
+		const rig = createPilotModel(undefined, initialGunId)
 		scene.add(rig.root)
 		const floor = new THREE.Mesh(
 			new THREE.CylinderGeometry(3.6, 4, 0.32, 8),
@@ -846,28 +864,37 @@ export function PilotVisualizer(): VNode {
 		hitscan.visible = false
 		scene.add(targetMarker, hitscan)
 
-		let sweepSamples = 0
-		let maxSweepMiss = 0
-		let sweepPassed = true
-		for (const marker of RUN_KEYFRAME_MARKERS) {
-			for (let pitch = -45; pitch <= 40; pitch += 5) {
-				for (let yaw = -50; yaw <= 50; yaw += 5) {
-					applyPreviewPose(rig, "forward", ["weapons-free"], marker.progress, {
-						pitch: THREE.MathUtils.degToRad(pitch),
-						yaw: THREE.MathUtils.degToRad(yaw),
-					})
-					const measured = measureBlasterAlignment(rig)
-					sweepSamples += 1
-					maxSweepMiss = Math.max(maxSweepMiss, measured.missDistance)
-					sweepPassed &&= measured.hit
+		const updateAlignmentSweep = (): void => {
+			let sweepSamples = 0
+			let maxSweepMiss = 0
+			let sweepPassed = true
+			for (const marker of RUN_KEYFRAME_MARKERS) {
+				for (let pitch = -45; pitch <= 40; pitch += 5) {
+					for (let yaw = -50; yaw <= 50; yaw += 5) {
+						applyPreviewPose(
+							rig,
+							"forward",
+							["weapons-free"],
+							marker.progress,
+							{
+								pitch: THREE.MathUtils.degToRad(pitch),
+								yaw: THREE.MathUtils.degToRad(yaw),
+							},
+						)
+						const measured = measureBlasterAlignment(rig)
+						sweepSamples += 1
+						maxSweepMiss = Math.max(maxSweepMiss, measured.missDistance)
+						sweepPassed &&= measured.hit
+					}
 				}
 			}
+			setAlignmentSweep({
+				maxMissDistance: maxSweepMiss,
+				passed: sweepPassed,
+				samples: sweepSamples,
+			})
 		}
-		setAlignmentSweep({
-			maxMissDistance: maxSweepMiss,
-			passed: sweepPassed,
-			samples: sweepSamples,
-		})
+		updateAlignmentSweep()
 
 		let frame = 0
 		let previousTime = performance.now()
@@ -897,6 +924,10 @@ export function PilotVisualizer(): VNode {
 			const elapsed = Math.min(0.1, (now - previousTime) / 1_000)
 			previousTime = now
 			const controls = controlsRef.current
+			const nextGunId = isGunId(controls.gunId)
+				? controls.gunId
+				: DEFAULT_GUN_ID
+			if (setPilotGun(rig, nextGunId)) updateAlignmentSweep()
 			const activeDuration = getPreviewDuration(
 				controls.baseAnimation,
 				controls.bunnyhopping,
@@ -1023,6 +1054,7 @@ export function PilotVisualizer(): VNode {
 			hitscanMaterial.dispose()
 			targetMarker.geometry.dispose()
 			targetMaterial.dispose()
+			disposePilotModel(rig)
 			renderer.dispose()
 		}
 	}, [])
@@ -1053,7 +1085,10 @@ export function PilotVisualizer(): VNode {
 		rim.position.set(-5, 3, -4)
 		scene.add(hemisphere, key, rim)
 
-		const rig = createPilotModel()
+		const initialGunId = isGunId(controlsRef.current.gunId)
+			? controlsRef.current.gunId
+			: DEFAULT_GUN_ID
+		const rig = createPilotModel(undefined, initialGunId)
 		scene.add(rig.root)
 		const grid = new THREE.GridHelper(8, 16, "#377f76", "#20343c")
 		grid.position.y = -0.14
@@ -1064,8 +1099,12 @@ export function PilotVisualizer(): VNode {
 		const renderFilmstrip = (): void => {
 			frame = requestAnimationFrame(renderFilmstrip)
 			const controls = controlsRef.current
+			const nextGunId = isGunId(controls.gunId)
+				? controls.gunId
+				: DEFAULT_GUN_ID
+			setPilotGun(rig, nextGunId)
 			const signature =
-				`${controls.baseAnimation}:${controls.bunnyhopping}:` +
+				`${nextGunId}:${controls.baseAnimation}:${controls.bunnyhopping}:` +
 				`${controls.overlays.join(",")}:` +
 				`${controls.sampleInterval}:${controls.yaw.toFixed(4)}:` +
 				`${controls.targetPitch.toFixed(4)}:${controls.targetYaw.toFixed(4)}`
@@ -1104,14 +1143,16 @@ export function PilotVisualizer(): VNode {
 		frame = requestAnimationFrame(renderFilmstrip)
 		return () => {
 			cancelAnimationFrame(frame)
+			disposePilotModel(rig)
 			renderer.dispose()
 		}
 	}, [])
 
 	return (
-		<pilot-visualizer className={css.class}>
+		<pilot-visualizer className={css.class} data-gun={gunId}>
 			<canvas
 				ref={canvasRef}
+				data-gun={gunId}
 				aria-label="Animated FEROX pilot model. Drag horizontally to rotate."
 				onPointerDown={(event) => {
 					dragXRef.current = event.clientX
@@ -1134,9 +1175,28 @@ export function PilotVisualizer(): VNode {
 			<model-header>
 				<p>FEROX // ARMOR LAB</p>
 				<h1>MK-I PILOT</h1>
-				<span>DRAG TO ROTATE / SCRUB TO FREEZE</span>
+				<span>
+					{gunDefinition(gunId).name} / DRAG TO ROTATE / SCRUB TO FREEZE
+				</span>
 			</model-header>
 			<animation-stack>
+				<fieldset>
+					<legend>GUN // EQUIPPED</legend>
+					{GUN_IDS.map((candidate) => (
+						<button
+							key={candidate}
+							type="button"
+							aria-label={`Equip ${gunDefinition(candidate).name}`}
+							aria-pressed={gunId === candidate}
+							data-active={gunId === candidate}
+							onClick={() => {
+								setGunId(candidate)
+							}}
+						>
+							{gunDefinition(candidate).name}
+						</button>
+					))}
+				</fieldset>
 				<fieldset>
 					<legend>BASE // EXCLUSIVE</legend>
 					{BASE_ANIMATIONS.map((animation) => (
@@ -1406,7 +1466,8 @@ export function PilotVisualizer(): VNode {
 					<filmstrip-rail>
 						<canvas
 							ref={filmCanvasRef}
-							aria-label={`${baseAnimation} animation${bunnyhopping ? " with automatic bunnyhopping" : ""} and ${overlays.length} overlays sampled every ${sampleInterval.toFixed(2)} seconds`}
+							data-gun={gunId}
+							aria-label={`${gunDefinition(gunId).name} ${baseAnimation} animation${bunnyhopping ? " with automatic bunnyhopping" : ""} and ${overlays.length} overlays sampled every ${sampleInterval.toFixed(2)} seconds`}
 							width={FILM_FRAME_WIDTH}
 							height={sampleTimes.length * FILM_FRAME_HEIGHT}
 						/>

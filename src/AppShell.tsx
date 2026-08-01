@@ -10,6 +10,7 @@ import {
 	PLAYER_POPULATION_CAP,
 } from "./game-constants.ts"
 import { arenaSeedAtom, gameHudStateAtom } from "./game-state.ts"
+import { gunDefinition } from "./guns/GunDefinitions.ts"
 
 type AppShellProps = {
 	socket: Socket
@@ -23,6 +24,14 @@ export function AppShell({ socket }: AppShellProps): VNode {
 	const hud = useO(gameHudStateAtom)
 	const seed = useO(arenaSeedAtom)
 	const setHud = useI(gameHudStateAtom)
+	const incomingThreats = hud.incomingMissileLocks + hud.incomingStandardLocks
+	const gun = gunDefinition(hud.weapon)
+	const incomingThreatKind =
+		hud.incomingMissileLocks > 0 && hud.incomingStandardLocks > 0
+			? "combined"
+			: hud.incomingMissileLocks > 0
+				? "missile"
+				: "standard"
 
 	useEffect(() => {
 		const canvas = canvasRef.current
@@ -98,6 +107,51 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>15</span>
 					</score-board>
 				</game-header>
+
+				<incoming-threat
+					data-active={incomingThreats > 0}
+					data-kind={incomingThreatKind}
+					data-missile-locks={hud.incomingMissileLocks}
+					data-standard-locks={hud.incomingStandardLocks}
+					role="status"
+					aria-live="assertive"
+					aria-hidden={incomingThreats === 0}
+				>
+					<strong>
+						{incomingThreatKind === "combined"
+							? "⚠ TARGET + MISSILE LOCK"
+							: incomingThreatKind === "missile"
+								? "⚠ MISSILE LOCK"
+								: "⚠ TARGET LOCK"}
+					</strong>
+					<span>
+						{incomingThreatKind === "combined"
+							? `${hud.incomingStandardLocks} TARGETING • ${hud.incomingMissileLocks} MISSILE`
+							: incomingThreatKind === "missile"
+								? hud.incomingMissileLocks === 1
+									? "1 INCOMING PILOT"
+									: `${hud.incomingMissileLocks} INCOMING PILOTS`
+								: hud.incomingStandardLocks === 1
+									? "1 PILOT TARGETING YOU"
+									: `${hud.incomingStandardLocks} PILOTS TARGETING YOU`}
+					</span>
+				</incoming-threat>
+
+				<pickup-prompt
+					data-active={hud.pickup === "nearby"}
+					aria-hidden={hud.pickup !== "nearby"}
+					style={{ "--pickup-progress": hud.pickupProgress }}
+				>
+					<strong>MINI-MISSILE READY</strong>
+					<span>
+						<kbd>E</kbd>
+						<kbd>RB</kbd>
+						HOLD TO PICK UP
+					</span>
+					<pickup-progress aria-hidden="true">
+						<i />
+					</pickup-progress>
+				</pickup-prompt>
 
 				<smart-target-zone data-state={hud.targeting} aria-hidden="true">
 					<free-aim-label>
@@ -179,12 +233,38 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</player-vitals>
 
 				<weapon-status>
-					<small>ARC BLASTER</small>
+					<weapon-slots aria-label="Weapon slots">
+						{hud.weaponSlots.map((slot, index) => (
+							<weapon-slot key={index} data-active={hud.activeSlot === index}>
+								<b>{index + 1}</b>
+								<span>
+									{slot === null
+										? "EMPTY"
+										: `${gunDefinition(slot.weapon).name} ${String(slot.ammo).padStart(2, "0")}`}
+								</span>
+							</weapon-slot>
+						))}
+					</weapon-slots>
+					<small>{gun.name}</small>
 					<ammo-count>
 						<strong>{String(hud.ammo).padStart(2, "0")}</strong>
-						<span>/ 28</span>
+						<span>/ {String(gun.magazineSize).padStart(2, "0")}</span>
 					</ammo-count>
-					<em>{hud.ammo === 0 ? "PRESS RB / R TO RELOAD" : "PLASMA CELLS"}</em>
+					<em>
+						{gun.fire.type === "guided-missile"
+							? hud.ammo === 0
+								? "LAUNCHER EMPTY • 1 / Y / WHEEL TO SWITCH • X TO DROP"
+								: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH • X TO DROP"
+							: hud.ammo === 0
+								? "PRESS RB / R TO RELOAD"
+								: hud.pickup === "nearby"
+									? "HOLD E / RB TO PICK UP"
+									: hud.pickup === "available"
+										? "MINI-MISSILE AVAILABLE"
+										: hud.pickup === "carried"
+											? "MINI-MISSILE CARRIED"
+											: "MINI-MISSILE RESPAWNING"}
+					</em>
 				</weapon-status>
 
 				<game-footer>
@@ -204,10 +284,12 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>LOCK</span>
 						<kbd>LB HOLD</kbd>
 						<span>FREE AIM</span>
-						<kbd>RB</kbd>
-						<span>RELOAD</span>
+						<kbd>1 / Y / WHEEL</kbd>
+						<span>SWITCH</span>
 						<kbd>RMB / LT</kbd>
 						<span>GRENADE</span>
+						<kbd>HOLD E / RB</kbd>
+						<span>PICK UP</span>
 						<kbd>D-PAD ↑</kbd>
 						<span>WAVE</span>
 						<kbd>◉</kbd>

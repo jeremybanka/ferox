@@ -26,6 +26,39 @@ export const GRENADE_RADIUS = 0.18
 export const GRENADE_RESTITUTION = 0.56
 export const GRENADE_THROW_SPEED = 17
 
+// Mini-missile defaults are centralized here so playtesting can tune the weapon
+// without changing protocol or simulation behavior. Powered missiles keep a
+// valid designated or acquired pilot/drone target until it disappears. Only
+// pilot targets produce warnings. Splash never damages the missile owner.
+export const MINI_MISSILE_AMMO = 24
+export const MINI_MISSILE_BLAST_RADIUS = 5
+export const MINI_MISSILE_CLIENT_COOLDOWN_SECONDS = 0.18
+export const MINI_MISSILE_DAMAGE = 10
+export const MINI_MISSILE_GRAVITY = 13
+export const MINI_MISSILE_MAX_TURN_RATE = 2.4
+export const MINI_MISSILE_PICKUP_POSITION: readonly [number, number] = [0, 0]
+export const MINI_MISSILE_PICKUP_RADIUS = 2.4
+export const MINI_MISSILE_PICKUP_RESPAWN_SECONDS = 12
+export const PICKUP_HOLD_DURATION_MS = 600
+export const WEAPON_SWITCH_WHEEL_DEBOUNCE_MS = 180
+export const MINI_MISSILE_POWERED_SECONDS = 10
+export const MINI_MISSILE_RADIUS = 0.12
+export const MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS = 150
+export const MINI_MISSILE_SPEED = 14
+export const MINI_MISSILE_SEEKER_HALF_ANGLE = Math.PI / 5
+export const MINI_MISSILE_SEEKER_RANGE = 48
+export const MINI_MISSILE_SEEKER_SCAN_SECONDS = 0.12
+export const MINI_MISSILE_TRAIL_COLOR = "#ff6a00"
+export const MINI_MISSILE_TRAIL_LIFETIME_SECONDS = 1.4
+export const MINI_MISSILE_TRAIL_MAX_POINTS = 32
+export const MINI_MISSILE_TRAIL_SAMPLE_SPACING = 0.25
+
+export function miniMissileDamageAtDistance(distance: number): number {
+	if (distance >= MINI_MISSILE_BLAST_RADIUS) return 0
+	const normalized = Math.max(0, distance) / MINI_MISSILE_BLAST_RADIUS
+	return MINI_MISSILE_DAMAGE * (1 - normalized)
+}
+
 export function grenadeDamageAtDistance(distance: number): number {
 	if (distance >= GRENADE_BLAST_RADIUS) return 0
 	const step = Math.floor(Math.max(0, distance) / GRENADE_DAMAGE_STEP_DISTANCE)
@@ -47,6 +80,8 @@ export const PLAYER_SPAWN_ORDER: readonly number[] = [
 ]
 
 export const SMART_TARGET_RADIUS_SCREEN = 0.22
+export const STANDARD_LOCK_DIRECTION_COSINE = Math.cos(Math.PI / 18)
+export const STANDARD_LOCK_MAX_RANGE = 48
 export const FREE_AIM_TAP_THRESHOLD_MS = 220
 export const TARGET_ESCAPE_DURATION_MS = 1_000
 export const TARGET_LOST_FLASH_MS = 260

@@ -1,5 +1,14 @@
 import type { PilotRig } from "./PilotModel.ts"
 import {
+	PILOT_CROUCH_BODY_OFFSET,
+	PILOT_CROUCH_BODY_PITCH,
+	PILOT_CROUCH_HIPS_HEIGHT,
+	PILOT_CROUCH_HEAD_PITCH,
+	PILOT_CROUCH_NECK_PITCH,
+	PILOT_CROUCH_ROOT_OFFSET,
+	PILOT_RIG_STANDING_HIPS_HEIGHT,
+} from "./PilotDimensions.ts"
+import {
 	definePilotKeyframes,
 	definePilotPose,
 	PILOT_JOINTS,
@@ -163,13 +172,15 @@ function crouchWeight(weight: number): number {
 function applyGuardedCrouch(rig: PilotRig, weight: number): void {
 	const amount = crouchWeight(weight)
 
-	rig.root.position.y = -0.5 * amount
-	rig.hips.position.y = 1.72 - 0.2 * amount
+	rig.root.position.y = PILOT_CROUCH_ROOT_OFFSET * amount
+	rig.hips.position.y =
+		PILOT_RIG_STANDING_HIPS_HEIGHT +
+		(PILOT_CROUCH_HIPS_HEIGHT - PILOT_RIG_STANDING_HIPS_HEIGHT) * amount
 	rig.hips.rotation.x = -0.08 * amount
-	rig.body.position.y = -0.06 * amount
-	rig.body.rotation.x = -0.52 * amount
-	rig.neck.rotation.x = -0.05 * amount
-	rig.head.rotation.x = -0.07 * amount
+	rig.body.position.y = PILOT_CROUCH_BODY_OFFSET * amount
+	rig.body.rotation.x = PILOT_CROUCH_BODY_PITCH * amount
+	rig.neck.rotation.x = PILOT_CROUCH_NECK_PITCH * amount
+	rig.head.rotation.x = PILOT_CROUCH_HEAD_PITCH * amount
 
 	rig.leftLeg.rotation.x = 1.5 * amount
 	rig.leftLeg.rotation.z = -0.22 * amount

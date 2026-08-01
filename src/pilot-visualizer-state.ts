@@ -1,6 +1,7 @@
 import { atom } from "atom.io"
 import { storageSync } from "atom.io/web"
 
+import { DEFAULT_GUN_ID, type GunId } from "./guns/GunDefinitions.ts"
 import type { RunDirection } from "./pilot/RunAnimation.ts"
 
 export type CrouchRunAnimation = `crouch-run-${RunDirection}`
@@ -20,6 +21,7 @@ export type SampleInterval = 0.167 | 0.0833
 export type PilotVisualizerControls = {
 	baseAnimation: BaseAnimation
 	bunnyhopping: boolean
+	gunId: GunId
 	isPlaying: boolean
 	overlays: readonly OverlayAnimation[]
 	sampleInterval: SampleInterval
@@ -46,6 +48,7 @@ export const pilotVisualizerControlsAtom = atom<PilotVisualizerControls>({
 	default: {
 		baseAnimation: "forward",
 		bunnyhopping: false,
+		gunId: DEFAULT_GUN_ID,
 		isPlaying: true,
 		overlays: [],
 		sampleInterval: 0.0833,
