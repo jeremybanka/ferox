@@ -7,6 +7,7 @@ import {
 	type PilotPose,
 	type PoseInfluence,
 } from "./PilotAnimation.ts"
+import { sampleWeaponsFreePose } from "./WeaponsFreePose.ts"
 
 const RELOAD_INFLUENCE = {
 	body: 0.28,
@@ -137,16 +138,16 @@ function arcCellKeyframes(
 ): readonly ReloadPoseKeyframe[] {
 	const markers = phaseMarkers("arc-cell", refillProgress)
 	return [
-		{ at: 0, pose: NEUTRAL_POSE },
+		{ at: 0, pose: sampleWeaponsFreePose(0, 0) },
 		{
 			at: markers[1]!.progress,
 			pose: definePilotPose({
 				body: { rotation: { y: -0.08 } },
-				leftShoulder: { rotation: { x: -0.82, y: -0.42, z: -0.3 } },
-				leftArm: { rotation: { x: -0.48 } },
-				leftElbow: { rotation: { x: -1.32, y: 0.3 } },
-				rightShoulder: { rotation: { x: 0.58, y: 0.2, z: 0.16 } },
-				rightElbow: { rotation: { x: -0.7 } },
+				leftShoulder: { rotation: { x: -0.8, y: -0.52, z: -0.3 } },
+				leftArm: { rotation: { x: -0.6 } },
+				leftElbow: { rotation: { x: 2.52, y: 0.3 } },
+				rightShoulder: { rotation: { x: 1.58, y: 0.2, z: 0.16 } },
+				rightElbow: { rotation: { x: 0.3 } },
 				rightHand: { rotation: { x: 0.3, z: 0.16 } },
 				weaponMount: { rotation: { x: -1.18, z: 0.24 } },
 				weapon: { position: { y: -0.12 }, rotation: { x: -0.28 } },
@@ -155,33 +156,32 @@ function arcCellKeyframes(
 		{
 			at: markers[2]!.progress,
 			pose: definePilotPose({
-				body: { rotation: { y: -0.12 } },
-				leftShoulder: { rotation: { x: -1.02, y: -0.52, z: -0.38 } },
-				leftArm: { rotation: { x: -0.62 } },
-				leftElbow: { rotation: { x: -1.5, y: 0.38 } },
-				leftHand: { rotation: { x: -0.22, z: -0.16 } },
-				rightShoulder: { rotation: { x: 0.78, y: 0.3, z: 0.22 } },
-				rightElbow: { rotation: { x: -0.9 } },
-				rightHand: { rotation: { x: 0.46, z: 0.22 } },
-				weaponMount: { rotation: { x: -1.02, z: 0.32 } },
-				weapon: { position: { y: -0.2 }, rotation: { x: -0.4 } },
+				body: { rotation: { y: -0.08 } },
+				leftShoulder: { rotation: { x: 1.8, y: -0.52, z: -0.3 } },
+				leftArm: { rotation: { x: 0.1, z: 0.6 } },
+				leftElbow: { rotation: { x: 0.52, y: 0.3 } },
+				rightShoulder: { rotation: { x: 1.58, y: 0.2, z: 0.16 } },
+				rightElbow: { rotation: { x: 0.3, y: -1 } },
+				rightHand: { rotation: { x: 0.3, z: 0.16 } },
+				weaponMount: { rotation: { x: -1.18, z: 0.24 } },
+				weapon: { position: { y: -0.12 }, rotation: { x: -0.28 } },
 			}),
 		},
 		{
 			at: markers[3]!.progress,
 			pose: definePilotPose({
-				body: { rotation: { y: -0.06 } },
-				leftShoulder: { rotation: { x: -0.72, y: -0.32, z: -0.24 } },
-				leftArm: { rotation: { x: -0.4 } },
-				leftElbow: { rotation: { x: -1.1, y: 0.22 } },
-				rightShoulder: { rotation: { x: 0.5, y: 0.16, z: 0.12 } },
-				rightElbow: { rotation: { x: -0.58 } },
-				rightHand: { rotation: { x: 0.18 } },
-				weaponMount: { rotation: { x: -1.28, z: 0.12 } },
-				weapon: { position: { y: -0.08 }, rotation: { x: 0.12 } },
+				body: { rotation: { y: -0.08 } },
+				leftShoulder: { rotation: { x: -0.8, y: -0.52, z: -0.3 } },
+				leftArm: { rotation: { x: -0.6 } },
+				leftElbow: { rotation: { x: 2.52, y: 0.3 } },
+				rightShoulder: { rotation: { x: 1.58, y: 0.2, z: 0.16 } },
+				rightElbow: { rotation: { x: 0.3, y: -1 } },
+				rightHand: { rotation: { x: 0.3, z: 0.16 } },
+				weaponMount: { rotation: { x: -1.18, z: 0.24 } },
+				weapon: { position: { y: -0.12 }, rotation: { x: -0.28 } },
 			}),
 		},
-		{ at: 1, pose: NEUTRAL_POSE },
+		{ at: 1, pose: sampleWeaponsFreePose(0, 0) },
 	]
 }
 
@@ -211,7 +211,7 @@ function miniTubeKeyframes(
 				leftArm: { rotation: { x: -0.34, z: -0.2 } },
 				leftElbow: { rotation: { x: -1.3, y: -0.42 } },
 				leftHand: { rotation: { x: 0.35, z: -0.22 } },
-				rightShoulder: { rotation: { x: 0.6, y: -0.28, z: 0.42 } },
+				rightShoulder: { rotation: { x: 1.6, y: -0.28, z: 1.42 } },
 				rightElbow: { rotation: { x: -0.82 } },
 				weaponMount: { rotation: { x: -0.46, y: 0.2, z: -0.72 } },
 				weapon: {
@@ -228,7 +228,7 @@ function miniTubeKeyframes(
 				leftArm: { rotation: { x: -0.58, y: -0.24 } },
 				leftElbow: { rotation: { x: -1.5, y: 0.34 } },
 				leftHand: { rotation: { x: -0.48, z: 0.28 } },
-				rightShoulder: { rotation: { x: 0.7, y: 0.2, z: 0.34 } },
+				rightShoulder: { rotation: { x: 0.7, y: 1.2, z: 1.34 } },
 				rightElbow: { rotation: { x: -1.02, y: -0.16 } },
 				weaponMount: { rotation: { x: -0.38, y: -0.18, z: -0.58 } },
 				weapon: {

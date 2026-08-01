@@ -42,11 +42,11 @@ export const SLIDE_ROOT_SURFACE_RESPONSE = 0.42
 
 export const SLIDE_LEG_ROTATION_LIMITS = {
 	leftFoot: { x: [-0.8, 0.65], y: [-0.45, 0.45], z: [-0.45, 0.45] },
-	leftKnee: { x: [0, 1.1], y: [-0.35, 0.35], z: [-0.35, 0.35] },
-	leftLeg: { x: [-1.2, 0.9], y: [-0.55, 0.55], z: [-0.45, 0.45] },
+	leftKnee: { x: [-4, 0], y: [-4, 0], z: [-0.35, 0.35] },
+	leftLeg: { x: [-4, 4], y: [-0.55, 0.55], z: [-2.45, 0.45] },
 	rightFoot: { x: [-0.8, 0.65], y: [-0.45, 0.45], z: [-0.45, 0.45] },
-	rightKnee: { x: [0, 1.8], y: [-0.35, 0.35], z: [-0.35, 0.35] },
-	rightLeg: { x: [-1.2, 1.1], y: [-0.55, 0.55], z: [-0.45, 0.45] },
+	rightKnee: { x: [-2.5, 0], y: [-0.35, 0.35], z: [-0.35, 0.35] },
+	rightLeg: { x: [0, 2], y: [-0.55, 0.55], z: [-0.45, 2.45] },
 } as const
 
 type LegJoint = keyof typeof SLIDE_LEG_ROTATION_LIMITS
@@ -127,7 +127,7 @@ export function slideSurfaceRootRotation(
 
 function slideSurfaceRootPosition(
 	surface: SlideSurfaceFrame,
-	depth = 0.76,
+	depth = 0.26,
 ): Required<PoseChannels> {
 	const normal = slidePresentationNormal(surface)
 	return {
@@ -181,13 +181,13 @@ export function sampleSlideAnimationPose(
 		leftElbow: { rotation: { x: 2.36 } },
 		leftLeg: {
 			rotation: constrainLegRotation("leftLeg", {
-				x: 1.72,
-				y: 1.78,
-				z: -0.5 - strafe * 0.16,
+				x: 2.92,
+				y: 2.78,
+				z: -1.8 - strafe * 0.16,
 			}),
 		},
 		leftKnee: {
-			rotation: constrainLegRotation("leftKnee", { x: -3.22, y: 0, z: 0 }),
+			rotation: { x: Math.PI, y: 0, z: 0 },
 		},
 		leftFoot: {
 			rotation: constrainLegRotation("leftFoot", {
