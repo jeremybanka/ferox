@@ -9,6 +9,7 @@ import {
 	DEATH_BACKWARD_SHUFFLE_LEFT_POSE,
 	DEATH_BACKWARD_SHUFFLE_RIGHT_POSE,
 	DEATH_BOTH_KNEES_DROP_POSE,
+	DEATH_BOTH_KNEES_HOLD_POSE,
 	DEATH_DEFEATED_HOLD_POSE,
 	DEATH_FINAL_PRONE_ARMS_UP_POSE,
 	DEATH_FORWARD_FALL_ARMS_UP_POSE,
@@ -23,6 +24,7 @@ const EXPECTED_PHASES = [
 	["shuffle-left", "backward shuffle left"],
 	["shuffle-right", "backward shuffle right"],
 	["knee-drop", "both knees drop"],
+	["knees-hold", "both knees hold"],
 	["forward-fall", "forward fall arms up"],
 	["final-prone", "final prone arms up"],
 	["defeated-hold", "defeated hold"],
@@ -51,6 +53,7 @@ test("one named timeline drives death phase order, timing, markers, and duration
 		DEATH_BACKWARD_SHUFFLE_LEFT_POSE,
 		DEATH_BACKWARD_SHUFFLE_RIGHT_POSE,
 		DEATH_BOTH_KNEES_DROP_POSE,
+		DEATH_BOTH_KNEES_HOLD_POSE,
 		DEATH_FORWARD_FALL_ARMS_UP_POSE,
 		DEATH_FINAL_PRONE_ARMS_UP_POSE,
 		DEATH_DEFEATED_HOLD_POSE,
@@ -66,21 +69,27 @@ test("one named timeline drives death phase order, timing, markers, and duration
 	}
 })
 
-test("death cadence hesitates before the knees then flows through an accelerating fall", () => {
+test("death cadence sways, holds on both knees, then flows through an accelerating fall", () => {
 	const phase = (id: (typeof DEATH_ANIMATION_TIMELINE)[number]["id"]) =>
 		DEATH_ANIMATION_TIMELINE.find((candidate) => candidate.id === id)!
 	const shuffleRight = phase("shuffle-right")
 	const kneeDrop = phase("knee-drop")
+	const kneesHold = phase("knees-hold")
 	const forwardFall = phase("forward-fall")
 	const finalProne = phase("final-prone")
 	const preKneeSeconds = kneeDrop.atSeconds - shuffleRight.atSeconds
-	const kneeToFallSeconds = forwardFall.atSeconds - kneeDrop.atSeconds
+	const kneeHoldSeconds = kneesHold.atSeconds - kneeDrop.atSeconds
+	const holdToFallSeconds = forwardFall.atSeconds - kneesHold.atSeconds
 	const fallToProneSeconds = finalProne.atSeconds - forwardFall.atSeconds
 
-	assert.ok(preKneeSeconds >= 0.49)
-	assert.ok(kneeToFallSeconds < preKneeSeconds)
-	assert.ok(fallToProneSeconds < kneeToFallSeconds)
+	assert.equal(shuffleRight.atSeconds, 0.5)
+	assert.equal(kneeDrop.atSeconds, 0.6)
+	assert.equal(kneesHold.atSeconds, 0.72)
+	assert.ok(Math.abs(preKneeSeconds - 0.1) < 1e-9)
+	assert.ok(Math.abs(kneeHoldSeconds - 0.12) < 1e-9)
+	assert.ok(fallToProneSeconds < holdToFallSeconds)
 	assert.equal(kneeDrop.easingFromPrevious, "smoothstep")
+	assert.equal(kneesHold.easingFromPrevious, "linear")
 	assert.equal(forwardFall.easingFromPrevious, "linear")
 	assert.equal(finalProne.easingFromPrevious, "linear")
 	assert.ok(
@@ -98,7 +107,13 @@ test("death cadence hesitates before the knees then flows through an acceleratin
 	const kneePitch = sampleRootPitch(kneeDrop.atSeconds)
 	const fallPitch = sampleRootPitch(forwardFall.atSeconds)
 	assert.ok(
-		Math.abs(sampleRootPitch(kneeDrop.atSeconds + epsilon) - kneePitch) > 0.01,
+		Math.abs(sampleRootPitch(kneeDrop.atSeconds + epsilon) - kneePitch) < 1e-9,
+	)
+	assert.ok(
+		Math.abs(sampleRootPitch(kneesHold.atSeconds - epsilon) - kneePitch) < 1e-9,
+	)
+	assert.ok(
+		Math.abs(sampleRootPitch(kneesHold.atSeconds + epsilon) - kneePitch) > 0.01,
 	)
 	assert.ok(
 		Math.abs(fallPitch - sampleRootPitch(forwardFall.atSeconds - epsilon)) >
@@ -141,6 +156,14 @@ test("death cadence hesitates before the knees then flows through an acceleratin
 		const to = visualVector(toSeconds)
 		return Math.hypot(...to.map((value, index) => value - from[index]!))
 	}
+	assert.ok(
+		visualMotion(kneeDrop.atSeconds + epsilon, kneesHold.atSeconds - epsilon) <
+			1e-9,
+	)
+	assert.ok(
+		visualMotion(kneesHold.atSeconds, kneesHold.atSeconds + epsilon) / epsilon >
+			4,
+	)
 	const arrivingMotion = visualMotion(
 		forwardFall.atSeconds - epsilon,
 		forwardFall.atSeconds,

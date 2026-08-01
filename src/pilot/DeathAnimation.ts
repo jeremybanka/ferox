@@ -73,6 +73,10 @@ export const DEATH_BOTH_KNEES_DROP_POSE = definePilotPose({
 	rightElbow: { rotation: { x: 0.5 } },
 })
 
+export const DEATH_BOTH_KNEES_HOLD_POSE = definePilotPose({
+	...DEATH_BOTH_KNEES_DROP_POSE,
+})
+
 export const DEATH_FORWARD_FALL_ARMS_UP_POSE = definePilotPose({
 	root: { position: { y: -0.68, z: 0.45 }, rotation: { x: -0.9 } },
 	hips: { position: { y: 1.28, z: 0.08 }, rotation: { x: -0.42 } },
@@ -158,6 +162,14 @@ export const DEATH_ANIMATION_TIMELINE = [
 		poseName: "both knees drop",
 	},
 	{
+		atSeconds: 0.72,
+		easingFromPrevious: "linear",
+		id: "knees-hold",
+		label: "both knees hold",
+		pose: DEATH_BOTH_KNEES_HOLD_POSE,
+		poseName: "both knees hold",
+	},
+	{
 		atSeconds: 1,
 		easingFromPrevious: "linear",
 		id: "forward-fall",
@@ -228,8 +240,8 @@ const CONTINUOUS_FALL_JOINTS = [
 	"rightFoot",
 ] as const
 
-const fallKneePhase = DEATH_ANIMATION_TIMELINE.find(
-	({ id }) => id === "knee-drop",
+const fallKneesHoldPhase = DEATH_ANIMATION_TIMELINE.find(
+	({ id }) => id === "knees-hold",
 )!
 const fallPassThroughPhase = DEATH_ANIMATION_TIMELINE.find(
 	({ id }) => id === "forward-fall",
@@ -239,7 +251,7 @@ const fallPronePhase = DEATH_ANIMATION_TIMELINE.find(
 )!
 
 const fallControlPoses = [
-	fallKneePhase,
+	fallKneesHoldPhase,
 	fallPassThroughPhase,
 	fallPronePhase,
 ].map(({ atSeconds }) =>
@@ -285,22 +297,22 @@ function hermiteChannel(
 
 function sampleContinuousFallPose(elapsedSeconds: number): PilotPose | null {
 	if (
-		elapsedSeconds < fallKneePhase.atSeconds ||
+		elapsedSeconds < fallKneesHoldPhase.atSeconds ||
 		elapsedSeconds > fallPronePhase.atSeconds
 	)
 		return null
-	const kneeToPassSeconds =
-		fallPassThroughPhase.atSeconds - fallKneePhase.atSeconds
+	const holdToPassSeconds =
+		fallPassThroughPhase.atSeconds - fallKneesHoldPhase.atSeconds
 	const passToProneSeconds =
 		fallPronePhase.atSeconds - fallPassThroughPhase.atSeconds
 	const beforePassThrough = elapsedSeconds <= fallPassThroughPhase.atSeconds
-	const duration = beforePassThrough ? kneeToPassSeconds : passToProneSeconds
+	const duration = beforePassThrough ? holdToPassSeconds : passToProneSeconds
 	const progress = Math.max(
 		0,
 		Math.min(
 			1,
 			beforePassThrough
-				? (elapsedSeconds - fallKneePhase.atSeconds) / duration
+				? (elapsedSeconds - fallKneesHoldPhase.atSeconds) / duration
 				: (elapsedSeconds - fallPassThroughPhase.atSeconds) / duration,
 		),
 	)
@@ -312,23 +324,23 @@ function sampleContinuousFallPose(elapsedSeconds: number): PilotPose | null {
 					(pose) => pose[joint]?.[kind]?.[axis],
 				)
 				if (authored.every((value) => value === undefined)) continue
-				const [knee = 0, passThrough = 0, prone = 0] = authored
-				const kneeSlope = (passThrough - knee) / kneeToPassSeconds
+				const [kneesHold = 0, passThrough = 0, prone = 0] = authored
+				const holdSlope = (passThrough - kneesHold) / holdToPassSeconds
 				const proneSlope = (prone - passThrough) / passToProneSeconds
 				const passThroughTangent = monotonePassThroughTangent(
-					knee,
+					kneesHold,
 					passThrough,
 					prone,
-					kneeToPassSeconds,
+					holdToPassSeconds,
 					passToProneSeconds,
 				)
 				const value = beforePassThrough
 					? hermiteChannel(
-							knee,
+							kneesHold,
 							passThrough,
-							kneeSlope,
+							holdSlope,
 							passThroughTangent,
-							kneeToPassSeconds,
+							holdToPassSeconds,
 							progress,
 						)
 					: hermiteChannel(
