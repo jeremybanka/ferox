@@ -70,6 +70,7 @@ export type PilotAnimationConstraint = (rig: PilotRig) => void
 
 export type PilotKeyframe = {
 	at: number
+	easingFromPrevious?: "linear" | "smoothstep"
 	pose: PilotPose
 }
 
@@ -200,11 +201,15 @@ export function samplePilotKeyframes(
 	const from = keyframes[fromIndex] ?? first
 	const to = keyframes[fromIndex + 1] ?? last
 	const range = Math.max(0.000_001, to.at - from.at)
-	const amount = THREE.MathUtils.smoothstep(
-		sampleTime,
-		from.at,
-		from.at + range,
+	const linearAmount = THREE.MathUtils.clamp(
+		(sampleTime - from.at) / range,
+		0,
+		1,
 	)
+	const amount =
+		to.easingFromPrevious === "linear"
+			? linearAmount
+			: THREE.MathUtils.smoothstep(linearAmount, 0, 1)
 	const pose: PilotPose = {}
 	for (const joint of PILOT_JOINTS) {
 		const fromJoint = from.pose[joint]

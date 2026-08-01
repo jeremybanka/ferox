@@ -66,6 +66,42 @@ test("one named timeline drives death phase order, timing, markers, and duration
 	}
 })
 
+test("death cadence hesitates before the knees then flows through an accelerating fall", () => {
+	const phase = (id: (typeof DEATH_ANIMATION_TIMELINE)[number]["id"]) =>
+		DEATH_ANIMATION_TIMELINE.find((candidate) => candidate.id === id)!
+	const shuffleRight = phase("shuffle-right")
+	const kneeDrop = phase("knee-drop")
+	const forwardFall = phase("forward-fall")
+	const finalProne = phase("final-prone")
+	const preKneeSeconds = kneeDrop.atSeconds - shuffleRight.atSeconds
+	const kneeToFallSeconds = forwardFall.atSeconds - kneeDrop.atSeconds
+	const fallToProneSeconds = finalProne.atSeconds - forwardFall.atSeconds
+
+	assert.ok(preKneeSeconds >= 0.49)
+	assert.ok(kneeToFallSeconds < preKneeSeconds)
+	assert.ok(fallToProneSeconds < kneeToFallSeconds)
+	assert.equal(kneeDrop.easingFromPrevious, "smoothstep")
+	assert.equal(forwardFall.easingFromPrevious, "linear")
+	assert.equal(finalProne.easingFromPrevious, "linear")
+
+	const sampleRootPitch = (atSeconds: number) =>
+		sampleDeathAnimationPose(atSeconds).root?.rotation?.x ?? 0
+	const epsilon = 0.01
+	const kneePitch = sampleRootPitch(kneeDrop.atSeconds)
+	const fallPitch = sampleRootPitch(forwardFall.atSeconds)
+	assert.ok(
+		Math.abs(sampleRootPitch(kneeDrop.atSeconds + epsilon) - kneePitch) > 0.01,
+	)
+	assert.ok(
+		Math.abs(fallPitch - sampleRootPitch(forwardFall.atSeconds - epsilon)) >
+			0.01,
+	)
+	assert.ok(
+		Math.abs(sampleRootPitch(forwardFall.atSeconds + epsilon) - fallPitch) >
+			0.01,
+	)
+})
+
 test("death shuffle and kneel use forward-flexing knees", () => {
 	for (const pose of [
 		DEATH_BACKWARD_SHUFFLE_LEFT_POSE,

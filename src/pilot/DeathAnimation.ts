@@ -127,6 +127,7 @@ export const DEATH_DEFEATED_HOLD_POSE = definePilotPose({
 export const DEATH_ANIMATION_TIMELINE = [
 	{
 		atSeconds: 0,
+		easingFromPrevious: "linear",
 		id: "impact",
 		label: "impact upright",
 		pose: DEATH_IMPACT_UPRIGHT_POSE,
@@ -134,6 +135,7 @@ export const DEATH_ANIMATION_TIMELINE = [
 	},
 	{
 		atSeconds: 0.16,
+		easingFromPrevious: "smoothstep",
 		id: "shuffle-left",
 		label: "shuffle backward, left step",
 		pose: DEATH_BACKWARD_SHUFFLE_LEFT_POSE,
@@ -141,13 +143,15 @@ export const DEATH_ANIMATION_TIMELINE = [
 	},
 	{
 		atSeconds: 0.32,
+		easingFromPrevious: "smoothstep",
 		id: "shuffle-right",
 		label: "shuffle backward, right step",
 		pose: DEATH_BACKWARD_SHUFFLE_RIGHT_POSE,
 		poseName: "backward shuffle right",
 	},
 	{
-		atSeconds: 0.736,
+		atSeconds: 0.82,
+		easingFromPrevious: "smoothstep",
 		id: "knee-drop",
 		label: "both knees drop",
 		pose: DEATH_BOTH_KNEES_DROP_POSE,
@@ -155,13 +159,15 @@ export const DEATH_ANIMATION_TIMELINE = [
 	},
 	{
 		atSeconds: 1.12,
+		easingFromPrevious: "linear",
 		id: "forward-fall",
 		label: "forward fall, arms outward and up",
 		pose: DEATH_FORWARD_FALL_ARMS_UP_POSE,
 		poseName: "forward fall arms up",
 	},
 	{
-		atSeconds: 1.44,
+		atSeconds: 1.34,
+		easingFromPrevious: "linear",
 		id: "final-prone",
 		label: "final prone, arms outward and up",
 		pose: DEATH_FINAL_PRONE_ARMS_UP_POSE,
@@ -169,6 +175,7 @@ export const DEATH_ANIMATION_TIMELINE = [
 	},
 	{
 		atSeconds: 1.6,
+		easingFromPrevious: "smoothstep",
 		id: "defeated-hold",
 		label: "defeated hold",
 		pose: DEATH_DEFEATED_HOLD_POSE,
@@ -191,10 +198,13 @@ export const DEATH_ANIMATION_MARKERS = DEATH_ANIMATION_TIMELINE.map(
 )
 
 const DEATH_KEYFRAMES = definePilotKeyframes({
-	keyframes: DEATH_ANIMATION_TIMELINE.map(({ atSeconds, pose }) => ({
-		at: atSeconds / DEATH_ANIMATION_DURATION_SECONDS,
-		pose,
-	})),
+	keyframes: DEATH_ANIMATION_TIMELINE.map(
+		({ atSeconds, easingFromPrevious, pose }) => ({
+			at: atSeconds / DEATH_ANIMATION_DURATION_SECONDS,
+			easingFromPrevious,
+			pose,
+		}),
+	),
 	loop: false,
 })
 
