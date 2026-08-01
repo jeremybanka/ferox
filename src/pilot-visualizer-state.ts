@@ -70,6 +70,8 @@ export type PilotVisualizerControls = {
 	overlays: readonly OverlayAnimation[]
 	sampleInterval: SampleInterval
 	selectedTime: number
+	slideDirectionDegrees: number
+	slideExtremityPercent: number
 	speed: number
 	targetPitch: number
 	targetYaw: number
@@ -97,6 +99,8 @@ export const pilotVisualizerControlsAtom = atom<PilotVisualizerControls>({
 		overlays: [],
 		sampleInterval: 0.0833,
 		selectedTime: 0,
+		slideDirectionDegrees: 0,
+		slideExtremityPercent: 100,
 		speed: 1,
 		targetPitch: 0,
 		targetYaw: 0,

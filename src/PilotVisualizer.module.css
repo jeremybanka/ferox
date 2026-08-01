@@ -223,6 +223,66 @@ pilot-visualizer.class {
 		}
 	}
 
+	> slide-vector-control {
+		position: absolute;
+		z-index: 2;
+		bottom: 14.9rem;
+		left: calc(50% - 7.5rem);
+		display: grid;
+		grid-template-columns: auto minmax(10rem, 1fr) minmax(10rem, 1fr);
+		align-items: center;
+		gap: 0.65rem;
+		width: min(58rem, calc(100% - 30rem));
+		padding: 0.65rem 0.75rem;
+		border: 1px solid rgb(109 235 215 / 0.24);
+		background: rgb(8 16 25 / 0.9);
+		font-family: var(--font-mono);
+		translate: -50%;
+
+		> slide-vector-header {
+			display: grid;
+			gap: 0.2rem;
+
+			> strong {
+				color: #e9fffa;
+				font-size: 0.55rem;
+				letter-spacing: 0.14em;
+			}
+
+			> small {
+				color: #71858b;
+				font-size: 0.4rem;
+				letter-spacing: 0.07em;
+				white-space: nowrap;
+			}
+		}
+
+		> label {
+			display: grid;
+			grid-template-columns: auto 1fr auto;
+			align-items: center;
+			gap: 0.55rem;
+
+			> span,
+			> output {
+				color: #809399;
+				font-size: 0.48rem;
+				letter-spacing: 0.1em;
+			}
+
+			> input {
+				width: 100%;
+				accent-color: #6debd7;
+			}
+
+			> output {
+				min-width: 2.8rem;
+				color: #e9fffa;
+				text-align: right;
+			}
+		}
+	}
+
 	> animation-console {
 		position: absolute;
 		bottom: 1.2rem;
@@ -660,6 +720,16 @@ pilot-visualizer.class {
 	}
 
 	@media (width <= 900px) {
+		> slide-vector-control {
+			left: 50%;
+			grid-template-columns: 1fr 1fr;
+			width: calc(100% - 2rem);
+
+			> slide-vector-header {
+				grid-column: 1 / -1;
+			}
+		}
+
 		> pose-diagnostics {
 			top: 8.5rem;
 		}

@@ -17,6 +17,16 @@ import {
 	type SlideAnimation,
 } from "./pilot-visualizer-state.ts"
 import {
+	clampSlideExtremityPercent,
+	normalizeSlideDirectionDegrees,
+	PILOT_VISUALIZER_GROUND_HEIGHT,
+	samplePilotVisualizerSlideVector,
+	sampleStoredPilotVisualizerSlideVector,
+	slideExtremityWeight,
+	slidePresetDirectionDegrees,
+	type PilotVisualizerSlideVector,
+} from "./pilot-visualizer-slide.ts"
+import {
 	JUMP_PHYSICS,
 	sampleJumpTrajectory,
 	simulateDoubleJumpWindow,
@@ -109,7 +119,6 @@ import {
 	slideAnimationLayer,
 	SLIDE_DURATION_SECONDS,
 	SLIDE_KEYFRAME_MARKERS,
-	type SlideMotion,
 } from "./pilot/SlideAnimation.ts"
 import { waveAnimationLayer } from "./pilot/WaveAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
@@ -242,14 +251,6 @@ function getSlideDirection(baseAnimation: BaseAnimation): RunDirection | null {
 			return "right"
 		default:
 			return null
-	}
-}
-
-function slidePreviewMotion(direction: RunDirection): SlideMotion {
-	return {
-		localVelocityX: direction === "left" ? -8 : direction === "right" ? 8 : 0,
-		localVelocityZ:
-			direction === "forward" ? -8 : direction === "backward" ? 8 : 0,
 	}
 }
 
@@ -477,6 +478,7 @@ function getLifecyclePoseStats(
 	time: number,
 	gunId: GunId,
 	overlays: readonly OverlayAnimation[],
+	slideVector: PilotVisualizerSlideVector,
 ): readonly PoseStat[] | null {
 	if (overlays.includes("reload") && supportsOverlay(baseAnimation, "reload")) {
 		const reload = gunDefinition(gunId).reload
@@ -505,7 +507,7 @@ function getLifecyclePoseStats(
 	const slideDirection = getSlideDirection(baseAnimation)
 	if (slideDirection !== null) {
 		const weight = slidePreviewWeight(progress)
-		const motion = slidePreviewMotion(slideDirection)
+		const motion = slideVector.motion
 		return [
 			{ label: "TIMELINE", max: 1, signed: false, unit: "", value: progress },
 			{ label: "POSE", max: 1, signed: false, unit: "", value: weight },
@@ -589,6 +591,7 @@ function applyPreviewPose(
 	overlayWeights: Partial<Record<OverlayAnimation, number>> = {},
 	bunnyhopping = false,
 	gunId: GunId = DEFAULT_GUN_ID,
+	slideVector?: PilotVisualizerSlideVector,
 ): void {
 	const activeBunnyhop = bunnyhopping && supportsBunnyhop(baseAnimation)
 	const duration = getPreviewDuration(
@@ -614,12 +617,22 @@ function applyPreviewPose(
 		)
 		if (deathLayer !== null) layers.push(deathLayer)
 	} else if (getSlideDirection(baseAnimation) !== null) {
-		const slideDirection = getSlideDirection(baseAnimation) ?? "forward"
+		const activeSlideVector =
+			slideVector ??
+			samplePilotVisualizerSlideVector(
+				slidePresetDirectionDegrees(baseAnimation) ?? 0,
+				100,
+			)
 		layers.push(idleAnimationLayer(time))
 		layers.push({
-			...slideAnimationLayer(slidePreviewMotion(slideDirection)),
+			...slideAnimationLayer(
+				activeSlideVector.motion,
+				activeSlideVector.heading,
+			),
 			fadeSeconds: 0,
-			weight: slidePreviewWeight(progress),
+			weight:
+				slidePreviewWeight(progress) *
+				slideExtremityWeight(activeSlideVector.extremityPercent),
 		})
 	} else if (activeBunnyhop) {
 		const airborneSample = samplePreviewAirborneMotion(
@@ -882,6 +895,11 @@ export function PilotVisualizer(): VNode {
 		yaw,
 	} = controls
 	const gunId = isGunId(controls.gunId) ? controls.gunId : DEFAULT_GUN_ID
+	const slideVector = sampleStoredPilotVisualizerSlideVector(controls)
+	const {
+		directionDegrees: slideDirectionDegrees,
+		extremityPercent: slideExtremityPercent,
+	} = slideVector
 	const timelineRef = useRef(selectedTime)
 	const controlsRef = useRef<PilotVisualizerControls>(controls)
 	controlsRef.current = controls
@@ -923,6 +941,12 @@ export function PilotVisualizer(): VNode {
 	const setSelectedTime = (next: number): void => {
 		setControl("selectedTime", next)
 	}
+	const setSlideDirectionDegrees = (next: number): void => {
+		setControl("slideDirectionDegrees", normalizeSlideDirectionDegrees(next))
+	}
+	const setSlideExtremityPercent = (next: number): void => {
+		setControl("slideExtremityPercent", clampSlideExtremityPercent(next))
+	}
 	const setSpeed = (next: number): void => {
 		setControl("speed", next)
 	}
@@ -960,6 +984,7 @@ export function PilotVisualizer(): VNode {
 		Math.min(selectedTime, duration),
 		gunId,
 		overlays,
+		slideVector,
 	)
 	const poseStats = lifecyclePoseStats ?? getPoseStats(poseSample)
 	const poseDiagnosticsActive =
@@ -987,6 +1012,10 @@ export function PilotVisualizer(): VNode {
 		setOverlays((current) =>
 			current.filter((overlay) => supportsOverlay(nextAnimation, overlay)),
 		)
+		const presetDirection = slidePresetDirectionDegrees(nextAnimation)
+		if (presetDirection !== null) {
+			setSlideDirectionDegrees(presetDirection)
+		}
 		setBaseAnimation(nextAnimation)
 	}
 
@@ -1080,7 +1109,7 @@ export function PilotVisualizer(): VNode {
 		floor.receiveShadow = true
 		scene.add(floor)
 		const grid = new THREE.GridHelper(14, 28, "#4fe1ca", "#293f48")
-		grid.position.y = -0.14
+		grid.position.y = PILOT_VISUALIZER_GROUND_HEIGHT
 		scene.add(grid)
 		const targetMaterial = new THREE.MeshBasicMaterial({
 			color: "#ff5b4d",
@@ -1202,7 +1231,7 @@ export function PilotVisualizer(): VNode {
 			deathRagdoll.update(rig, {
 				delta: 0,
 				elapsedSeconds: DEATH_RAGDOLL_HANDOFF_SECONDS,
-				groundHeightAt: () => 0,
+				groundHeightAt: () => PILOT_VISUALIZER_GROUND_HEIGHT,
 			})
 			let simulatedTime = DEATH_RAGDOLL_HANDOFF_SECONDS
 			while (simulatedTime < time - 1e-9) {
@@ -1211,7 +1240,7 @@ export function PilotVisualizer(): VNode {
 				deathRagdoll.update(rig, {
 					delta: step,
 					elapsedSeconds: simulatedTime,
-					groundHeightAt: () => 0,
+					groundHeightAt: () => PILOT_VISUALIZER_GROUND_HEIGHT,
 				})
 			}
 		}
@@ -1283,13 +1312,13 @@ export function PilotVisualizer(): VNode {
 					deathRagdoll.update(rig, {
 						delta: elapsed * controls.speed,
 						elapsedSeconds: previewTime,
-						groundHeightAt: () => 0,
+						groundHeightAt: () => PILOT_VISUALIZER_GROUND_HEIGHT,
 					})
 				} else {
 					deathRagdoll.update(rig, {
 						delta: elapsed * controls.speed,
 						elapsedSeconds: previewTime,
-						groundHeightAt: () => 0,
+						groundHeightAt: () => PILOT_VISUALIZER_GROUND_HEIGHT,
 					})
 				}
 			} else {
@@ -1309,6 +1338,7 @@ export function PilotVisualizer(): VNode {
 					{ "weapons-free": weaponsFreePreviewWeight },
 					controls.bunnyhopping,
 					nextGunId,
+					sampleStoredPilotVisualizerSlideVector(controls),
 				)
 				rig.root.rotation.y = controls.yaw
 			}
@@ -1436,7 +1466,7 @@ export function PilotVisualizer(): VNode {
 		const rig = createPilotModel(undefined, initialGunId)
 		scene.add(rig.root)
 		const grid = new THREE.GridHelper(8, 16, "#377f76", "#20343c")
-		grid.position.y = -0.14
+		grid.position.y = PILOT_VISUALIZER_GROUND_HEIGHT
 		scene.add(grid)
 
 		let frame = 0
@@ -1448,11 +1478,13 @@ export function PilotVisualizer(): VNode {
 				? controls.gunId
 				: DEFAULT_GUN_ID
 			setPilotGun(rig, nextGunId)
+			const activeSlideVector = sampleStoredPilotVisualizerSlideVector(controls)
 			const signature =
 				`${nextGunId}:${controls.baseAnimation}:${controls.bunnyhopping}:` +
 				`${controls.overlays.join(",")}:` +
 				`${controls.sampleInterval}:${controls.yaw.toFixed(4)}:` +
-				`${controls.targetPitch.toFixed(4)}:${controls.targetYaw.toFixed(4)}`
+				`${controls.targetPitch.toFixed(4)}:${controls.targetYaw.toFixed(4)}:` +
+				`${activeSlideVector.directionDegrees}:${activeSlideVector.extremityPercent}`
 			if (signature === previousSignature) return
 			previousSignature = signature
 			const activeDuration = getPreviewDuration(
@@ -1485,6 +1517,7 @@ export function PilotVisualizer(): VNode {
 					{},
 					controls.bunnyhopping,
 					nextGunId,
+					activeSlideVector,
 				)
 				rig.root.rotation.y = controls.yaw
 				applyPreviewVisor(rig, controls.baseAnimation, controls.overlays, time)
@@ -1605,6 +1638,44 @@ export function PilotVisualizer(): VNode {
 					</button>
 				</fieldset>
 			</animation-stack>
+			{getSlideDirection(baseAnimation) !== null && (
+				<slide-vector-control>
+					<slide-vector-header>
+						<strong>SLIDE VECTOR</strong>
+						<small>0 FWD · 90 RIGHT · 180 BACK · 270 LEFT</small>
+					</slide-vector-header>
+					<label>
+						<span>DIRECTION</span>
+						<input
+							aria-label="Slide direction"
+							type="range"
+							min="0"
+							max="360"
+							step="1"
+							value={slideDirectionDegrees}
+							onInput={(event) => {
+								setSlideDirectionDegrees(Number(event.currentTarget.value))
+							}}
+						/>
+						<output>{Math.round(slideDirectionDegrees)}°</output>
+					</label>
+					<label>
+						<span>EXTREMITY</span>
+						<input
+							aria-label="Slide extremity"
+							type="range"
+							min="0"
+							max="100"
+							step="1"
+							value={slideExtremityPercent}
+							onInput={(event) => {
+								setSlideExtremityPercent(Number(event.currentTarget.value))
+							}}
+						/>
+						<output>{Math.round(slideExtremityPercent)}%</output>
+					</label>
+				</slide-vector-control>
+			)}
 			<pose-diagnostics data-active={poseDiagnosticsActive}>
 				<pose-diagnostics-header>
 					<strong>POSE INPUTS</strong>
