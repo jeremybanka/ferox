@@ -6,6 +6,8 @@ import {
 	IDLE_HOLD_INPUT_STATE,
 	inputEdge,
 	gamepadGestureInputs,
+	isGrenadeSwitchGamepadInput,
+	isGrenadeSwitchKeyboardInput,
 	keyboardGestureInput,
 	isPickupGamepadInput,
 	isPickupKeyboardInput,
@@ -42,6 +44,24 @@ describe("pickup input", () => {
 		expect(inputEdge(true, true)).toEqual({ held: true, triggered: false })
 		expect(inputEdge(false, true)).toEqual({ held: false, triggered: false })
 		expect(inputEdge(true, false)).toEqual({ held: true, triggered: true })
+	})
+})
+
+describe("grenade selection input", () => {
+	test("keeps grenade cycling independent from the salute fallback", () => {
+		expect(isGrenadeSwitchKeyboardInput("Digit2", false)).toBe(true)
+		expect(isGrenadeSwitchKeyboardInput("Digit2", true)).toBe(false)
+		expect(isGrenadeSwitchKeyboardInput("KeyG", false)).toBe(false)
+	})
+
+	test("maps controller X without accepting other face buttons", () => {
+		const buttons = Array.from({ length: 16 }, () => ({
+			pressed: false,
+			value: 0,
+		}))
+		expect(isGrenadeSwitchGamepadInput(buttons)).toBe(false)
+		buttons[2] = { pressed: true, value: 1 }
+		expect(isGrenadeSwitchGamepadInput(buttons)).toBe(true)
 	})
 })
 

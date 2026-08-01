@@ -131,6 +131,7 @@ export type DroneSnapshot = {
 	id: number
 	maxHealth: number
 	mood: DroneMood
+	ownerId: string | null
 	personality: DronePersonality
 	position: Vector3Tuple
 	targetPlayerId: string | null
@@ -140,9 +141,67 @@ export type DroneSnapshot = {
 
 export type ArenaSnapshot = {
 	drones: DroneSnapshot[]
+	dronePayloads: DronePayloadSnapshot[]
+	droneWrecks: DroneWreckSnapshot[]
 	missiles: MiniMissileSnapshot[]
 	sequence: number
 	serverTime: number
+}
+
+export type DroneWreckSnapshot = {
+	id: number
+	personality: DronePersonality
+	position: Vector3Tuple
+}
+
+export type DronePayloadSnapshot = {
+	id: number
+	ownerId: string
+	position: Vector3Tuple
+	rotation: number
+	velocity: Vector3Tuple
+}
+
+export type GrenadeKind = "drone" | "standard"
+
+export type DroneInventorySnapshot = {
+	count: number
+	selected: GrenadeKind
+}
+
+export type DroneRecoveryIntent = {
+	clientActionId: number
+	wreckId: number
+}
+
+export function isDroneRecoveryIntent(
+	value: unknown,
+): value is DroneRecoveryIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 2 &&
+		Number.isSafeInteger(record["clientActionId"]) &&
+		(record["clientActionId"] as number) >= 0 &&
+		Number.isSafeInteger(record["wreckId"]) &&
+		(record["wreckId"] as number) >= 0
+	)
+}
+
+export type GrenadeSelectionIntent = {
+	clientActionId: number
+}
+
+export function isGrenadeSelectionIntent(
+	value: unknown,
+): value is GrenadeSelectionIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 1 &&
+		Number.isSafeInteger(record["clientActionId"]) &&
+		(record["clientActionId"] as number) >= 0
+	)
 }
 
 export type WeaponKind = GunId
@@ -413,6 +472,7 @@ export type PlayerDamageSnapshot = PlayerDamageImpact & {
 export type GrenadeIntent = {
 	clientGrenadeId: number
 	direction: Vector3Tuple
+	kind: GrenadeKind
 	origin: Vector3Tuple
 }
 

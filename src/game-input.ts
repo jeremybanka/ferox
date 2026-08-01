@@ -8,6 +8,22 @@ export const WEAPON_SWITCH_KEY_CODE = "Digit1"
 
 export const PICKUP_GAMEPAD_BUTTON = 5
 export const PICKUP_KEY_CODE = "KeyE"
+export const GRENADE_SWITCH_GAMEPAD_BUTTON = 2
+export const GRENADE_SWITCH_KEY_CODE = "Digit2"
+
+export function isGrenadeSwitchKeyboardInput(
+	code: string,
+	repeat: boolean,
+): boolean {
+	return code === GRENADE_SWITCH_KEY_CODE && !repeat
+}
+
+export function isGrenadeSwitchGamepadInput(
+	buttons: readonly ({ pressed?: boolean; value?: number } | undefined)[],
+): boolean {
+	const button = buttons[GRENADE_SWITCH_GAMEPAD_BUTTON]
+	return button?.pressed === true || (button?.value ?? 0) > 0.5
+}
 
 export const PUNCH_GAMEPAD_BUTTON = 11
 export const PUNCH_KEY_CODE = "KeyH"

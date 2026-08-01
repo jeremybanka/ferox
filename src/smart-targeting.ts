@@ -14,6 +14,77 @@ export type ProjectedSmartTarget = {
 	y: number
 }
 
+export type SmartTargetLeadState = Readonly<{
+	velocityX: number
+	velocityY: number
+	x: number
+	y: number
+}>
+
+export const INITIAL_SMART_TARGET_LEAD: SmartTargetLeadState = {
+	velocityX: 0,
+	velocityY: 0,
+	x: 0,
+	y: 0,
+}
+
+export type SmartTargetLeadTuning = Readonly<{
+	damping: number
+	deadZone: number
+	drive: number
+	maxOffset: number
+	maxStepSeconds: number
+	spring: number
+}>
+
+function drivenAngularVelocity(value: number, deadZone: number): number {
+	const magnitude = Math.abs(value)
+	return magnitude <= deadZone ? 0 : Math.sign(value) * (magnitude - deadZone)
+}
+
+/**
+ * Drives a screen-space mass with camera angular velocity while a damped
+ * spring pulls it back to the true target. Small integration steps keep the
+ * same rubberband response across render frame rates.
+ */
+export function stepSmartTargetLead(
+	state: SmartTargetLeadState,
+	angularVelocity: Readonly<{ x: number; y: number }>,
+	deltaSeconds: number,
+	tuning: SmartTargetLeadTuning,
+	active = true,
+): SmartTargetLeadState {
+	const delta = Math.max(0, deltaSeconds)
+	if (delta === 0) return state
+	const maximumStep = Math.max(1 / 1_000, tuning.maxStepSeconds)
+	const stepCount = Math.max(1, Math.ceil(delta / maximumStep))
+	const step = delta / stepCount
+	const inputX = active
+		? drivenAngularVelocity(angularVelocity.x, tuning.deadZone)
+		: 0
+	const inputY = active
+		? drivenAngularVelocity(angularVelocity.y, tuning.deadZone)
+		: 0
+	let { velocityX, velocityY, x, y } = state
+	for (let index = 0; index < stepCount; index += 1) {
+		velocityX +=
+			(inputX * tuning.drive - x * tuning.spring - velocityX * tuning.damping) *
+			step
+		velocityY +=
+			(inputY * tuning.drive - y * tuning.spring - velocityY * tuning.damping) *
+			step
+		x += velocityX * step
+		y += velocityY * step
+		const clampedX = Math.max(-tuning.maxOffset, Math.min(tuning.maxOffset, x))
+		const clampedY = Math.max(-tuning.maxOffset, Math.min(tuning.maxOffset, y))
+		if (clampedX !== x && Math.sign(velocityX) === Math.sign(x)) velocityX = 0
+		if (clampedY !== y && Math.sign(velocityY) === Math.sign(y)) velocityY = 0
+		x = clampedX
+		y = clampedY
+	}
+	return { velocityX, velocityY, x, y }
+}
+
 export function pilotSmartTargetCandidate(
 	localPlayerId: string | undefined,
 	pilotId: string,

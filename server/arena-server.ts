@@ -7,6 +7,8 @@ import { Server, type Socket as IoSocket } from "socket.io"
 import {
 	activeEquipmentSlot,
 	isNewInventoryActionIntent,
+	isDroneRecoveryIntent,
+	isGrenadeSelectionIntent,
 	isVisorExpression,
 	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
@@ -69,6 +71,7 @@ const lastPlayerFire = new Map<string, number>()
 const lastPlayerGrenade = new Map<string, number>()
 const lastPlayerMissile = new Map<string, number>()
 const lastInventoryAction = new Map<string, number>()
+const lastDroneAction = new Map<string, number>()
 const playerReloads = new Map<string, Exclude<ReloadState, null>>()
 const [pickupX, pickupZ] = MINI_MISSILE_PICKUP_POSITION
 const armory = new MiniMissileArmory([
@@ -123,6 +126,10 @@ const applyPlayerDamage = (
 			})
 		}
 		simulation.removePlayer(playerId)
+		io.to(playerId).emit(
+			"arena:drone-inventory",
+			simulation.droneInventory(playerId),
+		)
 		melee.cancel(playerId)
 		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
 		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
@@ -356,6 +363,7 @@ realtime(
 			weaponsFree: false,
 		})
 		armory.connect(socketId)
+		simulation.connectPlayer(socketId)
 		const onReady = (): void => {
 			if (playerLifecycle.isAlive(socketId)) {
 				gameSocket.emit("arena:spawn", {
@@ -368,6 +376,10 @@ realtime(
 			gameSocket.emit("arena:equipment", armory.equipment(socketId))
 			gameSocket.emit("arena:mini-missile-pickup", armory.pickup())
 			gameSocket.emit("arena:incoming-lock", armory.incoming(socketId))
+			gameSocket.emit(
+				"arena:drone-inventory",
+				simulation.droneInventory(socketId),
+			)
 			gameSocket.emit(
 				"arena:incoming-standard-lock",
 				standardLocks.incoming(socketId),
@@ -541,11 +553,45 @@ realtime(
 			if (now - previous < 900) return
 			if (simulation.throwGrenade(socketId, payload)) {
 				lastPlayerGrenade.set(socketId, now)
+				gameSocket.emit(
+					"arena:drone-inventory",
+					simulation.droneInventory(socketId),
+				)
 			}
 		}
 		const onGesture = (payload: unknown): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
 			melee.accept(socketId, payload, Date.now())
+		}
+		const acceptDroneAction = (payload: {
+			clientActionId: number
+		}): boolean => {
+			if (!playerLifecycle.isAlive(socketId)) return false
+			const { clientActionId } = payload
+			const previous = lastDroneAction.get(socketId) ?? -1
+			if (clientActionId <= previous) return false
+			lastDroneAction.set(socketId, clientActionId)
+			return true
+		}
+		const onRecoverDrone = (payload: unknown): void => {
+			if (!isDroneRecoveryIntent(payload) || !acceptDroneAction(payload)) return
+			if (!simulation.recoverDrone(socketId, payload.wreckId)) return
+			gameSocket.emit(
+				"arena:drone-inventory",
+				simulation.droneInventory(socketId),
+			)
+		}
+		const onCycleGrenade = (payload: unknown): void => {
+			if (
+				!isGrenadeSelectionIntent(payload) ||
+				!acceptDroneAction(payload) ||
+				!simulation.cycleGrenade(socketId)
+			)
+				return
+			gameSocket.emit(
+				"arena:drone-inventory",
+				simulation.droneInventory(socketId),
+			)
 		}
 		gameSocket.on("arena:move", onMove)
 		gameSocket.on("arena:standard-lock", onStandardLock)
@@ -554,9 +600,11 @@ realtime(
 		gameSocket.on("arena:inventory-action", onInventoryAction)
 		gameSocket.on("arena:throw-grenade", onThrowGrenade)
 		gameSocket.on("arena:gesture", onGesture)
+		gameSocket.on("arena:recover-drone", onRecoverDrone)
+		gameSocket.on("arena:cycle-grenade", onCycleGrenade)
 
 		return () => {
-			simulation.removePlayer(socketId)
+			simulation.removePlayer(socketId, true)
 			emitMissileLockUpdates(armory.disconnect(socketId, Date.now()))
 			emitStandardLockUpdates(standardLocks.clearPlayer(socketId))
 			players.delete(socketId)
@@ -569,6 +617,7 @@ realtime(
 			lastPlayerMissile.delete(socketId)
 			lastInventoryAction.delete(socketId)
 			melee.removePlayer(socketId)
+			lastDroneAction.delete(socketId)
 			emitPickup()
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)
@@ -579,6 +628,8 @@ realtime(
 			gameSocket.off("arena:inventory-action", onInventoryAction)
 			gameSocket.off("arena:throw-grenade", onThrowGrenade)
 			gameSocket.off("arena:gesture", onGesture)
+			gameSocket.off("arena:recover-drone", onRecoverDrone)
+			gameSocket.off("arena:cycle-grenade", onCycleGrenade)
 		}
 	},
 )
@@ -623,6 +674,10 @@ setInterval(() => {
 			weaponsFree: false,
 		})
 		simulation.removePlayer(playerId)
+		io.to(playerId).emit(
+			"arena:drone-inventory",
+			simulation.droneInventory(playerId),
+		)
 		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
 		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
 		if (armory.release(playerId, nowMs)) emitPickup()

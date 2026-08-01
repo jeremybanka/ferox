@@ -379,7 +379,8 @@ app-shell.class {
 			}
 		}
 
-		> pickup-prompt {
+		> pickup-prompt,
+		> drone-recovery-prompt {
 			position: absolute;
 			bottom: clamp(8rem, 18vh, 11rem);
 			left: 50%;
@@ -415,26 +416,32 @@ app-shell.class {
 				}
 			}
 
-			> pickup-progress {
-				width: 100%;
-				height: 0.18rem;
-				display: block;
-				margin-top: 0.45rem;
-				background: rgb(255 255 255 / 0.12);
-
-				> i {
-					width: calc(var(--pickup-progress) * 100%);
-					height: 100%;
-					display: block;
-					background: #ffab77;
-					box-shadow: 0 0 0.5rem rgb(255 133 78 / 0.72);
-				}
-			}
-
 			&[data-active="true"] {
 				opacity: 1;
 				translate: -50% 0;
 			}
+		}
+
+		> pickup-prompt > pickup-progress {
+			width: 100%;
+			height: 0.18rem;
+			display: block;
+			margin-top: 0.45rem;
+			background: rgb(255 255 255 / 0.12);
+
+			> i {
+				width: calc(var(--pickup-progress) * 100%);
+				height: 100%;
+				display: block;
+				background: #ffab77;
+				box-shadow: 0 0 0.5rem rgb(255 133 78 / 0.72);
+			}
+		}
+
+		> drone-recovery-prompt {
+			border-color: rgb(215 135 255 / 0.72);
+			background: rgb(30 12 40 / 0.78);
+			color: #dfa2ff;
 		}
 
 		> cross-hair {
@@ -603,6 +610,40 @@ app-shell.class {
 			}
 		}
 
+		> lead-cross-hair {
+			position: absolute;
+			top: var(--lead-reticle-y);
+			left: var(--lead-reticle-x);
+			width: 1.2rem;
+			height: 1.2rem;
+			display: block;
+			translate: -50% -50%;
+			opacity: 0;
+			filter: drop-shadow(0 0 5px rgb(215 135 255 / 0.8));
+			transition: top 35ms linear, left 35ms linear, opacity 80ms linear;
+
+			&[data-visible="true"] {
+				opacity: 0.9;
+			}
+
+			> i {
+				position: absolute;
+				inset: 50% auto auto 50%;
+				display: block;
+				background: #d787ff;
+				translate: -50% -50%;
+
+				&:first-child {
+					width: 100%;
+					height: 1px;
+				}
+				&:last-child {
+					width: 1px;
+					height: 100%;
+				}
+			}
+		}
+
 		> speed-readout {
 			position: absolute;
 			top: 50%;
@@ -736,6 +777,33 @@ app-shell.class {
 			bottom: clamp(3.8rem, 7vw, 5.8rem);
 			display: grid;
 			justify-items: end;
+
+			> grenade-status {
+				display: flex;
+				align-items: center;
+				gap: 0.45rem;
+				margin-bottom: 0.5rem;
+				padding: 0.32rem 0.48rem;
+				border: 1px solid rgb(255 255 255 / 0.18);
+				background: rgb(4 8 17 / 0.55);
+				color: var(--color-muted);
+				font: 0.46rem var(--font-mono);
+				letter-spacing: 0.1em;
+
+				&[data-active="true"] {
+					border-color: #d787ff;
+					color: #e7bdff;
+					box-shadow: 0 0 0.7rem rgb(215 135 255 / 0.25);
+				}
+
+				> kbd {
+					color: var(--color-hot);
+					font: inherit;
+				}
+				> span {
+					color: #62ffb4;
+				}
+			}
 
 			> weapon-slots {
 				display: flex;

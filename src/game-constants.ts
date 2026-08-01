@@ -4,6 +4,22 @@ export const DRONE_POPULATION_CAP = 6
 export const DRONE_VISION_DISTANCE = 28
 export const DRONE_VISION_HALF_ANGLE = Math.PI / 5
 export const DRONE_AUDITORY_RADIUS = 14
+// Soft recovery steers normally; only corrupt/extreme state beyond the hard
+// threshold is repositioned to a terrain-relative point inside the leash.
+export const DRONE_SOFT_LEASH_DISTANCE = 42
+export const DRONE_HARD_RECOVERY_DISTANCE = 82
+export const DRONE_ARENA_BOUND = 54
+export const DRONE_RETURN_SPEED = 9.5
+export const DRONE_WRECK_RECOVERY_RADIUS = 3
+export const DRONE_WRECK_LIFETIME_SECONDS = 25
+// Recovered drones are owner-friendly, expire after deployment, and are
+// destroyed (with in-flight payloads) when their owner disconnects.
+export const RECOVERED_DRONE_INVENTORY_CAP = 3
+export const DEPLOYED_DRONE_OWNER_CAP = 2
+export const DEPLOYED_DRONE_LIFETIME_SECONDS = 35
+export const DRONE_PAYLOAD_ACTIVATION_DISTANCE = 10
+export const DRONE_PAYLOAD_SPEED = 22
+export const DRONE_PAYLOAD_LIFETIME_SECONDS = 4
 
 export const PLAYER_PROJECTILE_DAMAGE = 20
 export const PLAYER_HEADSHOT_MULTIPLIER = 2
@@ -87,6 +103,12 @@ export const PLAYER_SPAWN_ORDER: readonly number[] = [
 ]
 
 export const SMART_TARGET_RADIUS_SCREEN = 0.22
+export const SMART_TARGET_LEAD_DEAD_ZONE_RADIANS_PER_SECOND = 0.08
+export const SMART_TARGET_LEAD_MAX_SCREEN_OFFSET = 0.055
+export const SMART_TARGET_LEAD_DRIVE = 2.5
+export const SMART_TARGET_LEAD_SPRING = 64
+export const SMART_TARGET_LEAD_DAMPING = 11.5
+export const SMART_TARGET_LEAD_MAX_STEP_SECONDS = 1 / 240
 export const STANDARD_LOCK_DIRECTION_COSINE = Math.cos(Math.PI / 18)
 export const STANDARD_LOCK_MAX_RANGE = 48
 export const FREE_AIM_TAP_THRESHOLD_MS = 220
