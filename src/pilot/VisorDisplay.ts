@@ -54,7 +54,10 @@ const PRIORITY: Readonly<Record<VisorSignalSource, number>> = {
 	movement: 300,
 }
 
-const atlasTexture = new THREE.TextureLoader().load("/visor-faces.png")
+const atlasTexture =
+	typeof document === "undefined"
+		? new THREE.Texture()
+		: new THREE.TextureLoader().load("/visor-faces.png")
 atlasTexture.colorSpace = THREE.NoColorSpace
 atlasTexture.magFilter = THREE.NearestFilter
 atlasTexture.minFilter = THREE.LinearMipmapLinearFilter

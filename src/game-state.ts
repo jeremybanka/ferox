@@ -12,6 +12,7 @@ export type GameHudState = {
 	ammo: number
 	activeSlot: WeaponSlotIndex
 	connection: "connecting" | "offline" | "online"
+	dead: boolean
 	drones: number
 	health: number
 	hitMarkerClassification: "headshot" | "normal"
@@ -28,6 +29,9 @@ export type GameHudState = {
 	reticleY: number
 	recoilPulse: number
 	recoilSpread: number
+	reloading: boolean
+	reloadProgress: number
+	respawnRemaining: number
 	score: number
 	sliding: boolean
 	speed: number
@@ -42,6 +46,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 		ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
 		activeSlot: 0,
 		connection: "connecting",
+		dead: false,
 		drones: 0,
 		health: 100,
 		hitMarkerClassification: "normal",
@@ -58,6 +63,9 @@ export const gameHudStateAtom = atom<GameHudState>({
 		reticleY: 0.5,
 		recoilPulse: 0,
 		recoilSpread: 0,
+		reloading: false,
+		reloadProgress: 0,
+		respawnRemaining: 0,
 		score: 0,
 		sliding: false,
 		speed: 0,

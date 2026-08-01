@@ -13,6 +13,15 @@ export const GUN_IDS = ["arc-blaster", "mini-missile"] as const
 export type GunId = (typeof GUN_IDS)[number]
 export type GunModelId = GunId
 export type GunPresentationView = "firstPerson" | "thirdPerson"
+export type GunReloadAnimationId = "arc-cell" | "mini-tube-service"
+export type GunReloadAmmoRule = "refill-magazine"
+
+export type GunReloadDefinition = {
+	ammoRule: GunReloadAmmoRule
+	animation: GunReloadAnimationId
+	durationSeconds: number
+	refillProgress: number
+}
 
 export type GunTransform = {
 	position: readonly [number, number, number]
@@ -36,6 +45,7 @@ export type GunDefinition = {
 	model: GunModelId
 	name: string
 	presentation: Readonly<Record<GunPresentationView, GunTransform>>
+	reload: GunReloadDefinition
 	tuning:
 		| {
 				damage: number
@@ -76,10 +86,16 @@ export const GUN_DEFINITIONS = {
 				scale: identityScale,
 			},
 		},
+		reload: {
+			ammoRule: "refill-magazine",
+			animation: "arc-cell",
+			durationSeconds: 1.65,
+			refillProgress: 0.72,
+		},
 		tuning: { damage: PLAYER_PROJECTILE_DAMAGE, kind: "projectile" },
 	},
 	"mini-missile": {
-		capabilities: { fire: true, pickup: true, reload: false },
+		capabilities: { fire: true, pickup: true, reload: true },
 		fire: {
 			clientCooldownSeconds: MINI_MISSILE_CLIENT_COOLDOWN_SECONDS,
 			serverMinimumIntervalMs: MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS,
@@ -100,6 +116,12 @@ export const GUN_DEFINITIONS = {
 				rotation: [-Math.PI / 2, 0, 0],
 				scale: [0.92, 0.92, 0.92],
 			},
+		},
+		reload: {
+			ammoRule: "refill-magazine",
+			animation: "mini-tube-service",
+			durationSeconds: 2.4,
+			refillProgress: 0.78,
 		},
 		tuning: {
 			kind: "guided-missile",

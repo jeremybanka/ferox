@@ -3,6 +3,7 @@ import type {
 	EquipmentSlotSnapshot,
 	IncomingLockSnapshot,
 	MiniMissilePickupSnapshot,
+	ReloadSnapshot,
 	Vector3Tuple,
 } from "../src/arena-protocol.ts"
 import {
@@ -18,6 +19,10 @@ export type LockUpdate = {
 
 function assertUnhandledWeapon(weapon: never): never {
 	throw new Error(`Armory does not handle gun: ${String(weapon)}`)
+}
+
+function assertUnhandledReloadRule(rule: never): never {
+	throw new Error(`Armory does not handle reload rule: ${String(rule)}`)
 }
 
 type PlayerInventory = {
@@ -57,6 +62,15 @@ export class MiniMissileArmory {
 		return this.equipment(playerId)
 	}
 
+	resetLoadout(playerId: string): boolean {
+		const inventory = this.#inventories.get(playerId)
+		if (inventory === undefined) return false
+		const reset = defaultInventory()
+		reset.revision = inventory.revision + 1
+		this.#inventories.set(playerId, reset)
+		return true
+	}
+
 	disconnect(playerId: string, now: number): LockUpdate[] {
 		this.release(playerId, now)
 		this.#inventories.delete(playerId)
@@ -93,14 +107,24 @@ export class MiniMissileArmory {
 		return true
 	}
 
-	reloadActive(playerId: string): boolean {
+	refillReload(
+		playerId: string,
+		reload: Pick<ReloadSnapshot, "gunId" | "slot">,
+	): boolean {
 		const inventory = this.#inventories.get(playerId)
-		if (inventory === undefined) return false
-		const slot = inventory.slots[inventory.activeSlot]
-		if (slot === null) return false
+		if (inventory === undefined || inventory.activeSlot !== reload.slot)
+			return false
+		const slot = inventory.slots[reload.slot]
+		if (slot === null || slot.weapon !== reload.gunId) return false
 		const gun = gunDefinition(slot.weapon)
 		if (!gun.capabilities.reload || slot.ammo >= gun.magazineSize) return false
-		slot.ammo = gun.magazineSize
+		switch (gun.reload.ammoRule) {
+			case "refill-magazine":
+				slot.ammo = gun.magazineSize
+				break
+			default:
+				return assertUnhandledReloadRule(gun.reload.ammoRule)
+		}
 		inventory.revision += 1
 		return true
 	}

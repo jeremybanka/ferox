@@ -33,6 +33,8 @@ export function isPilotEmote(value: unknown): value is PilotEmote {
 export type PlayerSnapshot = {
 	aimDirection: Vector3Tuple
 	crouching: boolean
+	dead: boolean
+	deathStartedAt: number | null
 	emote: PilotEmote | null
 	emoteStartedAt: number
 	equippedWeapon: WeaponKind
@@ -43,7 +45,10 @@ export type PlayerSnapshot = {
 	position: Vector3Tuple
 	recoilSequence: number
 	recoilStartedAt: number
+	reload: ReloadSnapshot | null
+	respawnAt: number | null
 	rotation: [number, number]
+	sliding: boolean
 	sprinting: boolean
 	velocity: Vector3Tuple
 	visorExpression: VisorExpression
@@ -53,11 +58,15 @@ export type PlayerSnapshot = {
 
 export type PlayerMoveSnapshot = Omit<
 	PlayerSnapshot,
+	| "dead"
+	| "deathStartedAt"
 	| "equippedWeapon"
 	| "id"
 	| "lifeSequence"
 	| "recoilSequence"
 	| "recoilStartedAt"
+	| "reload"
+	| "respawnAt"
 >
 
 export function nextAcceptedRecoilSignal(
@@ -186,6 +195,44 @@ export type MiniMissilePickupSnapshot = {
 }
 
 export type WeaponSlotIndex = 0 | 1
+
+export type ReloadSnapshot = {
+	completesAt: number
+	gunId: WeaponKind
+	refillAt: number
+	refilled: boolean
+	slot: WeaponSlotIndex
+	startedAt: number
+}
+
+export function isReloadSnapshot(value: unknown): value is ReloadSnapshot {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	if (
+		!Object.keys(record).every((key) =>
+			[
+				"completesAt",
+				"gunId",
+				"refillAt",
+				"refilled",
+				"slot",
+				"startedAt",
+			].includes(key),
+		) ||
+		Object.keys(record).length !== 6 ||
+		!isGunId(record["gunId"]) ||
+		(record["slot"] !== 0 && record["slot"] !== 1) ||
+		typeof record["refilled"] !== "boolean" ||
+		!Number.isFinite(record["startedAt"]) ||
+		!Number.isFinite(record["refillAt"]) ||
+		!Number.isFinite(record["completesAt"])
+	)
+		return false
+	return (
+		(record["startedAt"] as number) <= (record["refillAt"] as number) &&
+		(record["refillAt"] as number) <= (record["completesAt"] as number)
+	)
+}
 
 export type EquipmentSlotSnapshot = {
 	ammo: number
@@ -360,6 +407,9 @@ export type DroneDestroyedSnapshot = {
 }
 
 export type CombatSnapshot = {
+	dead: boolean
+	deathStartedAt: number | null
 	health: number
+	respawnAt: number | null
 	score: number
 }

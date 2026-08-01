@@ -2,6 +2,9 @@ import preact from "@preact/preset-vite"
 import { readFileSync, watch } from "node:fs"
 import { defineConfig } from "vite-plus"
 
+const arenaServerUrl =
+	process.env["ARENA_SERVER_URL"] ?? "http://127.0.0.1:4317"
+
 export default defineConfig({
 	plugins: [
 		preact(),
@@ -32,7 +35,7 @@ export default defineConfig({
 		host: "0.0.0.0",
 		proxy: {
 			"/socket.io": {
-				target: "http://127.0.0.1:4317",
+				target: arenaServerUrl,
 				ws: true,
 			},
 		},

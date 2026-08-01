@@ -2,6 +2,7 @@ export const JUMP_PHYSICS = {
 	doubleJumpVelocity: 9.4,
 	gravity: 23,
 	groundContactTolerance: 0.12,
+	maximumGroundSnapDownPerSample: 0.45,
 	jumpVelocity: 10.6,
 	maximumStepSeconds: 0.04,
 	previewStepSeconds: 1 / 60,
@@ -16,10 +17,25 @@ export type JumpVerticalState = {
 }
 
 export type JumpPhysicsStep = JumpVerticalState & {
+	departedGround: boolean
 	groundedBefore: boolean
 	impulse: JumpCount | null
 	impactVelocity: number
 	landed: boolean
+}
+
+export function canFollowGroundContour(
+	groundBefore: number,
+	groundMidpoint: number,
+	groundAfter: number,
+): boolean {
+	const comparisonTolerance = 1e-9
+	return (
+		groundBefore - groundMidpoint <=
+			JUMP_PHYSICS.maximumGroundSnapDownPerSample + comparisonTolerance &&
+		groundMidpoint - groundAfter <=
+			JUMP_PHYSICS.maximumGroundSnapDownPerSample + comparisonTolerance
+	)
 }
 
 export type JumpTrajectorySample = JumpVerticalState & {
@@ -50,6 +66,7 @@ export function stepJumpPhysics(
 		delta: number
 		groundAfter: number
 		groundBefore: number
+		groundMidpoint?: number
 		jumpRequested: boolean
 	},
 ): JumpPhysicsStep {
@@ -78,14 +95,30 @@ export function stepJumpPhysics(
 			impulse = 2
 		}
 	}
+	const groundMidpoint =
+		options.groundMidpoint ?? (options.groundBefore + options.groundAfter) * 0.5
+	const followsGround =
+		groundedBefore &&
+		impulse === null &&
+		canFollowGroundContour(
+			options.groundBefore,
+			groundMidpoint,
+			options.groundAfter,
+		)
+	const departedGround = groundedBefore && impulse === null && !followsGround
+	if (departedGround) jumpCount = 1
 
-	if (!groundedBefore) {
+	if (!groundedBefore || departedGround) {
 		velocityY -= JUMP_PHYSICS.gravity * options.delta
 	}
-	positionY += velocityY * options.delta
+	if (followsGround) {
+		positionY = options.groundAfter
+	} else {
+		positionY += velocityY * options.delta
+	}
 
 	const landedAfter = positionY < options.groundAfter
-	const landed = landedBefore || landedAfter
+	const landed = !departedGround && (landedBefore || landedAfter)
 	const impactVelocity = landedAfter
 		? Math.max(0, -velocityY)
 		: incomingImpactVelocity
@@ -95,6 +128,7 @@ export function stepJumpPhysics(
 	}
 
 	return {
+		departedGround,
 		groundedBefore,
 		impactVelocity,
 		impulse,
