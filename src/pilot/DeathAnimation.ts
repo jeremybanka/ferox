@@ -134,7 +134,7 @@ export const DEATH_ANIMATION_TIMELINE = [
 		poseName: "impact upright",
 	},
 	{
-		atSeconds: 0.16,
+		atSeconds: 0.25,
 		easingFromPrevious: "smoothstep",
 		id: "shuffle-left",
 		label: "shuffle backward, left step",
@@ -142,7 +142,7 @@ export const DEATH_ANIMATION_TIMELINE = [
 		poseName: "backward shuffle left",
 	},
 	{
-		atSeconds: 0.32,
+		atSeconds: 0.5,
 		easingFromPrevious: "smoothstep",
 		id: "shuffle-right",
 		label: "shuffle backward, right step",
@@ -150,7 +150,7 @@ export const DEATH_ANIMATION_TIMELINE = [
 		poseName: "backward shuffle right",
 	},
 	{
-		atSeconds: 0.82,
+		atSeconds: 0.6,
 		easingFromPrevious: "smoothstep",
 		id: "knee-drop",
 		label: "both knees drop",
@@ -158,7 +158,7 @@ export const DEATH_ANIMATION_TIMELINE = [
 		poseName: "both knees drop",
 	},
 	{
-		atSeconds: 1.12,
+		atSeconds: 1,
 		easingFromPrevious: "linear",
 		id: "forward-fall",
 		label: "forward fall, arms outward and up",
@@ -166,7 +166,7 @@ export const DEATH_ANIMATION_TIMELINE = [
 		poseName: "forward fall arms up",
 	},
 	{
-		atSeconds: 1.34,
+		atSeconds: 1.2,
 		easingFromPrevious: "linear",
 		id: "final-prone",
 		label: "final prone, arms outward and up",
@@ -174,7 +174,7 @@ export const DEATH_ANIMATION_TIMELINE = [
 		poseName: "final prone arms up",
 	},
 	{
-		atSeconds: 1.6,
+		atSeconds: 2,
 		easingFromPrevious: "smoothstep",
 		id: "defeated-hold",
 		label: "defeated hold",
