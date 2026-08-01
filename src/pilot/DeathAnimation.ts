@@ -58,7 +58,7 @@ export const DEATH_BACKWARD_SHUFFLE_RIGHT_POSE = definePilotPose({
 })
 
 export const DEATH_BOTH_KNEES_DROP_POSE = definePilotPose({
-	root: { position: { y: -0.58, z: 0.48 }, rotation: { x: -0.18 } },
+	root: { position: { y: 0, z: 0.48 }, rotation: { x: -0.18 } },
 	hips: { position: { y: 1.36, z: 0.06 }, rotation: { x: -0.34 } },
 	body: { rotation: { x: 0.16 } },
 	neck: { rotation: { x: 0.18 } },
@@ -79,7 +79,7 @@ export const DEATH_BOTH_KNEES_HOLD_POSE = definePilotPose({
 })
 
 export const DEATH_FORWARD_FALL_ARMS_UP_POSE = definePilotPose({
-	root: { position: { y: -0.68, z: 0.45 }, rotation: { x: -0.9 } },
+	root: { position: { y: -0.1, z: 0.45 }, rotation: { x: -0.9 } },
 	hips: { position: { y: 1.28, z: 0.08 }, rotation: { x: -0.42 } },
 	body: { rotation: { x: 0.34 } },
 	neck: { rotation: { x: 0.38 } },
@@ -100,7 +100,7 @@ export const DEATH_FORWARD_FALL_ARMS_UP_POSE = definePilotPose({
 })
 
 export const DEATH_RAGDOLL_MOMENTUM_GUIDE_POSE = definePilotPose({
-	root: { position: { y: -0.78, z: 0.42 }, rotation: { x: -1.44 } },
+	root: { position: { y: -0.2, z: 0.42 }, rotation: { x: -1.44 } },
 	hips: { position: { y: 1.22, z: 0.04 }, rotation: { x: -0.16 } },
 	body: { rotation: { x: 0.22 } },
 	neck: { rotation: { x: 0.5 } },

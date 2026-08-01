@@ -179,7 +179,7 @@ test("death shuffle and kneel use forward-flexing knees", () => {
 		DEATH_ANIMATION_TIMELINE.find(({ id }) => id === "knee-drop")?.atSeconds ??
 			0,
 	)
-	assert.ok((knees.root?.position?.y ?? 0) < -0.5)
+	assert.equal(knees.root?.position?.y, 0)
 	assert.ok((knees.leftLeg?.rotation?.x ?? 0) > 0.7)
 	assert.ok((knees.rightLeg?.rotation?.x ?? 0) > 0.7)
 	assert.ok((knees.leftKnee?.rotation?.x ?? 0) < -1.5)

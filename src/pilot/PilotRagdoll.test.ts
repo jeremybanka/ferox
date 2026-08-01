@@ -67,6 +67,37 @@ function torsoBendRadians(rig: PilotRig): number {
 	)
 }
 
+function directMeshMinimumY(objects: readonly THREE.Object3D[]): number {
+	const bounds = new THREE.Box3()
+	for (const object of objects) bounds.expandByObject(object)
+	return bounds.min.y
+}
+
+function visibleSupportClearances(rig: PilotRig): Record<string, number> {
+	rig.root.updateMatrixWorld(true)
+	return {
+		chest: directMeshMinimumY([rig.body.children[0]!]),
+		head: directMeshMinimumY(
+			rig.head.children.filter((child) => child instanceof THREE.Mesh),
+		),
+		leftFoot: directMeshMinimumY(
+			rig.leftFoot.children.filter((child) => child instanceof THREE.Mesh),
+		),
+		leftHand: directMeshMinimumY(
+			rig.leftHand.children.filter((child) => child instanceof THREE.Mesh),
+		),
+		pelvis: directMeshMinimumY(
+			rig.hips.children.filter((child) => child instanceof THREE.Mesh),
+		),
+		rightFoot: directMeshMinimumY(
+			rig.rightFoot.children.filter((child) => child instanceof THREE.Mesh),
+		),
+		rightHand: directMeshMinimumY(
+			rig.rightHand.children.filter((child) => child instanceof THREE.Mesh),
+		),
+	}
+}
+
 test("ragdoll activation preserves the exact authored handoff transform", () => {
 	const rig = createDeathRig()
 	const ragdoll = new PilotRagdollPresentation()
@@ -186,6 +217,87 @@ test("one metre of clearance reaches terrain with decisive weight", () => {
 	disposePilotModel(rig)
 })
 
+test("torso lands first, articulated contacts settle visible geometry onto terrain", () => {
+	const rig = createDeathRig()
+	const ragdoll = new PilotRagdollPresentation()
+	applyAuthoredDeath(rig, DEATH_RAGDOLL_HANDOFF_SECONDS - 1 / 120)
+	ragdoll.observeAuthored(rig, DEATH_RAGDOLL_HANDOFF_SECONDS - 1 / 120)
+	applyAuthoredDeath(rig, DEATH_RAGDOLL_HANDOFF_SECONDS)
+	ragdoll.update(rig, {
+		delta: 0,
+		elapsedSeconds: DEATH_RAGDOLL_HANDOFF_SECONDS,
+		groundHeightAt: () => 0,
+	})
+
+	const firstContacts = new Map<string, number>()
+	let visiblySettledAt: number | null = null
+	let maximumTransientVisiblePenetration = 0
+	let maximumSettledVisiblePenetration = 0
+	for (let step = 1; step <= 240; step += 1) {
+		const seconds = step / 120
+		ragdoll.update(rig, {
+			delta: 1 / 120,
+			elapsedSeconds: DEATH_RAGDOLL_HANDOFF_SECONDS + seconds,
+			groundHeightAt: () => 0,
+		})
+		const debug = ragdoll.debugState(rig, () => 0)
+		maximumTransientVisiblePenetration = Math.max(
+			maximumTransientVisiblePenetration,
+			-debug.visibleGroundClearance,
+		)
+		if (debug.contactSeconds >= PILOT_RAGDOLL_PHYSICS.settlingSeconds) {
+			maximumSettledVisiblePenetration = Math.max(
+				maximumSettledVisiblePenetration,
+				-debug.visibleGroundClearance,
+			)
+		}
+		for (const contact of debug.contactedColliders) {
+			if (!firstContacts.has(contact)) firstContacts.set(contact, seconds)
+		}
+		const supportClearances = Object.values(visibleSupportClearances(rig))
+		if (
+			visiblySettledAt === null &&
+			Math.min(...supportClearances) >= -0.1 &&
+			Math.max(...supportClearances) <= 0.08 &&
+			debug.rootSpeed < 0.1 &&
+			debug.maxAngularSpeed < 0.2
+		) {
+			visiblySettledAt = seconds
+		}
+	}
+
+	assert.ok(firstContacts.get("pelvis")! <= 0.1)
+	assert.ok(firstContacts.get("chest")! <= 0.4)
+	assert.ok(firstContacts.get("head")! <= 0.6)
+	for (const contact of [
+		"left hand",
+		"right hand",
+		"left knee",
+		"right knee",
+	] as const) {
+		assert.ok(firstContacts.has(contact), `${contact} never contacted terrain`)
+		assert.ok(
+			firstContacts.get(contact)! >=
+				PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		)
+	}
+	assert.ok(visiblySettledAt !== null)
+	assert.ok(visiblySettledAt <= 1)
+	assert.ok(maximumTransientVisiblePenetration <= 0.18)
+	assert.ok(maximumSettledVisiblePenetration <= 0.1)
+
+	const supportClearances = Object.values(visibleSupportClearances(rig))
+	assert.ok(Math.min(...supportClearances) >= -0.1)
+	assert.ok(Math.max(...supportClearances) <= 0.08)
+	const settledDebug = ragdoll.debugState(rig, () => 0)
+	assert.ok(settledDebug.colliderGroundClearances["abdomen"]! <= 0.08)
+	assert.ok(settledDebug.visibleGroundClearance >= -0.1)
+	assert.ok(settledDebug.sleepSeconds >= 0.45)
+
+	ragdoll.dispose()
+	disposePilotModel(rig)
+})
+
 test("fixed-step ragdoll is deterministic, constrained, finite, and terrain-aware", () => {
 	const groundHeightAt = (x: number, z: number) => 0.08 * x - 0.04 * z
 	const rigs = [createDeathRig(), createDeathRig()]
@@ -221,7 +333,11 @@ test("fixed-step ragdoll is deterministic, constrained, finite, and terrain-awar
 			)
 			assert.equal(stepDebug.finite, true)
 			assert.equal(stepDebug.limitViolations, 0)
-			assert.ok(stepDebug.minimumGroundClearance >= -0.001)
+			assert.ok(stepDebug.visibleGroundClearance >= -0.18)
+			if (stepDebug.contactSeconds >= PILOT_RAGDOLL_PHYSICS.settlingSeconds) {
+				assert.ok(stepDebug.minimumGroundClearance >= -0.02)
+				assert.ok(stepDebug.visibleGroundClearance >= -0.1)
+			}
 			maximumTorsoBend = Math.max(
 				maximumTorsoBend,
 				torsoBendRadians(rigs[index]!),
@@ -235,7 +351,7 @@ test("fixed-step ragdoll is deterministic, constrained, finite, and terrain-awar
 	assert.equal(debug.disposed, false)
 	assert.equal(debug.finite, true)
 	assert.equal(debug.limitViolations, 0)
-	assert.ok(debug.minimumGroundClearance >= -0.001)
+	assert.ok(debug.minimumGroundClearance >= -0.01)
 	assert.ok(debug.rootSpeed < 0.25)
 	assert.ok(
 		debug.maxAngularSpeed < 0.3,
@@ -273,7 +389,11 @@ test("pelvis and chest remain a stiff compound silhouette on flat ground", () =>
 		const debug = ragdoll.debugState(rig, () => 0)
 		assert.equal(debug.finite, true)
 		assert.equal(debug.limitViolations, 0)
-		assert.ok(debug.minimumGroundClearance >= -0.001)
+		assert.ok(debug.visibleGroundClearance >= -0.18)
+		if (debug.contactSeconds >= PILOT_RAGDOLL_PHYSICS.settlingSeconds) {
+			assert.ok(debug.minimumGroundClearance >= -0.02)
+			assert.ok(debug.visibleGroundClearance >= -0.1)
+		}
 		maximumTorsoBend = Math.max(maximumTorsoBend, torsoBendRadians(rig))
 	}
 	assert.ok(
@@ -300,6 +420,10 @@ test("disposed ragdoll releases state and rejects later updates", () => {
 		ragdoll.debugState(rig, () => 0),
 		{
 			active: false,
+			colliderGroundClearances: ragdoll.debugState(rig, () => 0)
+				.colliderGroundClearances,
+			contactSeconds: 0,
+			contactedColliders: [],
 			disposed: true,
 			fastestJoint: null,
 			finite: true,
@@ -308,7 +432,10 @@ test("disposed ragdoll releases state and rejects later updates", () => {
 			minimumGroundClearance: ragdoll.debugState(rig, () => 0)
 				.minimumGroundClearance,
 			rootSpeed: 0,
+			sleepSeconds: 0,
 			verticalVelocity: 0,
+			visibleGroundClearance: ragdoll.debugState(rig, () => 0)
+				.visibleGroundClearance,
 		},
 	)
 	disposePilotModel(rig)

@@ -24,9 +24,13 @@ type JointPhysics = {
 }
 
 type Collider = {
+	activationDelaySeconds: number
 	joint: RagdollJoint
+	name: string
 	offset: readonly [number, number, number]
 	radius: number
+	responseJoint?: RagdollJoint
+	rootSupport: boolean
 }
 
 type RigSnapshot = {
@@ -39,6 +43,9 @@ export type PilotRagdollGround = (x: number, z: number) => number
 
 export type PilotRagdollDebugState = {
 	active: boolean
+	colliderGroundClearances: Readonly<Record<string, number>>
+	contactSeconds: number
+	contactedColliders: readonly string[]
 	disposed: boolean
 	fastestJoint: string | null
 	finite: boolean
@@ -46,21 +53,29 @@ export type PilotRagdollDebugState = {
 	maxAngularSpeed: number
 	minimumGroundClearance: number
 	rootSpeed: number
+	sleepSeconds: number
 	verticalVelocity: number
+	visibleGroundClearance: number
 }
 
 export const PILOT_RAGDOLL_PHYSICS = {
 	airborneAngularDrag: 1.2,
 	airbornePlanarDrag: 0.12,
-	angularGravityScale: 0.03,
-	contactAngularDamping: 6.5,
+	angularGravityScale: 0.06,
+	contactAngularDamping: 3,
 	contactFriction: 0.7,
-	contactJointVelocityRetention: 0.58,
+	contactJointVelocityRetention: 0.88,
 	contactPlanarDrag: 0.32,
 	gravity: JUMP_PHYSICS.gravity,
+	limbContactDelaySeconds: 0,
 	penetrationAngularCoupling: 0.28,
 	penetrationCorrectionStrength: 18,
-	restitution: 0.08,
+	restitution: 0,
+	rootSettleSeconds: 0.18,
+	rootSettledAngularDamping: 30,
+	settledAngularDamping: 12,
+	settledTorqueScale: 0.08,
+	settlingSeconds: 0.55,
 } as const
 
 const UNBOUNDED: AxisLimits = {
@@ -74,7 +89,7 @@ const JOINT_PHYSICS: readonly JointPhysics[] = [
 		end: [0, 1.45, 0],
 		joint: "body",
 		limits: { x: [-0.08, 0.52], y: [-0.16, 0.16], z: [-0.16, 0.16] },
-		torque: 0.4,
+		torque: 1.2,
 	},
 	{
 		end: [0, 0.29, 0],
@@ -187,18 +202,129 @@ const JOINT_PHYSICS: readonly JointPhysics[] = [
 ]
 
 const COLLIDERS: readonly Collider[] = [
-	{ joint: "hips", offset: [0, 0.18, 0], radius: 0.34 },
-	{ joint: "body", offset: [0, 0.25, 0], radius: 0.38 },
-	{ joint: "body", offset: [0, 0.86, 0], radius: 0.5 },
-	{ joint: "head", offset: [0, 0.08, 0], radius: 0.48 },
-	{ joint: "leftElbow", offset: [0, -0.34, 0], radius: 0.22 },
-	{ joint: "leftHand", offset: [0, -0.12, 0], radius: 0.19 },
-	{ joint: "rightElbow", offset: [0, -0.34, 0], radius: 0.22 },
-	{ joint: "rightHand", offset: [0, -0.12, 0], radius: 0.19 },
-	{ joint: "leftKnee", offset: [0, -0.1, -0.15], radius: 0.25 },
-	{ joint: "leftFoot", offset: [0, -0.08, -0.18], radius: 0.22 },
-	{ joint: "rightKnee", offset: [0, -0.1, -0.15], radius: 0.25 },
-	{ joint: "rightFoot", offset: [0, -0.08, -0.18], radius: 0.22 },
+	{
+		activationDelaySeconds: 0,
+		joint: "hips",
+		name: "pelvis",
+		offset: [0, 0.12, 0],
+		radius: 0.29,
+		rootSupport: true,
+	},
+	{
+		activationDelaySeconds: 0,
+		joint: "body",
+		name: "abdomen",
+		offset: [0, 0.3, 0],
+		radius: 0.25,
+		rootSupport: true,
+	},
+	{
+		activationDelaySeconds: 0,
+		joint: "body",
+		name: "chest",
+		offset: [0, 0.9, -0.03],
+		radius: 0.36,
+		rootSupport: true,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "head",
+		name: "head",
+		offset: [0, 0.08, 0],
+		radius: 0.6,
+		responseJoint: "neck",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "leftElbow",
+		name: "left elbow",
+		offset: [0, -0.34, 0],
+		radius: 0.22,
+		responseJoint: "leftArm",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "leftHand",
+		name: "left hand",
+		offset: [0, -0.12, 0],
+		radius: 0.22,
+		responseJoint: "leftElbow",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "rightElbow",
+		name: "right elbow",
+		offset: [0, -0.34, 0],
+		radius: 0.22,
+		responseJoint: "rightArm",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "rightHand",
+		name: "right hand",
+		offset: [0, -0.12, 0],
+		radius: 0.22,
+		responseJoint: "rightElbow",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "leftKnee",
+		name: "left knee",
+		offset: [0, -0.1, -0.15],
+		radius: 0.25,
+		responseJoint: "leftLeg",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "leftFoot",
+		name: "left foot",
+		offset: [0, -0.08, -0.18],
+		radius: 0.34,
+		responseJoint: "leftKnee",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "leftToe",
+		name: "left toe",
+		offset: [0, 0, 0],
+		radius: 0.18,
+		responseJoint: "leftFoot",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "rightKnee",
+		name: "right knee",
+		offset: [0, -0.1, -0.15],
+		radius: 0.25,
+		responseJoint: "rightLeg",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "rightFoot",
+		name: "right foot",
+		offset: [0, -0.08, -0.18],
+		radius: 0.34,
+		responseJoint: "rightKnee",
+		rootSupport: false,
+	},
+	{
+		activationDelaySeconds: PILOT_RAGDOLL_PHYSICS.limbContactDelaySeconds,
+		joint: "rightToe",
+		name: "right toe",
+		offset: [0, 0, 0],
+		radius: 0.18,
+		responseJoint: "rightFoot",
+		rootSupport: false,
+	},
 ]
 
 const CONTROLLED_JOINTS = [
@@ -272,6 +398,38 @@ function terrainNormal(
 	).normalize()
 }
 
+export function pilotRagdollVisibleGroundClearance(
+	rig: PilotRig,
+	groundHeightAt: PilotRagdollGround,
+): number {
+	rig.root.updateMatrixWorld(true)
+	let minimumClearance = Infinity
+	const corner = new THREE.Vector3()
+	rig.root.traverse((object) => {
+		if (!(object instanceof THREE.Mesh) || !object.visible) return
+		let ancestor: THREE.Object3D | null = object
+		while (ancestor !== null) {
+			if (ancestor === rig.weapon) return
+			ancestor = ancestor.parent
+		}
+		object.geometry.computeBoundingBox()
+		const bounds = object.geometry.boundingBox
+		if (bounds === null) return
+		for (const x of [bounds.min.x, bounds.max.x]) {
+			for (const y of [bounds.min.y, bounds.max.y]) {
+				for (const z of [bounds.min.z, bounds.max.z]) {
+					corner.set(x, y, z).applyMatrix4(object.matrixWorld)
+					minimumClearance = Math.min(
+						minimumClearance,
+						corner.y - groundHeightAt(corner.x, corner.z),
+					)
+				}
+			}
+		}
+	})
+	return minimumClearance
+}
+
 function clampJoint(
 	joint: THREE.Object3D,
 	limits: AxisLimits,
@@ -301,6 +459,8 @@ export class PilotRagdollPresentation {
 	readonly #angularVelocity = new Map<RagdollJoint, THREE.Vector3>()
 	#accumulator = 0
 	#active = false
+	#contactSeconds = 0
+	#contactedColliders: readonly string[] = []
 	#disposed = false
 	#grounded = false
 	#previous: RigSnapshot | null = null
@@ -386,19 +546,22 @@ export class PilotRagdollPresentation {
 			}
 		}
 		let minimumGroundClearance = Infinity
+		const colliderGroundClearances: Record<string, number> = {}
 		for (const collider of COLLIDERS) {
 			const point = rig[collider.joint].localToWorld(
 				new THREE.Vector3(...collider.offset),
 			)
 			const scale = rig[collider.joint].getWorldScale(new THREE.Vector3())
 			const radius = collider.radius * Math.max(scale.x, scale.y, scale.z)
-			minimumGroundClearance = Math.min(
-				minimumGroundClearance,
-				point.y - radius - groundHeightAt(point.x, point.z),
-			)
+			const clearance = point.y - radius - groundHeightAt(point.x, point.z)
+			colliderGroundClearances[collider.name] = clearance
+			minimumGroundClearance = Math.min(minimumGroundClearance, clearance)
 		}
 		return {
 			active: this.#active,
+			colliderGroundClearances,
+			contactSeconds: this.#contactSeconds,
+			contactedColliders: this.#contactedColliders,
 			disposed: this.#disposed,
 			fastestJoint,
 			finite,
@@ -406,7 +569,12 @@ export class PilotRagdollPresentation {
 			maxAngularSpeed,
 			minimumGroundClearance,
 			rootSpeed: this.#rootVelocity.length(),
+			sleepSeconds: this.#sleepSeconds,
 			verticalVelocity: this.#rootVelocity.y,
+			visibleGroundClearance: pilotRagdollVisibleGroundClearance(
+				rig,
+				groundHeightAt,
+			),
 		}
 	}
 
@@ -417,7 +585,10 @@ export class PilotRagdollPresentation {
 		this.#previous = null
 		this.#rootVelocity.set(0, 0, 0)
 		this.#accumulator = 0
+		this.#contactSeconds = 0
+		this.#contactedColliders = []
 		this.#grounded = false
+		this.#sleepSeconds = 0
 	}
 
 	#activate(rig: PilotRig, carrierVelocity: THREE.Vector3): void {
@@ -487,6 +658,16 @@ export class PilotRagdollPresentation {
 		const angularDamping = this.#grounded
 			? PILOT_RAGDOLL_PHYSICS.contactAngularDamping
 			: PILOT_RAGDOLL_PHYSICS.airborneAngularDrag
+		const rootSettled =
+			this.#contactSeconds >= PILOT_RAGDOLL_PHYSICS.rootSettleSeconds
+		const articulatedSettled =
+			this.#contactSeconds >= PILOT_RAGDOLL_PHYSICS.settlingSeconds
+		const rootAngularDamping = rootSettled
+			? PILOT_RAGDOLL_PHYSICS.rootSettledAngularDamping
+			: angularDamping
+		const jointAngularDamping = articulatedSettled
+			? PILOT_RAGDOLL_PHYSICS.settledAngularDamping
+			: angularDamping
 		this.#integrateJoint(
 			rig,
 			"root",
@@ -494,7 +675,8 @@ export class PilotRagdollPresentation {
 			0,
 			delta,
 			undefined,
-			angularDamping,
+			rootAngularDamping,
+			0,
 		)
 		for (const config of JOINT_PHYSICS) {
 			this.#integrateJoint(
@@ -504,17 +686,20 @@ export class PilotRagdollPresentation {
 				config.torque,
 				delta,
 				config.end,
-				angularDamping,
+				jointAngularDamping,
+				articulatedSettled ? PILOT_RAGDOLL_PHYSICS.settledTorqueScale : 1,
 			)
 		}
 		rig.root.updateMatrixWorld(true)
 
 		let maximumPenetration = 0
 		let contactCount = 0
+		const contactedColliders: string[] = []
 		const contactNormal = new THREE.Vector3()
 		const rootPosition = rig.root.getWorldPosition(new THREE.Vector3())
 		const rootAngularVelocity = this.#angularVelocity.get("root") ?? ZERO
 		for (const collider of COLLIDERS) {
+			if (this.#contactSeconds < collider.activationDelaySeconds) continue
 			const joint = rig[collider.joint]
 			const point = joint.localToWorld(new THREE.Vector3(...collider.offset))
 			const scale = joint.getWorldScale(new THREE.Vector3())
@@ -522,8 +707,13 @@ export class PilotRagdollPresentation {
 			const ground = groundHeightAt(point.x, point.z)
 			const penetration = ground + radius - point.y
 			if (penetration <= 0) continue
-			maximumPenetration = Math.max(maximumPenetration, penetration)
 			contactCount += 1
+			contactedColliders.push(collider.name)
+			if (!collider.rootSupport) {
+				this.#resolveArticulatedContact(rig, collider, point, penetration)
+				continue
+			}
+			maximumPenetration = Math.max(maximumPenetration, penetration)
 			contactNormal.add(terrainNormal(groundHeightAt, point.x, point.z))
 			const lever = point.sub(rootPosition)
 			const impulse = new THREE.Vector3(
@@ -563,7 +753,9 @@ export class PilotRagdollPresentation {
 			)
 			this.#rootVelocity.addScaledVector(downhillGravity, delta * 0.22)
 		}
+		this.#contactedColliders = contactedColliders
 		this.#grounded = contactCount > 0
+		this.#contactSeconds = this.#grounded ? this.#contactSeconds + delta : 0
 		rootAngularVelocity.clampLength(0, 10)
 		const maxAngularSpeed = Math.max(
 			...Array.from(this.#angularVelocity.values(), (velocity) =>
@@ -571,7 +763,8 @@ export class PilotRagdollPresentation {
 			),
 		)
 		if (
-			contactCount >= 2 &&
+			this.#contactSeconds >= PILOT_RAGDOLL_PHYSICS.settlingSeconds &&
+			contactCount >= 1 &&
 			this.#rootVelocity.lengthSq() < 0.0036 &&
 			maxAngularSpeed < 0.12
 		) {
@@ -579,6 +772,51 @@ export class PilotRagdollPresentation {
 		} else {
 			this.#sleepSeconds = 0
 		}
+	}
+
+	#resolveArticulatedContact(
+		rig: PilotRig,
+		collider: Collider,
+		contactPoint: THREE.Vector3,
+		penetration: number,
+	): void {
+		if (collider.responseJoint === undefined) return
+		const response = rig[collider.responseJoint]
+		const pivot = response.getWorldPosition(new THREE.Vector3())
+		const lever = contactPoint.clone().sub(pivot)
+		const horizontalLength = Math.hypot(lever.x, lever.z)
+		const worldAxis =
+			horizontalLength > 1e-5
+				? new THREE.Vector3(-lever.z, 0, lever.x).normalize()
+				: new THREE.Vector3(1, 0, 0)
+		const parentQuaternion =
+			response.parent?.getWorldQuaternion(new THREE.Quaternion()) ??
+			new THREE.Quaternion()
+		const parentAxis = worldAxis.applyQuaternion(parentQuaternion.invert())
+		const correction = THREE.MathUtils.clamp(
+			(penetration / Math.max(0.12, horizontalLength)) * 0.5,
+			0.01,
+			0.16,
+		)
+		response.quaternion
+			.premultiply(
+				new THREE.Quaternion().setFromAxisAngle(parentAxis, correction),
+			)
+			.normalize()
+		const config = JOINT_PHYSICS.find(
+			({ joint }) => joint === collider.responseJoint,
+		)
+		if (config !== undefined) {
+			clampJoint(
+				response,
+				config.limits,
+				this.#angularVelocity.get(collider.responseJoint),
+			)
+		}
+		this.#angularVelocity
+			.get(collider.responseJoint)
+			?.multiplyScalar(PILOT_RAGDOLL_PHYSICS.contactJointVelocityRetention)
+		response.updateMatrixWorld(true)
 	}
 
 	#integrateJoint(
@@ -589,16 +827,19 @@ export class PilotRagdollPresentation {
 		delta: number,
 		end: readonly [number, number, number] = [0, 1, 0],
 		angularDamping: number = PILOT_RAGDOLL_PHYSICS.airborneAngularDrag,
+		torqueScale = 1,
 	): void {
 		const joint = rig[jointName]
 		const angularVelocity = this.#angularVelocity.get(jointName)
 		if (angularVelocity === undefined) return
-		if (torque > 0) {
+		if (torque > 0 && torqueScale > 0) {
 			const worldQuaternion = joint.getWorldQuaternion(new THREE.Quaternion())
 			const lever = new THREE.Vector3(...end).applyQuaternion(worldQuaternion)
 			const torqueWorld = lever
 				.cross(GRAVITY)
-				.multiplyScalar(torque * PILOT_RAGDOLL_PHYSICS.angularGravityScale)
+				.multiplyScalar(
+					torque * torqueScale * PILOT_RAGDOLL_PHYSICS.angularGravityScale,
+				)
 			const parentQuaternion =
 				joint.parent?.getWorldQuaternion(new THREE.Quaternion()) ??
 				new THREE.Quaternion()
