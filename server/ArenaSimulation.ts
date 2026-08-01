@@ -2,6 +2,10 @@ import * as THREE from "three"
 
 import type {
 	ArenaSnapshot,
+	BallisticEndedSnapshot,
+	BallisticSnapshot,
+	BubblePoppedSnapshot,
+	BubbleSnapshot,
 	DirectHitClassification,
 	DirectHitResult,
 	DroneDestroyedSnapshot,
@@ -23,6 +27,7 @@ import type {
 	PlayerDamageImpact,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
+	HitscanSnapshot,
 	Vector3Tuple,
 } from "../src/arena-protocol.ts"
 import { isMiniMissileTargetRef } from "../src/arena-protocol.ts"
@@ -32,6 +37,12 @@ import {
 	resolveArenaMotion,
 } from "../src/ArenaWorld.ts"
 import {
+	BUBBLE_DAMAGE,
+	BUBBLE_HEALTH,
+	BUBBLE_LIFETIME_SECONDS,
+	BUBBLE_RADIUS,
+	BUBBLE_SPEED,
+	BUBBLES_PER_SHOT,
 	DRONE_AUDITORY_RADIUS,
 	DEPLOYED_DRONE_LIFETIME_SECONDS,
 	DEPLOYED_DRONE_OWNER_CAP,
@@ -56,6 +67,14 @@ import {
 	GRENADE_THROW_SPEED,
 	PLAYER_HEADSHOT_MULTIPLIER,
 	PLAYER_PROJECTILE_DAMAGE,
+	RAIL_DAMAGE_MAX,
+	RAIL_DAMAGE_MIN,
+	RAIL_GRAVITY_MAX,
+	RAIL_GRAVITY_MIN,
+	RAIL_SPEED_MAX,
+	RAIL_SPEED_MIN,
+	SHOTGUN_MAX_RANGE,
+	shotgunDamageAtDistance,
 	RECOVERED_DRONE_INVENTORY_CAP,
 	grenadeDamageAtDistance,
 	MINI_MISSILE_BLAST_RADIUS,
@@ -170,7 +189,32 @@ type MiniMissileState = {
 	velocity: THREE.Vector3
 }
 
+type BubbleState = {
+	health: number
+	id: number
+	life: number
+	ownerId: string
+	position: THREE.Vector3
+	velocity: THREE.Vector3
+}
+
+type BallisticState = {
+	charge: number
+	clientShotId: number
+	damage: number
+	gravity: number
+	id: number
+	life: number
+	ownerId: string
+	position: THREE.Vector3
+	velocity: THREE.Vector3
+}
+
 type ArenaSimulationOptions = {
+	emitBallistic?: (snapshot: BallisticSnapshot) => void
+	emitBallisticEnded?: (snapshot: BallisticEndedSnapshot) => void
+	emitBubble?: (snapshot: BubbleSnapshot) => void
+	emitBubblePopped?: (snapshot: BubblePoppedSnapshot) => void
 	emitDroneDestroyed: (snapshot: DroneDestroyedSnapshot) => void
 	emitGrenade: (snapshot: GrenadeSnapshot) => void
 	emitGrenadeExploded: (snapshot: GrenadeExplodedSnapshot) => void
@@ -179,6 +223,7 @@ type ArenaSimulationOptions = {
 	emitMiniMissileExploded: (snapshot: MiniMissileExplodedSnapshot) => void
 	emitProjectile: (snapshot: ProjectileSnapshot) => void
 	emitProjectileEnded: (snapshot: ProjectileEndedSnapshot) => void
+	emitHitscan?: (snapshot: HitscanSnapshot) => void
 	getPlayers: () => SimulationPlayer[]
 	initialDrones?: readonly SimulationDroneSeed[]
 	onDirectHit: (playerId: string, result: DirectHitResult) => void
@@ -210,11 +255,18 @@ const TMP_A = new THREE.Vector3()
 const TMP_B = new THREE.Vector3()
 
 export class ArenaSimulation {
+	readonly #ballistics: BallisticState[] = []
+	readonly #bubbles: BubbleState[] = []
 	readonly #drones: DroneState[] = []
 	readonly #droneInventories = new Map<string, DroneInventorySnapshot>()
 	readonly #dronePayloads: DronePayloadState[] = []
 	readonly #droneWrecks: DroneWreckState[] = []
 	readonly #emitDroneDestroyed: ArenaSimulationOptions["emitDroneDestroyed"]
+	readonly #emitBallistic: (snapshot: BallisticSnapshot) => void
+	readonly #emitBallisticEnded: (snapshot: BallisticEndedSnapshot) => void
+	readonly #emitBubble: (snapshot: BubbleSnapshot) => void
+	readonly #emitBubblePopped: (snapshot: BubblePoppedSnapshot) => void
+	readonly #emitHitscan: (snapshot: HitscanSnapshot) => void
 	readonly #emitGrenade: ArenaSimulationOptions["emitGrenade"]
 	readonly #emitGrenadeExploded: ArenaSimulationOptions["emitGrenadeExploded"]
 	readonly #emitMiniMissile: ArenaSimulationOptions["emitMiniMissile"]
@@ -237,6 +289,9 @@ export class ArenaSimulation {
 	readonly #seed: number
 	#elapsed = 0
 	#nextDroneId = 1
+	#nextBallisticId = 1
+	#nextBubbleId = 1
+	#nextHitscanId = 1
 	#nextPayloadId = 1
 	#nextGrenadeId = 1
 	#nextMissileId = 1
@@ -246,6 +301,11 @@ export class ArenaSimulation {
 	#spawnElapsed = 0
 
 	constructor(options: ArenaSimulationOptions) {
+		this.#emitBallistic = options.emitBallistic ?? (() => undefined)
+		this.#emitBallisticEnded = options.emitBallisticEnded ?? (() => undefined)
+		this.#emitBubble = options.emitBubble ?? (() => undefined)
+		this.#emitBubblePopped = options.emitBubblePopped ?? (() => undefined)
+		this.#emitHitscan = options.emitHitscan ?? (() => undefined)
 		this.#emitDroneDestroyed = options.emitDroneDestroyed
 		this.#emitGrenade = options.emitGrenade
 		this.#emitGrenadeExploded = options.emitGrenadeExploded
@@ -360,6 +420,10 @@ export class ArenaSimulation {
 		this.#lastMissileIntent.delete(playerId)
 		this.#lastGrenadeIntent.delete(playerId)
 		this.#lastProjectileIntent.delete(playerId)
+		for (let index = this.#bubbles.length - 1; index >= 0; index -= 1) {
+			const bubble = this.#bubbles[index]
+			if (bubble?.ownerId === playerId) this.#popBubble(index, bubble)
+		}
 		for (let index = this.#missiles.length - 1; index >= 0; index -= 1) {
 			const missile = this.#missiles[index]
 			if (missile === undefined) continue
@@ -413,6 +477,134 @@ export class ArenaSimulation {
 			intent.clientShotId,
 		)
 		this.#lastProjectileIntent.set(playerId, intent.clientShotId)
+		return true
+	}
+
+	fireShotgun(playerId: string, intent: FireIntent): boolean {
+		const validated = this.#validateFireIntent(playerId, intent)
+		if (validated === null) return false
+		const { direction, origin, players } = validated
+		const end = origin.clone().addScaledVector(direction, SHOTGUN_MAX_RANGE)
+		const bubbleHit = this.#nearestBubbleAlongSegment(origin, end, playerId)
+		const droneHit = this.#nearestDroneAlongSegment(origin, end, 1.35)
+		const playerHit = this.#nearestPlayerAlongSegment(
+			origin,
+			end,
+			players,
+			playerId,
+		)
+		let distance = SHOTGUN_MAX_RANGE
+		let nearest = 1
+		if (bubbleHit !== undefined) nearest = bubbleHit.travelFraction
+		if (droneHit !== undefined)
+			nearest = Math.min(nearest, droneHit.travelFraction)
+		if (playerHit !== undefined)
+			nearest = Math.min(nearest, playerHit.travelFraction)
+		distance = nearest * SHOTGUN_MAX_RANGE
+		const damage = shotgunDamageAtDistance(distance)
+		if (
+			bubbleHit !== undefined &&
+			bubbleHit.travelFraction <= nearest + Number.EPSILON
+		) {
+			this.#damageBubble(bubbleHit.target, damage)
+		} else if (
+			droneHit !== undefined &&
+			droneHit.travelFraction <= nearest + Number.EPSILON
+		) {
+			this.#damageDrone(droneHit.target, damage, playerId)
+			this.#directHit(
+				playerId,
+				intent.clientShotId,
+				this.#nextHitscanId,
+				damage,
+				droneHit.target.id,
+				"drone",
+				"normal",
+			)
+		} else if (playerHit !== undefined) {
+			this.#onPlayerDamage(playerHit.target.id, damage, {
+				direction: direction.toArray(),
+				position: origin.clone().lerp(end, playerHit.travelFraction).toArray(),
+				source: "hitscan",
+			})
+			this.#directHit(
+				playerId,
+				intent.clientShotId,
+				this.#nextHitscanId,
+				damage,
+				playerHit.target.id,
+				"player",
+				playerHit.classification,
+			)
+		}
+		this.#emitHitscan({
+			direction: direction.toArray(),
+			distance,
+			id: this.#nextHitscanId,
+			origin: origin.toArray(),
+			ownerId: playerId,
+		})
+		this.#nextHitscanId += 1
+		return true
+	}
+
+	fireBubbles(playerId: string, intent: FireIntent): boolean {
+		const validated = this.#validateFireIntent(playerId, intent)
+		if (validated === null) return false
+		const { direction, origin } = validated
+		const right = new THREE.Vector3()
+			.crossVectors(direction, new THREE.Vector3(0, 1, 0))
+			.normalize()
+		for (let index = 0; index < BUBBLES_PER_SHOT; index += 1) {
+			const phase = (index / BUBBLES_PER_SHOT) * Math.PI * 2
+			const spread = right
+				.clone()
+				.multiplyScalar(Math.cos(phase) * 0.16)
+				.add(new THREE.Vector3(0, Math.sin(phase) * 0.12, 0))
+			const bubble: BubbleState = {
+				health: BUBBLE_HEALTH,
+				id: this.#nextBubbleId++,
+				life: BUBBLE_LIFETIME_SECONDS,
+				ownerId: playerId,
+				position: origin
+					.clone()
+					.addScaledVector(direction, index * 0.16)
+					.add(spread),
+				velocity: direction
+					.clone()
+					.add(spread)
+					.normalize()
+					.multiplyScalar(BUBBLE_SPEED * (0.9 + index * 0.025)),
+			}
+			this.#bubbles.push(bubble)
+			this.#emitBubble(this.#snapshotBubble(bubble))
+		}
+		return true
+	}
+
+	fireRail(playerId: string, intent: FireIntent, charge: number): boolean {
+		const validated = this.#validateFireIntent(playerId, intent)
+		if (validated === null || !Number.isFinite(charge)) return false
+		const fraction = THREE.MathUtils.clamp(charge, 0, 1)
+		const ballistic: BallisticState = {
+			charge: fraction,
+			clientShotId: intent.clientShotId,
+			damage: THREE.MathUtils.lerp(RAIL_DAMAGE_MIN, RAIL_DAMAGE_MAX, fraction),
+			gravity: THREE.MathUtils.lerp(
+				RAIL_GRAVITY_MAX,
+				RAIL_GRAVITY_MIN,
+				fraction,
+			),
+			id: this.#nextBallisticId++,
+			life: 5,
+			ownerId: playerId,
+			position: validated.origin,
+			velocity: validated.direction.multiplyScalar(
+				THREE.MathUtils.lerp(RAIL_SPEED_MIN, RAIL_SPEED_MAX, fraction),
+			),
+		}
+		this.#ballistics.push(ballistic)
+		this.#emitBallistic(this.#snapshotBallistic(ballistic))
 		return true
 	}
 
@@ -547,6 +739,10 @@ export class ArenaSimulation {
 	snapshot(): ArenaSnapshot {
 		this.#sequence += 1
 		return {
+			ballistics: this.#ballistics.map((ballistic) =>
+				this.#snapshotBallistic(ballistic),
+			),
+			bubbles: this.#bubbles.map((bubble) => this.#snapshotBubble(bubble)),
 			drones: this.#drones.map((drone) => this.#snapshotDrone(drone)),
 			dronePayloads: this.#dronePayloads.map((payload) =>
 				this.#snapshotDronePayload(payload),
@@ -571,10 +767,81 @@ export class ArenaSimulation {
 				this.#updateDrone(drone, delta, players)
 		}
 		this.#updateProjectiles(delta, players)
+		this.#updateBubbles(delta, players)
+		this.#updateBallistics(delta, players)
 		this.#updateGrenades(delta, players)
 		this.#updateDronePayloads(delta)
 		this.#updateDroneWrecks()
 		this.#updateMissiles(delta, players)
+	}
+
+	#validateFireIntent(
+		playerId: string,
+		intent: FireIntent,
+	): {
+		direction: THREE.Vector3
+		origin: THREE.Vector3
+		players: SimulationPlayer[]
+	} | null {
+		const players = this.#getPlayers()
+		const player = players.find((candidate) => candidate.id === playerId)
+		if (
+			player === undefined ||
+			!this.#isVector(intent?.origin) ||
+			!this.#isVector(intent?.direction) ||
+			!Number.isSafeInteger(intent?.clientShotId)
+		)
+			return null
+		if (intent.clientShotId <= (this.#lastProjectileIntent.get(playerId) ?? -1))
+			return null
+		const origin = new THREE.Vector3(...intent.origin)
+		if (origin.distanceTo(new THREE.Vector3(...player.position)) > 3)
+			return null
+		const direction = new THREE.Vector3(...intent.direction)
+		if (direction.lengthSq() < 0.8 || direction.lengthSq() > 1.2) return null
+		this.#lastProjectileIntent.set(playerId, intent.clientShotId)
+		this.#playerNoiseUntil.set(playerId, this.#elapsed + 0.85)
+		return { direction: direction.normalize(), origin, players }
+	}
+
+	#directHit(
+		ownerId: string,
+		clientShotId: number,
+		projectileId: number,
+		damage: number,
+		targetId: number | string,
+		targetType: "drone" | "player",
+		classification: DirectHitClassification,
+	): void {
+		this.#onDirectHit(ownerId, {
+			classification,
+			clientShotId,
+			damage,
+			projectileId,
+			targetId,
+			targetType,
+		})
+	}
+
+	#snapshotBubble(bubble: BubbleState): BubbleSnapshot {
+		return {
+			health: bubble.health,
+			id: bubble.id,
+			ownerId: bubble.ownerId,
+			position: bubble.position.toArray(),
+			radius: BUBBLE_RADIUS,
+			velocity: bubble.velocity.toArray(),
+		}
+	}
+
+	#snapshotBallistic(ballistic: BallisticState): BallisticSnapshot {
+		return {
+			charge: ballistic.charge,
+			id: ballistic.id,
+			ownerId: ballistic.ownerId,
+			position: ballistic.position.toArray(),
+			velocity: ballistic.velocity.toArray(),
+		}
 	}
 
 	#updateSpawning(delta: number, players: SimulationPlayer[]): void {
@@ -1371,6 +1638,15 @@ export class ArenaSimulation {
 			projectile.position.addScaledVector(projectile.velocity, delta)
 			let hit = false
 			if (projectile.team === "player") {
+				const bubbleHit = this.#nearestBubbleAlongSegment(
+					previousPosition,
+					projectile.position,
+					projectile.ownerId,
+				)
+				if (bubbleHit !== undefined) {
+					this.#damageBubble(bubbleHit.target, projectile.damage)
+					hit = true
+				}
 				const droneHit = this.#nearestDroneAlongSegment(
 					previousPosition,
 					projectile.position,
@@ -1384,6 +1660,7 @@ export class ArenaSimulation {
 					projectile.ownerId,
 				)
 				if (
+					!hit &&
 					droneHit !== undefined &&
 					(playerHit === undefined ||
 						droneHit.travelFraction <= playerHit.travelFraction)
@@ -1397,7 +1674,7 @@ export class ArenaSimulation {
 						targetType: "drone",
 					})
 					hit = true
-				} else if (playerHit !== undefined) {
+				} else if (!hit && playerHit !== undefined) {
 					const damage =
 						playerHit.classification === "headshot"
 							? projectile.damage * PLAYER_HEADSHOT_MULTIPLIER
@@ -1457,6 +1734,170 @@ export class ArenaSimulation {
 				this.#projectiles.splice(index, 1)
 				this.#emitProjectileEnded({ id: projectile.id })
 			}
+		}
+	}
+
+	#nearestBubbleAlongSegment(
+		start: THREE.Vector3,
+		end: THREE.Vector3,
+		excludedOwnerId: string | null,
+	): CollisionCandidate<BubbleState> | undefined {
+		let nearest: CollisionCandidate<BubbleState> | undefined
+		const travel = end.clone().sub(start)
+		const travelLengthSquared = travel.lengthSq()
+		for (const bubble of this.#bubbles) {
+			if (bubble.ownerId === excludedOwnerId) continue
+			const travelFraction =
+				travelLengthSquared === 0
+					? 0
+					: THREE.MathUtils.clamp(
+							bubble.position.clone().sub(start).dot(travel) /
+								travelLengthSquared,
+							0,
+							1,
+						)
+			const closest = start.clone().addScaledVector(travel, travelFraction)
+			if (closest.distanceToSquared(bubble.position) > BUBBLE_RADIUS ** 2)
+				continue
+			if (nearest === undefined || travelFraction < nearest.travelFraction)
+				nearest = { target: bubble, travelFraction }
+		}
+		return nearest
+	}
+
+	#damageBubble(bubble: BubbleState, damage: number): void {
+		bubble.health -= Math.max(0, damage)
+		const index = this.#bubbles.indexOf(bubble)
+		if (bubble.health <= 0 && index >= 0) this.#popBubble(index, bubble)
+		else this.#emitBubble(this.#snapshotBubble(bubble))
+	}
+
+	#popBubble(index: number, bubble: BubbleState): void {
+		if (this.#bubbles[index] !== bubble) index = this.#bubbles.indexOf(bubble)
+		if (index < 0) return
+		this.#bubbles.splice(index, 1)
+		this.#emitBubblePopped({
+			id: bubble.id,
+			position: bubble.position.toArray(),
+		})
+	}
+
+	#updateBubbles(delta: number, players: readonly SimulationPlayer[]): void {
+		for (let index = this.#bubbles.length - 1; index >= 0; index -= 1) {
+			const bubble = this.#bubbles[index]
+			if (bubble === undefined) continue
+			bubble.life -= delta
+			bubble.position.addScaledVector(bubble.velocity, delta)
+			let contacted = false
+			for (const player of players) {
+				if (player.id === bubble.ownerId) continue
+				const center = new THREE.Vector3(...player.position)
+				if (center.distanceTo(bubble.position) > BUBBLE_RADIUS + 0.55) continue
+				this.#onPlayerDamage(player.id, BUBBLE_DAMAGE, {
+					direction: bubble.velocity.clone().normalize().toArray(),
+					position: bubble.position.toArray(),
+					source: "bubble",
+				})
+				contacted = true
+				break
+			}
+			if (!contacted) {
+				const drone = this.#drones.find(
+					(candidate) =>
+						candidate.position.distanceTo(bubble.position) <=
+						BUBBLE_RADIUS + 0.7,
+				)
+				if (drone !== undefined) {
+					this.#damageDrone(drone, BUBBLE_DAMAGE, bubble.ownerId)
+					contacted = true
+				}
+			}
+			const hitGround =
+				bubble.position.y <=
+				arenaHeightAt(this.#seed, bubble.position.x, bubble.position.z) +
+					BUBBLE_RADIUS * 0.4
+			if (contacted || hitGround || bubble.life <= 0)
+				this.#popBubble(index, bubble)
+		}
+	}
+
+	#updateBallistics(delta: number, players: readonly SimulationPlayer[]): void {
+		for (let index = this.#ballistics.length - 1; index >= 0; index -= 1) {
+			const ballistic = this.#ballistics[index]
+			if (ballistic === undefined) continue
+			ballistic.life -= delta
+			const previous = ballistic.position.clone()
+			ballistic.velocity.y -= ballistic.gravity * delta
+			ballistic.position.addScaledVector(ballistic.velocity, delta)
+			let hit = false
+			const bubbleHit = this.#nearestBubbleAlongSegment(
+				previous,
+				ballistic.position,
+				ballistic.ownerId,
+			)
+			if (bubbleHit !== undefined) {
+				this.#damageBubble(bubbleHit.target, ballistic.damage)
+				hit = true
+			}
+			const droneHit = this.#nearestDroneAlongSegment(
+				previous,
+				ballistic.position,
+				1.35,
+			)
+			const playerHit = this.#nearestPlayerAlongSegment(
+				previous,
+				ballistic.position,
+				players,
+				ballistic.ownerId,
+			)
+			if (
+				!hit &&
+				droneHit !== undefined &&
+				(playerHit === undefined ||
+					droneHit.travelFraction <= playerHit.travelFraction)
+			) {
+				this.#damageDrone(droneHit.target, ballistic.damage, ballistic.ownerId)
+				this.#directHit(
+					ballistic.ownerId,
+					ballistic.clientShotId,
+					ballistic.id,
+					ballistic.damage,
+					droneHit.target.id,
+					"drone",
+					"normal",
+				)
+				hit = true
+			} else if (!hit && playerHit !== undefined) {
+				this.#onPlayerDamage(playerHit.target.id, ballistic.damage, {
+					direction: ballistic.velocity.clone().normalize().toArray(),
+					position: previous
+						.clone()
+						.lerp(ballistic.position, playerHit.travelFraction)
+						.toArray(),
+					source: "ballistic",
+				})
+				this.#directHit(
+					ballistic.ownerId,
+					ballistic.clientShotId,
+					ballistic.id,
+					ballistic.damage,
+					playerHit.target.id,
+					"player",
+					playerHit.classification,
+				)
+				hit = true
+			}
+			const hitGround =
+				ballistic.position.y <=
+				arenaHeightAt(this.#seed, ballistic.position.x, ballistic.position.z) +
+					0.12
+			if (hit || hitGround || ballistic.life <= 0) {
+				this.#ballistics.splice(index, 1)
+				this.#emitBallisticEnded({
+					id: ballistic.id,
+					position: ballistic.position.toArray(),
+				})
+			} else this.#emitBallistic(this.#snapshotBallistic(ballistic))
 		}
 	}
 

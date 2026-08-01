@@ -3,6 +3,10 @@ import * as THREE from "three"
 
 import type {
 	ArenaSnapshot,
+	BallisticEndedSnapshot,
+	BallisticSnapshot,
+	BubblePoppedSnapshot,
+	BubbleSnapshot,
 	CombatSnapshot,
 	DirectHitResult,
 	DroneDestroyedSnapshot,
@@ -18,6 +22,7 @@ import type {
 	GrenadeKind,
 	GrenadeSelectionIntent,
 	GrenadeSnapshot,
+	HitscanSnapshot,
 	IncomingLockSnapshot,
 	IncomingStandardLockSnapshot,
 	InventoryActionIntent,
@@ -76,6 +81,7 @@ import {
 	MINI_MISSILE_PICKUP_RADIUS,
 	PLAYER_SLIDE_DUST_BUDGET,
 	PLAYER_SLIDE_DUST_LIFETIME_SECONDS,
+	RAIL_CHARGE_MAX_MS,
 	SMART_TARGET_RADIUS_SCREEN,
 	SMART_TARGET_LEAD_DAMPING,
 	SMART_TARGET_LEAD_DEAD_ZONE_RADIANS_PER_SECOND,
@@ -283,6 +289,12 @@ type Projectile = {
 	velocity: THREE.Vector3
 }
 
+type SyncedOrb = {
+	mesh: THREE.Mesh
+	target: THREE.Vector3
+	velocity: THREE.Vector3
+}
+
 type MiniMissileVisual = {
 	id: number
 	mesh: THREE.Group
@@ -377,6 +389,8 @@ const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
 })
 
 export class ArenaGame {
+	readonly #ballistics = new Map<number, SyncedOrb>()
+	readonly #bubbles = new Map<number, SyncedOrb>()
 	readonly #audio: GameAudio
 	readonly #canvas: HTMLCanvasElement
 	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 620)
@@ -441,6 +455,9 @@ export class ArenaGame {
 	#lastFistContactId = 0
 	#disposed = false
 	#fireCooldown = 0
+	#railCharging = false
+	#railChargeStartedAt = 0
+	#triggerHeld = false
 	#freeAim = false
 	#grenadeCooldown = 0
 	#grenadeHeld = false
@@ -604,6 +621,11 @@ export class ArenaGame {
 		this.#socket.off("arena:mini-missile-pickup", this.#onMiniMissilePickup)
 		this.#socket.off("arena:projectile", this.#onProjectile)
 		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
+		this.#socket.off("arena:bubble", this.#onBubble)
+		this.#socket.off("arena:bubble-popped", this.#onBubblePopped)
+		this.#socket.off("arena:ballistic", this.#onBallistic)
+		this.#socket.off("arena:ballistic-ended", this.#onBallisticEnded)
+		this.#socket.off("arena:hitscan", this.#onHitscan)
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
 		this.#droneSalvage.dispose()
@@ -630,6 +652,16 @@ export class ArenaGame {
 			this.#gunModel = null
 		}
 		for (const id of this.#missiles.keys()) this.#removeMiniMissileVisual(id)
+		for (const visual of [
+			...this.#bubbles.values(),
+			...this.#ballistics.values(),
+		]) {
+			this.#scene.remove(visual.mesh)
+			visual.mesh.geometry.dispose()
+			;(visual.mesh.material as THREE.Material).dispose()
+		}
+		this.#bubbles.clear()
+		this.#ballistics.clear()
 		for (const model of this.#remotePlayers.values()) {
 			model.ragdoll?.dispose()
 			this.#scene.remove(model.rig.root)
@@ -664,6 +696,7 @@ export class ArenaGame {
 
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
 		this.#keys.delete(event.code)
+		if (event.code === "KeyF") this.#releaseRailCharge()
 	}
 
 	readonly #onMouseMove = (event: MouseEvent): void => {
@@ -701,12 +734,16 @@ export class ArenaGame {
 			this.start()
 		}
 		if (event.target === this.#canvas) this.#mouseLookDragging = true
-		if (event.button === 0) this.#fire()
+		if (event.button === 0) {
+			if (this.#weaponKind === "rail-gun") this.#beginRailCharge()
+			else this.#fire()
+		}
 		if (event.button === 2) this.#throwGrenade()
 	}
 
-	readonly #onMouseUp = (): void => {
+	readonly #onMouseUp = (event: MouseEvent): void => {
 		this.#mouseLookDragging = false
+		if (event.button === 0) this.#releaseRailCharge()
 	}
 
 	readonly #onContextMenu = (event: MouseEvent): void => {
@@ -1189,6 +1226,7 @@ export class ArenaGame {
 			equipment.slots[1] === null ? null : { ...equipment.slots[1] },
 		]
 		this.#weaponKind = active.weapon
+		if (active.weapon !== "rail-gun") this.#railCharging = false
 		this.#ammo = active.ammo
 		this.#setLocalGunModel(active.weapon)
 		if (previousRevision >= 0) {
@@ -1264,6 +1302,91 @@ export class ArenaGame {
 		this.#projectiles.splice(index, 1)
 	}
 
+	readonly #onBubble = (snapshot: BubbleSnapshot): void => {
+		let visual = this.#bubbles.get(snapshot.id)
+		if (visual === undefined) {
+			const material = new THREE.MeshPhysicalMaterial({
+				color: "#f58bdf",
+				emissive: "#7f255f",
+				emissiveIntensity: 0.35,
+				opacity: 0.24,
+				roughness: 0.08,
+				transparent: true,
+				transmission: 0.55,
+				depthWrite: false,
+			})
+			const mesh = new THREE.Mesh(
+				new THREE.SphereGeometry(snapshot.radius, 18, 12),
+				material,
+			)
+			mesh.position.set(...snapshot.position)
+			this.#scene.add(mesh)
+			visual = {
+				mesh,
+				target: new THREE.Vector3(...snapshot.position),
+				velocity: new THREE.Vector3(...snapshot.velocity),
+			}
+			this.#bubbles.set(snapshot.id, visual)
+		}
+		visual.target.set(...snapshot.position)
+		visual.velocity.set(...snapshot.velocity)
+	}
+
+	readonly #onBubblePopped = (snapshot: BubblePoppedSnapshot): void => {
+		const visual = this.#bubbles.get(snapshot.id)
+		if (visual === undefined) return
+		this.#scene.remove(visual.mesh)
+		visual.mesh.geometry.dispose()
+		;(visual.mesh.material as THREE.Material).dispose()
+		this.#bubbles.delete(snapshot.id)
+		this.#spawnMuzzleFlash(
+			new THREE.Vector3(...snapshot.position),
+			new THREE.Vector3(0, 1, 0),
+			"#ff8de6",
+		)
+	}
+
+	readonly #onBallistic = (snapshot: BallisticSnapshot): void => {
+		let visual = this.#ballistics.get(snapshot.id)
+		if (visual === undefined) {
+			const mesh = new THREE.Mesh(
+				new THREE.SphereGeometry(0.1 + snapshot.charge * 0.07, 10, 8),
+				new THREE.MeshBasicMaterial({ color: "#ffcf66" }),
+			)
+			mesh.position.set(...snapshot.position)
+			this.#scene.add(mesh)
+			visual = {
+				mesh,
+				target: new THREE.Vector3(...snapshot.position),
+				velocity: new THREE.Vector3(...snapshot.velocity),
+			}
+			this.#ballistics.set(snapshot.id, visual)
+		}
+		visual.target.set(...snapshot.position)
+		visual.velocity.set(...snapshot.velocity)
+	}
+
+	readonly #onBallisticEnded = (snapshot: BallisticEndedSnapshot): void => {
+		const visual = this.#ballistics.get(snapshot.id)
+		if (visual === undefined) return
+		this.#scene.remove(visual.mesh)
+		visual.mesh.geometry.dispose()
+		;(visual.mesh.material as THREE.Material).dispose()
+		this.#ballistics.delete(snapshot.id)
+		this.#spawnMuzzleFlash(
+			new THREE.Vector3(...snapshot.position),
+			new THREE.Vector3(0, 1, 0),
+			"#ffb63e",
+		)
+	}
+
+	readonly #onHitscan = (snapshot: HitscanSnapshot): void => {
+		const origin = new THREE.Vector3(...snapshot.origin)
+		const direction = new THREE.Vector3(...snapshot.direction)
+		this.#spawnMuzzleFlash(origin, direction, "#ffd49a")
+		this.#spawnProjectile(1_000_000 + snapshot.id, origin, direction, "#ffd49a")
+	}
+
 	readonly #onSnapshot = (snapshot: ArenaSnapshot): void => {
 		this.#drones.applySnapshot(snapshot)
 		this.#droneSalvage.applySnapshot(snapshot)
@@ -1275,6 +1398,24 @@ export class ArenaGame {
 		for (const id of this.#missiles.keys()) {
 			if (activeMissiles.has(id)) continue
 			this.#removeMiniMissileVisual(id)
+		}
+		const activeBubbles = new Set<number>()
+		for (const bubble of snapshot.bubbles ?? []) {
+			activeBubbles.add(bubble.id)
+			this.#onBubble(bubble)
+		}
+		for (const [id, visual] of this.#bubbles) {
+			if (!activeBubbles.has(id))
+				this.#onBubblePopped({ id, position: visual.mesh.position.toArray() })
+		}
+		const activeBallistics = new Set<number>()
+		for (const ballistic of snapshot.ballistics ?? []) {
+			activeBallistics.add(ballistic.id)
+			this.#onBallistic(ballistic)
+		}
+		for (const [id, visual] of this.#ballistics) {
+			if (!activeBallistics.has(id))
+				this.#onBallisticEnded({ id, position: visual.mesh.position.toArray() })
 		}
 	}
 
@@ -1312,6 +1453,11 @@ export class ArenaGame {
 		this.#socket.on("arena:mini-missile-pickup", this.#onMiniMissilePickup)
 		this.#socket.on("arena:projectile", this.#onProjectile)
 		this.#socket.on("arena:projectile-ended", this.#onProjectileEnded)
+		this.#socket.on("arena:bubble", this.#onBubble)
+		this.#socket.on("arena:bubble-popped", this.#onBubblePopped)
+		this.#socket.on("arena:ballistic", this.#onBallistic)
+		this.#socket.on("arena:ballistic-ended", this.#onBallisticEnded)
+		this.#socket.on("arena:hitscan", this.#onHitscan)
 		this.#socket.on("arena:snapshot", this.#onSnapshot)
 		this.#resize()
 	}
@@ -1978,7 +2124,11 @@ export class ArenaGame {
 			jumpStep.impulse === 1 || jumpStep.impulse === 2 ? jumpStep.impulse : null
 		this.#audioLandingImpact = jumpStep.landed ? jumpStep.impactVelocity : 0
 		const trigger = gamepad.fire || this.#keys.has("KeyF")
-		if (trigger && this.#fireCooldown <= 0) this.#fire()
+		if (this.#weaponKind === "rail-gun") {
+			if (trigger && !this.#triggerHeld) this.#beginRailCharge()
+			if (!trigger && this.#triggerHeld) this.#releaseRailCharge()
+		} else if (trigger && this.#fireCooldown <= 0) this.#fire()
+		this.#triggerHeld = trigger
 		if (gamepad.grenade && !this.#grenadeHeld) this.#throwGrenade()
 		this.#grenadeHeld = gamepad.grenade
 		this.#fireCooldown -= delta
@@ -2051,6 +2201,16 @@ export class ArenaGame {
 		} satisfies InventoryActionIntent)
 	}
 
+	#requestSecondary(weapon: "bubble-gun" | "rail-gun" | "shotgun"): void {
+		if (!this.#connected || this.#dead) return
+		this.#releaseRailCharge()
+		this.#socket.emit("arena:inventory-action", {
+			clientActionId: this.#nextInventoryActionId(),
+			type: "select-secondary",
+			weapon,
+		} satisfies InventoryActionIntent)
+	}
+
 	#requestDrop(): void {
 		if (!this.#connected || this.#dead || this.#equipmentSlots[1] === null)
 			return
@@ -2104,6 +2264,9 @@ export class ArenaGame {
 	}
 
 	#fire(): void {
+		if (this.#reload !== null && this.#weaponKind === "shotgun") {
+			this.#cancelReloadPresentation()
+		}
 		if (
 			this.#dead ||
 			this.#reload !== null ||
@@ -2119,6 +2282,7 @@ export class ArenaGame {
 		)
 			return
 		const gun = gunDefinition(this.#weaponKind)
+		if (gun.fire.type === "ballistic") return
 		this.#audio.playWeapon(this.#weaponKind)
 		this.#fireCooldown = gun.fire.clientCooldownSeconds
 		this.#weaponsFreeUntil =
@@ -2159,6 +2323,47 @@ export class ArenaGame {
 				origin: origin.toArray(),
 			} satisfies FireIntent)
 		}
+	}
+
+	#beginRailCharge(): void {
+		if (
+			this.#weaponKind !== "rail-gun" ||
+			this.#railCharging ||
+			this.#dead ||
+			this.#reload !== null ||
+			this.#ammo === 0 ||
+			this.#fireCooldown > 0
+		)
+			return
+		this.#shotSequence += 1
+		this.#railCharging = true
+		this.#railChargeStartedAt = performance.now()
+		this.#socket.emit("arena:rail-charge", {
+			clientChargeId: this.#shotSequence,
+			type: "start",
+		})
+	}
+
+	#releaseRailCharge(): void {
+		if (!this.#railCharging) return
+		this.#railCharging = false
+		if (this.#weaponKind !== "rail-gun" || this.#dead) return
+		this.#camera.position.copy(this.#player.position)
+		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
+		this.#camera.updateMatrixWorld(true)
+		const origin = this.#weaponMuzzle.getWorldPosition(new THREE.Vector3())
+		const direction = this.#getAimDirection(origin)
+		this.#pendingShotIds.add(this.#shotSequence)
+		this.#socket.emit("arena:rail-charge", {
+			clientChargeId: this.#shotSequence,
+			direction: direction.toArray(),
+			origin: origin.toArray(),
+			type: "release",
+		})
+		this.#audio.playWeapon("rail-gun")
+		this.#fireCooldown = gunDefinition("rail-gun").fire.clientCooldownSeconds
+		this.#recoilState = addRecoilShot(this.#recoilState)
+		this.#recoilPulse += 1
 	}
 
 	#throwGrenade(): void {
@@ -2564,6 +2769,17 @@ export class ArenaGame {
 				this.#scene.remove(projectile.mesh)
 				this.#projectiles.splice(index, 1)
 			}
+		}
+	}
+
+	#updateSyncedWeaponVisuals(delta: number): void {
+		for (const visual of [
+			...this.#bubbles.values(),
+			...this.#ballistics.values(),
+		]) {
+			visual.target.addScaledVector(visual.velocity, delta)
+			visual.mesh.position.lerp(visual.target, Math.min(1, delta * 14))
+			visual.mesh.rotation.y += delta * 2.2
 		}
 	}
 
@@ -3338,6 +3554,13 @@ export class ArenaGame {
 		const pickupNearby = this.#isPickupNearby()
 		this.#onHud({
 			ammo: this.#ammo,
+			chargeProgress: this.#railCharging
+				? Math.min(
+						1,
+						(performance.now() - this.#railChargeStartedAt) /
+							RAIL_CHARGE_MAX_MS,
+					)
+				: 0,
 			activeSlot: this.#activeSlot,
 			connection: this.#connected
 				? "online"
@@ -3460,6 +3683,7 @@ export class ArenaGame {
 		this.#damageEffects.update(delta)
 		this.#fistContactEffects.update(delta)
 		this.#updateProjectiles(delta)
+		this.#updateSyncedWeaponVisuals(delta)
 		this.#updateGrenades(delta)
 		this.#updateMiniMissiles(delta)
 		this.#updateDustParticles(delta)

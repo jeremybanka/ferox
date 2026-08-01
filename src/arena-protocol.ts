@@ -162,6 +162,8 @@ export type DroneSnapshot = {
 }
 
 export type ArenaSnapshot = {
+	ballistics: BallisticSnapshot[]
+	bubbles: BubbleSnapshot[]
 	drones: DroneSnapshot[]
 	dronePayloads: DronePayloadSnapshot[]
 	droneWrecks: DroneWreckSnapshot[]
@@ -259,6 +261,11 @@ export function isMiniMissileTargetRef(
 export type InventoryActionIntent =
 	| { clientActionId: number; type: "collect" }
 	| { clientActionId: number; direction: -1 | 1; type: "switch" }
+	| {
+			clientActionId: number
+			type: "select-secondary"
+			weapon: "bubble-gun" | "rail-gun" | "shotgun"
+	  }
 	| { clientActionId: number; type: "drop-mini-missile" | "reload" }
 
 export function isInventoryActionIntent(
@@ -280,6 +287,13 @@ export function isInventoryActionIntent(
 			return (
 				Object.keys(record).length === 3 &&
 				(record["direction"] === -1 || record["direction"] === 1)
+			)
+		case "select-secondary":
+			return (
+				Object.keys(record).length === 3 &&
+				(record["weapon"] === "bubble-gun" ||
+					record["weapon"] === "rail-gun" ||
+					record["weapon"] === "shotgun")
 			)
 		default:
 			return false
@@ -410,9 +424,7 @@ export function isEquipmentSnapshot(
 		(record["revision"] as number) >= 0 &&
 		isEquipmentSlotSnapshot(slots[0]) &&
 		slots[0].weapon === "arc-blaster" &&
-		(slots[1] === null ||
-			(isEquipmentSlotSnapshot(slots[1]) &&
-				slots[1].weapon === "mini-missile")) &&
+		(slots[1] === null || isEquipmentSlotSnapshot(slots[1])) &&
 		slots[record["activeSlot"] as WeaponSlotIndex] !== null
 	)
 }
@@ -465,6 +477,15 @@ export type FireIntent = {
 	origin: Vector3Tuple
 }
 
+export type RailChargeIntent =
+	| { clientChargeId: number; type: "start" }
+	| {
+			clientChargeId: number
+			direction: Vector3Tuple
+			origin: Vector3Tuple
+			type: "release"
+	  }
+
 export type DirectHitClassification = "headshot" | "normal"
 export type DirectHitTargetType = "drone" | "player"
 
@@ -480,7 +501,15 @@ export type DirectHitResult = {
 export type PlayerDamageImpact = {
 	direction: Vector3Tuple
 	position: Vector3Tuple
-	source: "grenade" | "kamikaze" | "melee" | "mini-missile" | "projectile"
+	source:
+		| "ballistic"
+		| "bubble"
+		| "grenade"
+		| "hitscan"
+		| "kamikaze"
+		| "melee"
+		| "mini-missile"
+		| "projectile"
 }
 
 export type PlayerDamageSnapshot = PlayerDamageImpact & {
@@ -523,6 +552,35 @@ export type ProjectileSnapshot = {
 
 export type ProjectileEndedSnapshot = {
 	id: number
+}
+
+export type BubbleSnapshot = {
+	health: number
+	id: number
+	ownerId: string
+	position: Vector3Tuple
+	radius: number
+	velocity: Vector3Tuple
+}
+
+export type BubblePoppedSnapshot = { id: number; position: Vector3Tuple }
+
+export type BallisticSnapshot = {
+	charge: number
+	id: number
+	ownerId: string
+	position: Vector3Tuple
+	velocity: Vector3Tuple
+}
+
+export type BallisticEndedSnapshot = { id: number; position: Vector3Tuple }
+
+export type HitscanSnapshot = {
+	direction: Vector3Tuple
+	distance: number
+	id: number
+	origin: Vector3Tuple
+	ownerId: string
 }
 
 export type DroneDestroyedSnapshot = {

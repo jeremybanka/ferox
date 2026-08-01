@@ -58,6 +58,62 @@ test("switching preserves ownership and per-slot ammo", () => {
 	])
 })
 
+test("cycling selectable secondaries preserves each server-owned magazine", () => {
+	const armory = new MiniMissileArmory([0, 0, 0])
+	armory.connect("pilot")
+	assert.equal(armory.selectSecondary("pilot", "shotgun"), true)
+	assert.equal(armory.consumeActive("pilot", "hitscan"), true)
+	assert.equal(armory.consumeActive("pilot", "hitscan"), true)
+	assert.equal(armory.equipment("pilot").slots[1]?.ammo, 4)
+
+	assert.equal(armory.selectSecondary("pilot", "bubble-gun"), true)
+	assert.equal(armory.consumeActive("pilot", "bubbles"), true)
+	assert.equal(armory.equipment("pilot").slots[1]?.ammo, 3)
+	assert.equal(armory.selectSecondary("pilot", "rail-gun"), true)
+	assert.equal(armory.consumeActive("pilot", "ballistic"), true)
+
+	assert.equal(armory.selectSecondary("pilot", "shotgun"), true)
+	assert.deepEqual(armory.equipment("pilot").slots[1], {
+		ammo: 4,
+		weapon: "shotgun",
+	})
+	assert.equal(armory.selectSecondary("pilot", "bubble-gun"), true)
+	assert.deepEqual(armory.equipment("pilot").slots[1], {
+		ammo: 3,
+		weapon: "bubble-gun",
+	})
+	assert.equal(armory.selectSecondary("pilot", "rail-gun"), true)
+	assert.deepEqual(armory.equipment("pilot").slots[1], {
+		ammo: 3,
+		weapon: "rail-gun",
+	})
+})
+
+test("mini-missile ownership overlays and then restores the selected secondary", () => {
+	const armory = new MiniMissileArmory([0, 0, 0])
+	armory.connect("pilot")
+	assert.equal(armory.selectSecondary("pilot", "shotgun"), true)
+	assert.equal(armory.consumeActive("pilot", "hitscan"), true)
+	assert.equal(armory.consumeActive("pilot", "hitscan"), true)
+	assert.equal(armory.collect("pilot", [0, 0, 0]), true)
+	assert.equal(armory.pickup().ownerId, "pilot")
+	assert.equal(armory.selectSecondary("pilot", "bubble-gun"), false)
+	assert.deepEqual(armory.equipment("pilot").slots[1], {
+		ammo: MINI_MISSILE_AMMO,
+		weapon: "mini-missile",
+	})
+	assert.equal(armory.pickup().ownerId, "pilot")
+
+	assert.equal(armory.release("pilot", 1_000), true)
+	assert.deepEqual(armory.equipment("pilot").slots[1], {
+		ammo: 4,
+		weapon: "shotgun",
+	})
+	assert.equal(armory.equipment("pilot").activeSlot, 0)
+	assert.equal(armory.selectSecondary("pilot", "shotgun"), true)
+	assert.equal(activeEquipmentSlot(armory.equipment("pilot")).ammo, 4)
+})
+
 test("captured reload refills ARC and Mini only while slot and gun stay active", () => {
 	const armory = new MiniMissileArmory([0, 0, 0])
 	armory.connect("pilot")

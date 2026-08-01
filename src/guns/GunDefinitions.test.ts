@@ -137,7 +137,21 @@ describe("equipment protocol", () => {
 		expect(
 			isInventoryActionIntent({
 				clientActionId: 5,
+				type: "select-secondary",
+				weapon: "bubble-gun",
+			}),
+		).toBe(true)
+		expect(
+			isInventoryActionIntent({
+				clientActionId: 6,
 				type: "switch",
+				weapon: "mini-missile",
+			}),
+		).toBe(false)
+		expect(
+			isInventoryActionIntent({
+				clientActionId: 7,
+				type: "select-secondary",
 				weapon: "mini-missile",
 			}),
 		).toBe(false)
