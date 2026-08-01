@@ -77,6 +77,12 @@ import {
 } from "./guns/GunModel.ts"
 import { isJumpGrounded, JUMP_PHYSICS, stepJumpPhysics } from "./JumpPhysics.ts"
 import {
+	createMiniMissileTrailVisual,
+	disposeMiniMissileTrailVisual,
+	updateMiniMissileTrailVisual,
+	type MiniMissileTrailVisual,
+} from "./MiniMissileTrailVisual.ts"
+import {
 	addRecoilShot,
 	initialRecoilSpreadState,
 	normalizedRecoilSpread,
@@ -178,6 +184,7 @@ type MiniMissileVisual = {
 	mesh: THREE.Group
 	phase: "falling" | "powered"
 	target: THREE.Vector3
+	trail: MiniMissileTrailVisual
 	velocity: THREE.Vector3
 }
 
@@ -1470,6 +1477,7 @@ export class ArenaGame {
 			!Number.isSafeInteger(snapshot.id) ||
 			!Array.isArray(snapshot.position) ||
 			!Array.isArray(snapshot.velocity) ||
+			(snapshot.phase !== "powered" && snapshot.phase !== "falling") ||
 			snapshot.position.length !== 3 ||
 			snapshot.velocity.length !== 3 ||
 			[...snapshot.position, ...snapshot.velocity].some(
@@ -1500,14 +1508,22 @@ export class ArenaGame {
 			const light = new THREE.PointLight("#ff6c35", 3.5, 4)
 			mesh.add(body, exhaust, light)
 			mesh.position.set(...snapshot.position)
-			this.#scene.add(mesh)
+			const trail = createMiniMissileTrailVisual()
+			this.#scene.add(mesh, trail.points)
 			missile = {
 				id: snapshot.id,
 				mesh,
 				phase: snapshot.phase,
 				target: new THREE.Vector3(...snapshot.position),
+				trail,
 				velocity: new THREE.Vector3(...snapshot.velocity),
 			}
+			updateMiniMissileTrailVisual(
+				trail,
+				snapshot.position,
+				performance.now() / 1_000,
+				snapshot.phase,
+			)
 			this.#missiles.set(snapshot.id, missile)
 		}
 		missile.phase = snapshot.phase
@@ -1518,7 +1534,8 @@ export class ArenaGame {
 	#removeMiniMissileVisual(id: number): void {
 		const missile = this.#missiles.get(id)
 		if (missile === undefined) return
-		this.#scene.remove(missile.mesh)
+		this.#scene.remove(missile.mesh, missile.trail.points)
+		disposeMiniMissileTrailVisual(missile.trail)
 		missile.mesh.traverse((object) => {
 			if (!(object instanceof THREE.Mesh)) return
 			object.geometry.dispose()
@@ -1535,6 +1552,12 @@ export class ArenaGame {
 		for (const missile of this.#missiles.values()) {
 			missile.target.addScaledVector(missile.velocity, delta)
 			missile.mesh.position.lerp(missile.target, Math.min(1, delta * 18))
+			updateMiniMissileTrailVisual(
+				missile.trail,
+				missile.mesh.position.toArray(),
+				performance.now() / 1_000,
+				missile.phase,
+			)
 			if (missile.velocity.lengthSq() > 0.01) {
 				missile.mesh.quaternion.setFromUnitVectors(
 					forward,

@@ -30,8 +30,9 @@ export const GRENADE_THROW_SPEED = 17
 // without changing protocol or simulation behavior. Powered missiles keep a
 // valid designated or acquired pilot/drone target until it disappears. Only
 // pilot targets produce warnings. Splash never damages the missile owner.
-export const MINI_MISSILE_AMMO = 6
+export const MINI_MISSILE_AMMO = 24
 export const MINI_MISSILE_BLAST_RADIUS = 5
+export const MINI_MISSILE_CLIENT_COOLDOWN_SECONDS = 0.18
 export const MINI_MISSILE_DAMAGE = 10
 export const MINI_MISSILE_GRAVITY = 13
 export const MINI_MISSILE_MAX_TURN_RATE = 2.4
@@ -42,10 +43,15 @@ export const PICKUP_HOLD_DURATION_MS = 600
 export const WEAPON_SWITCH_WHEEL_DEBOUNCE_MS = 180
 export const MINI_MISSILE_POWERED_SECONDS = 10
 export const MINI_MISSILE_RADIUS = 0.12
-export const MINI_MISSILE_SPEED = 11
+export const MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS = 150
+export const MINI_MISSILE_SPEED = 14
 export const MINI_MISSILE_SEEKER_HALF_ANGLE = Math.PI / 5
 export const MINI_MISSILE_SEEKER_RANGE = 48
 export const MINI_MISSILE_SEEKER_SCAN_SECONDS = 0.12
+export const MINI_MISSILE_TRAIL_COLOR = "#ff6a00"
+export const MINI_MISSILE_TRAIL_LIFETIME_SECONDS = 1.4
+export const MINI_MISSILE_TRAIL_MAX_POINTS = 32
+export const MINI_MISSILE_TRAIL_SAMPLE_SPACING = 0.25
 
 export function miniMissileDamageAtDistance(distance: number): number {
 	if (distance >= MINI_MISSILE_BLAST_RADIUS) return 0

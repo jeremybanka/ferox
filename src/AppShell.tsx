@@ -253,7 +253,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					<em>
 						{gun.fire.type === "guided-missile"
 							? hud.ammo === 0
-								? "ORDNANCE SPENT"
+								? "LAUNCHER EMPTY • 1 / Y / WHEEL TO SWITCH • X TO DROP"
 								: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH • X TO DROP"
 							: hud.ammo === 0
 								? "PRESS RB / R TO RELOAD"

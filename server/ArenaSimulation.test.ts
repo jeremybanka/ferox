@@ -20,6 +20,7 @@ import {
 	MINI_MISSILE_MAX_TURN_RATE,
 	MINI_MISSILE_SEEKER_RANGE,
 	MINI_MISSILE_SEEKER_SCAN_SECONDS,
+	MINI_MISSILE_SPEED,
 	miniMissileDamageAtDistance,
 } from "../src/game-constants.ts"
 import {
@@ -650,10 +651,11 @@ test("targetless missiles fly straight until the seeker scan cadence elapses", (
 	})
 
 	harness.simulation.update(MINI_MISSILE_SEEKER_SCAN_SECONDS - 0.02)
-	assert.deepEqual(
-		harness.simulation.snapshot().missiles[0]?.velocity,
-		[0, 0, -11],
-	)
+	assert.deepEqual(harness.simulation.snapshot().missiles[0]?.velocity, [
+		0,
+		0,
+		-MINI_MISSILE_SPEED,
+	])
 	assert.deepEqual(harness.locks, [])
 	harness.simulation.update(0.02)
 	assert.ok((harness.simulation.snapshot().missiles[0]?.velocity[0] ?? 0) > 0)
@@ -681,10 +683,11 @@ test("targetless missiles can acquire a drone after it enters seeker range", () 
 	})
 
 	harness.simulation.update(MINI_MISSILE_SEEKER_SCAN_SECONDS)
-	assert.deepEqual(
-		harness.simulation.snapshot().missiles[0]?.velocity,
-		[0, 0, -11],
-	)
+	assert.deepEqual(harness.simulation.snapshot().missiles[0]?.velocity, [
+		0,
+		0,
+		-MINI_MISSILE_SPEED,
+	])
 	for (let index = 0; index < 6; index += 1) {
 		harness.simulation.update(MINI_MISSILE_SEEKER_SCAN_SECONDS)
 	}

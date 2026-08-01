@@ -153,21 +153,10 @@ export class MiniMissileArmory {
 		}
 	}
 
-	releaseIfSpent(
-		playerId: string,
-		activeMissiles: number,
-		now: number,
-	): boolean {
-		const ammo = this.#inventories.get(playerId)?.slots[1]?.ammo ?? 0
-		if (this.#ownerId !== playerId || ammo > 0 || activeMissiles > 0) {
-			return false
-		}
-		this.release(playerId, now)
-		return true
-	}
-
 	release(playerId: string, now: number): boolean {
 		if (this.#ownerId !== playerId) return false
+		// Only explicit drop, death, or disconnect reaches this path. Collection
+		// creates a fresh full magazine after the configured world-return delay.
 		const inventory = this.#inventories.get(playerId)
 		this.#ownerId = null
 		this.#available = false

@@ -1,7 +1,9 @@
 import {
 	MINI_MISSILE_AMMO,
+	MINI_MISSILE_CLIENT_COOLDOWN_SECONDS,
 	MINI_MISSILE_POWERED_SECONDS,
 	MINI_MISSILE_SEEKER_RANGE,
+	MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS,
 	MINI_MISSILE_SPEED,
 	PLAYER_PROJECTILE_DAMAGE,
 } from "../game-constants.ts"
@@ -79,8 +81,8 @@ export const GUN_DEFINITIONS = {
 	"mini-missile": {
 		capabilities: { fire: true, pickup: true, reload: false },
 		fire: {
-			clientCooldownSeconds: 0.72,
-			serverMinimumIntervalMs: 650,
+			clientCooldownSeconds: MINI_MISSILE_CLIENT_COOLDOWN_SECONDS,
+			serverMinimumIntervalMs: MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS,
 			type: "guided-missile",
 		},
 		id: "mini-missile",

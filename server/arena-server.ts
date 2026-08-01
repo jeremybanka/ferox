@@ -27,6 +27,7 @@ import {
 } from "../src/game-constants.ts"
 import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
+import { isFireCadenceReady } from "./FireCadence.ts"
 import { MiniMissileArmory, type LockUpdate } from "./MiniMissileArmory.ts"
 import {
 	StandardLockTracker,
@@ -325,7 +326,14 @@ realtime(
 			if (equipped.fire.type !== "projectile") return
 			const now = performance.now()
 			const previous = lastPlayerFire.get(socketId) ?? Number.NEGATIVE_INFINITY
-			if (now - previous < equipped.fire.serverMinimumIntervalMs) return
+			if (
+				!isFireCadenceReady(
+					Number.isFinite(previous) ? previous : undefined,
+					now,
+					equipped.fire.serverMinimumIntervalMs,
+				)
+			)
+				return
 			if (!armory.consumeActive(socketId, "projectile")) return
 			if (!simulation.fire(socketId, payload)) {
 				armory.restoreActive(socketId)
@@ -348,7 +356,11 @@ realtime(
 			const previous =
 				lastPlayerMissile.get(socketId) ?? Number.NEGATIVE_INFINITY
 			if (
-				now - previous < equipped.fire.serverMinimumIntervalMs ||
+				!isFireCadenceReady(
+					Number.isFinite(previous) ? previous : undefined,
+					now,
+					equipped.fire.serverMinimumIntervalMs,
+				) ||
 				!armory.consumeMiniMissile(socketId)
 			)
 				return
@@ -444,23 +456,7 @@ setInterval(() => {
 	const delta = Math.min((now - lastSimulationTick) / 1_000, 0.1)
 	lastSimulationTick = now
 	simulation.update(delta)
-	let pickupChanged = armory.update(Date.now())
-	let playersChanged = false
-	for (const playerId of players.keys()) {
-		if (
-			armory.releaseIfSpent(
-				playerId,
-				simulation.activeMissilesForOwner(playerId),
-				Date.now(),
-			)
-		) {
-			emitEquipment(playerId)
-			pickupChanged = true
-			playersChanged = true
-		}
-	}
-	if (pickupChanged) emitPickup()
-	if (playersChanged) io.emit("arena:players", [...players.values()])
+	if (armory.update(Date.now())) emitPickup()
 }, 1_000 / 30)
 
 setInterval(() => {

@@ -8,6 +8,12 @@ import {
 	isNewInventoryActionIntent,
 } from "../arena-protocol.ts"
 import {
+	MINI_MISSILE_AMMO,
+	MINI_MISSILE_CLIENT_COOLDOWN_SECONDS,
+	MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS,
+	MINI_MISSILE_SPEED,
+} from "../game-constants.ts"
+import {
 	DEFAULT_GUN_ID,
 	GUN_DEFINITIONS,
 	GUN_IDS,
@@ -54,6 +60,16 @@ describe("gun definitions", () => {
 			reload: false,
 		})
 		expect(launcher.fire.type).toBe("guided-missile")
+		expect(launcher.magazineSize).toBe(MINI_MISSILE_AMMO)
+		expect(launcher.magazineSize).toBe(24)
+		expect(launcher.fire.clientCooldownSeconds).toBe(
+			MINI_MISSILE_CLIENT_COOLDOWN_SECONDS,
+		)
+		expect(launcher.fire.serverMinimumIntervalMs).toBe(
+			MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS,
+		)
+		expect(launcher.tuning).toMatchObject({ speed: MINI_MISSILE_SPEED })
+		expect(MINI_MISSILE_SPEED).toBe(14)
 		expect(launcher.name).not.toBe(blaster.name)
 	})
 
@@ -106,13 +122,14 @@ describe("equipment protocol", () => {
 			revision: 4,
 			slots: [
 				{ ammo: 27, weapon: "arc-blaster" },
-				{ ammo: 5, weapon: "mini-missile" },
+				{ ammo: 0, weapon: "mini-missile" },
 			],
 		} as const
 		expect(isEquipmentSnapshot(snapshot)).toBe(true)
 		expect(isNewEquipmentSnapshot(snapshot, 3)).toBe(true)
 		expect(isNewEquipmentSnapshot(snapshot, 4)).toBe(false)
 		expect(activeEquipmentSlot(snapshot)).toEqual(snapshot.slots[1])
+		expect(activeEquipmentSlot(snapshot).ammo).toBe(0)
 		expect(isEquipmentSnapshot({ ...snapshot, activeSlot: 2 })).toBe(false)
 		expect(isEquipmentSnapshot({ ...snapshot, revision: -1 })).toBe(false)
 		expect(

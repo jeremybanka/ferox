@@ -68,9 +68,10 @@ test("reload applies only to the authoritative active reloadable slot", () => {
 	assert.equal(armory.reloadActive("pilot"), false)
 })
 
-test("dropping clears only slot two and respawns the pickup", () => {
+test("dropping clears only slot two and returns a fully refilled pickup", () => {
 	const armory = new MiniMissileArmory([0, 0, 0])
 	armory.connect("holder")
+	armory.connect("next")
 	armory.consumeActive("holder", "projectile")
 	armory.collect("holder", [0, 0, 0])
 	armory.switchActive("holder", 1)
@@ -89,32 +90,73 @@ test("dropping clears only slot two and respawns the pickup", () => {
 		armory.update(1_000 + MINI_MISSILE_PICKUP_RESPAWN_SECONDS * 1_000),
 		true,
 	)
+	assert.equal(armory.collect("next", [0, 0, 0]), true)
+	assert.deepEqual(armory.equipment("next").slots[1], {
+		ammo: MINI_MISSILE_AMMO,
+		weapon: "mini-missile",
+	})
 })
 
-test("depletion waits for active missiles before clearing only slot two", () => {
+test("zero ammo retains launcher ownership, active model, and unavailable pickup", () => {
 	const armory = new MiniMissileArmory([0, 0, 0])
 	armory.connect("holder")
+	armory.connect("observer")
 	armory.collect("holder", [0, 0, 0])
 	for (let shot = 0; shot < MINI_MISSILE_AMMO; shot += 1) {
 		assert.equal(armory.consumeMiniMissile("holder"), true)
 	}
-	assert.equal(armory.releaseIfSpent("holder", 1, 1_000), false)
-	assert.equal(activeEquipmentSlot(armory.equipment("holder")).ammo, 0)
-	assert.equal(armory.releaseIfSpent("holder", 0, 1_001), true)
-	assert.deepEqual(armory.equipment("holder").slots, [
-		{ ammo: 28, weapon: "arc-blaster" },
-		null,
-	])
+	const empty = armory.equipment("holder")
+	assert.equal(empty.activeSlot, 1)
+	assert.deepEqual(activeEquipmentSlot(empty), {
+		ammo: 0,
+		weapon: "mini-missile",
+	})
+	assert.deepEqual(armory.pickup(), {
+		available: false,
+		ownerId: "holder",
+		position: [0, 0, 0],
+		respawnAt: null,
+	})
+	assert.equal(armory.collect("observer", [0, 0, 0]), false)
+	assert.equal(armory.consumeMiniMissile("holder"), false)
+	assert.deepEqual(armory.equipment("holder"), empty)
+
+	assert.equal(armory.switchActive("holder", -1), true)
+	assert.equal(armory.activeWeapon("holder"), "arc-blaster")
+	assert.equal(armory.switchActive("holder", 1), true)
+	assert.deepEqual(activeEquipmentSlot(armory.equipment("holder")), {
+		ammo: 0,
+		weapon: "mini-missile",
+	})
+	assert.equal(armory.update(100_000), false)
+	assert.equal(armory.pickup().ownerId, "holder")
 })
 
-test("death release, disconnect, and reconnect restore safe active ARC", () => {
+test("explicit death release of an empty launcher clears slot two", () => {
 	const armory = new MiniMissileArmory([0, 0, 0])
 	armory.connect("pilot")
 	armory.collect("pilot", [0, 0, 0])
+	for (let shot = 0; shot < MINI_MISSILE_AMMO; shot += 1) {
+		armory.consumeMiniMissile("pilot")
+	}
 	assert.equal(armory.release("pilot", 2_000), true)
 	assert.equal(armory.activeWeapon("pilot"), "arc-blaster")
+	assert.equal(armory.equipment("pilot").slots[1], null)
+	assert.equal(
+		armory.pickup().respawnAt,
+		2_000 + MINI_MISSILE_PICKUP_RESPAWN_SECONDS * 1_000,
+	)
+})
 
+test("disconnect releases an empty launcher and reconnect starts ARC-only", () => {
+	const armory = new MiniMissileArmory([0, 0, 0])
+	armory.connect("pilot")
+	armory.collect("pilot", [0, 0, 0])
+	for (let shot = 0; shot < MINI_MISSILE_AMMO; shot += 1) {
+		armory.consumeMiniMissile("pilot")
+	}
 	armory.disconnect("pilot", 2_001)
+	assert.equal(armory.pickup().ownerId, null)
 	assert.deepEqual(armory.connect("pilot"), {
 		activeSlot: 0,
 		revision: 0,
