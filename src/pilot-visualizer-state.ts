@@ -14,12 +14,51 @@ export type BaseAnimation =
 	| "double-jump"
 	| "idle"
 	| "jump"
-	| "reload"
 	| "slide"
 	| CrouchRunAnimation
 	| SlideAnimation
 
-export type OverlayAnimation = "flinch" | "recoil" | "wave" | "weapons-free"
+export type OverlayAnimation =
+	| "flinch"
+	| "recoil"
+	| "reload"
+	| "wave"
+	| "weapons-free"
+
+export const BASE_ANIMATIONS = [
+	"idle",
+	"forward",
+	"left",
+	"backward",
+	"right",
+	"jump",
+	"double-jump",
+	"slide-forward",
+	"slide-left",
+	"slide-backward",
+	"slide-right",
+	"death",
+	"crouch",
+	"crouch-run-forward",
+	"crouch-run-left",
+	"crouch-run-backward",
+	"crouch-run-right",
+] as const satisfies readonly BaseAnimation[]
+
+export const OVERLAY_ANIMATIONS = [
+	"reload",
+	"weapons-free",
+	"recoil",
+	"flinch",
+	"wave",
+] as const satisfies readonly OverlayAnimation[]
+
+export const RELOAD_IS_OVERLAY_ONLY: Extract<
+	BaseAnimation,
+	"reload"
+> extends never
+	? true
+	: never = true
 
 export type SampleInterval = 0.167 | 0.0833
 

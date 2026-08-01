@@ -6,9 +6,15 @@ import {
 	airborneVelocityLayer,
 	risingFallingAnimationLayer,
 } from "./AirborneAnimation.ts"
-import { crouchRunAnimationLayer } from "./CrouchAnimation.ts"
+import {
+	applyCrouchIdleAnimation,
+	crouchRunAnimationLayer,
+} from "./CrouchAnimation.ts"
+import { idleAnimationLayer } from "./IdleAnimation.ts"
 import {
 	applyPilotAnimationLayers,
+	FULL_BODY_INFLUENCE,
+	sampleDraftAnimation,
 	type PilotAnimationLayer,
 	type PilotJoint,
 } from "./PilotAnimation.ts"
@@ -172,6 +178,24 @@ test("ARC cell and Mini-Missile tube service sample visibly distinct poses", () 
 
 test("reload upper-body layer preserves running lower-body animation", () => {
 	assertReloadPreservesLocomotion([runAnimationLayer(0.37, 0.92, "forward")])
+})
+
+test("reload upper-body layer preserves idle lower-body animation", () => {
+	assertReloadPreservesLocomotion([idleAnimationLayer(0.37)])
+})
+
+test("reload upper-body layer preserves crouch-idle lower-body animation", () => {
+	assertReloadPreservesLocomotion([
+		{
+			fadeSeconds: 0,
+			id: "test:crouch-idle",
+			influence: FULL_BODY_INFLUENCE,
+			mode: "override",
+			pose: sampleDraftAnimation((rig) => {
+				applyCrouchIdleAnimation(rig, 0.37, 1)
+			}),
+		},
+	])
 })
 
 test("reload upper-body layer preserves crouch-running lower-body animation", () => {
