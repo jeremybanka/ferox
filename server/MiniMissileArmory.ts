@@ -10,7 +10,11 @@ import {
 	MINI_MISSILE_PICKUP_RADIUS,
 	MINI_MISSILE_PICKUP_RESPAWN_SECONDS,
 } from "../src/game-constants.ts"
-import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
+import {
+	DEFAULT_GUN_ID,
+	gunDefinition,
+	type GunId,
+} from "../src/guns/GunDefinitions.ts"
 
 export type LockUpdate = {
 	playerId: string
@@ -28,13 +32,19 @@ function assertUnhandledReloadRule(rule: never): never {
 type PlayerInventory = {
 	activeSlot: 0 | 1
 	revision: number
+	secondaryAmmo: Partial<Record<SecondaryGunId, number>>
+	selectedSecondary: SecondaryGunId | null
 	slots: [EquipmentSlotSnapshot, EquipmentSlotSnapshot | null]
 }
+
+type SecondaryGunId = Exclude<GunId, "arc-blaster" | "mini-missile">
 
 function defaultInventory(): PlayerInventory {
 	return {
 		activeSlot: 0,
 		revision: 0,
+		secondaryAmmo: {},
+		selectedSecondary: null,
 		slots: [
 			{
 				ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
@@ -79,7 +89,7 @@ export class MiniMissileArmory {
 
 	collect(playerId: string, position: Vector3Tuple): boolean {
 		const inventory = this.#inventories.get(playerId)
-		if (inventory === undefined || inventory.slots[1] !== null) return false
+		if (inventory === undefined) return false
 		if (!this.#available || this.#ownerId !== null) return false
 		const distance = Math.hypot(
 			position[0] - this.#pickupPosition[0],
@@ -87,6 +97,7 @@ export class MiniMissileArmory {
 			position[2] - this.#pickupPosition[2],
 		)
 		if (distance > MINI_MISSILE_PICKUP_RADIUS) return false
+		this.#saveSecondarySlot(inventory)
 		this.#available = false
 		this.#ownerId = playerId
 		this.#respawnAt = null
@@ -96,6 +107,30 @@ export class MiniMissileArmory {
 		}
 		inventory.activeSlot = 1
 		inventory.revision += 1
+		return true
+	}
+
+	selectSecondary(playerId: string, weapon: SecondaryGunId): boolean {
+		const inventory = this.#inventories.get(playerId)
+		if (inventory === undefined || this.#ownerId === playerId) return false
+		if (inventory.slots[1]?.weapon === weapon) {
+			if (inventory.activeSlot === 1) return false
+			inventory.activeSlot = 1
+			inventory.revision += 1
+			return true
+		}
+		this.#saveSecondarySlot(inventory)
+		const gun = gunDefinition(weapon)
+		const ammo = inventory.secondaryAmmo[weapon] ?? gun.magazineSize
+		if (ammo < 0 || ammo > gun.magazineSize) return false
+		inventory.slots[1] = {
+			ammo,
+			weapon,
+		}
+		inventory.selectedSecondary = weapon
+		inventory.activeSlot = 1
+		inventory.revision += 1
+		this.#saveSecondarySlot(inventory)
 		return true
 	}
 
@@ -119,6 +154,9 @@ export class MiniMissileArmory {
 		const gun = gunDefinition(slot.weapon)
 		if (!gun.capabilities.reload || slot.ammo >= gun.magazineSize) return false
 		switch (gun.reload.ammoRule) {
+			case "insert-shell":
+				slot.ammo += 1
+				break
 			case "refill-magazine":
 				slot.ammo = gun.magazineSize
 				break
@@ -126,12 +164,18 @@ export class MiniMissileArmory {
 				return assertUnhandledReloadRule(gun.reload.ammoRule)
 		}
 		inventory.revision += 1
+		this.#saveSecondarySlot(inventory)
 		return true
 	}
 
 	consumeActive(
 		playerId: string,
-		fireType: "guided-missile" | "projectile",
+		fireType:
+			| "ballistic"
+			| "bubbles"
+			| "guided-missile"
+			| "hitscan"
+			| "projectile",
 	): boolean {
 		const inventory = this.#inventories.get(playerId)
 		if (inventory === undefined) return false
@@ -144,6 +188,7 @@ export class MiniMissileArmory {
 			return false
 		slot.ammo -= 1
 		inventory.revision += 1
+		this.#saveSecondarySlot(inventory)
 		return true
 	}
 
@@ -163,6 +208,7 @@ export class MiniMissileArmory {
 		if (slot === null) return
 		slot.ammo = Math.min(gunDefinition(slot.weapon).magazineSize, slot.ammo + 1)
 		inventory.revision += 1
+		this.#saveSecondarySlot(inventory)
 	}
 
 	restoreMiniMissile(playerId: string): void {
@@ -179,18 +225,39 @@ export class MiniMissileArmory {
 
 	release(playerId: string, now: number): boolean {
 		if (this.#ownerId !== playerId) return false
-		// Only explicit drop, death, or disconnect reaches this path. Collection
-		// creates a fresh full magazine after the configured world-return delay.
+		// Only explicit drop, death, or disconnect reaches this path. Return the
+		// launcher to the world and reveal the preserved selectable secondary.
 		const inventory = this.#inventories.get(playerId)
 		this.#ownerId = null
 		this.#available = false
 		this.#respawnAt = now + MINI_MISSILE_PICKUP_RESPAWN_SECONDS * 1_000
 		if (inventory !== undefined) {
-			inventory.slots[1] = null
+			const secondary = inventory.selectedSecondary
+			inventory.slots[1] =
+				secondary === null
+					? null
+					: {
+							ammo:
+								inventory.secondaryAmmo[secondary] ??
+								gunDefinition(secondary).magazineSize,
+							weapon: secondary,
+						}
 			inventory.activeSlot = 0
 			inventory.revision += 1
 		}
 		return true
+	}
+
+	#saveSecondarySlot(inventory: PlayerInventory): void {
+		const secondary = inventory.slots[1]
+		if (
+			secondary === null ||
+			secondary.weapon === "arc-blaster" ||
+			secondary.weapon === "mini-missile"
+		)
+			return
+		inventory.secondaryAmmo[secondary.weapon] = secondary.ammo
+		inventory.selectedSecondary = secondary.weapon
 	}
 
 	update(now: number): boolean {
@@ -212,10 +279,10 @@ export class MiniMissileArmory {
 		}
 	}
 
-	activeWeapon(playerId: string): "arc-blaster" | "mini-missile" {
+	activeWeapon(playerId: string): GunId {
 		const equipment = this.equipment(playerId)
 		const weapon = equipment.slots[equipment.activeSlot]?.weapon
-		if (weapon === "arc-blaster" || weapon === "mini-missile") return weapon
+		if (weapon !== undefined) return weapon
 		return assertUnhandledWeapon(weapon as never)
 	}
 

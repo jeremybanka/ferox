@@ -253,19 +253,21 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					<em>
 						{hud.reloading
 							? `RELOADING ${Math.round(hud.reloadProgress * 100)}%`
-							: gun.fire.type === "guided-missile"
-								? hud.ammo === 0
-									? "PRESS RB / R TO SERVICE LAUNCHER"
-									: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH • X TO DROP"
-								: hud.pickup === "nearby"
-									? "HOLD E / RB TO PICK UP"
-									: hud.ammo === 0
-										? "PRESS RB / R TO RELOAD"
-										: hud.pickup === "available"
-											? "MINI-MISSILE AVAILABLE"
-											: hud.pickup === "carried"
-												? "MINI-MISSILE CARRIED"
-												: "MINI-MISSILE RESPAWNING"}
+							: hud.weapon === "rail-gun" && hud.chargeProgress > 0
+								? `CHARGING ${Math.round(hud.chargeProgress * 100)}% • RELEASE TO FIRE`
+								: gun.fire.type === "guided-missile"
+									? hud.ammo === 0
+										? "PRESS RB / R TO SERVICE LAUNCHER"
+										: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH"
+									: hud.pickup === "nearby"
+										? "HOLD E / RB TO PICK UP"
+										: hud.ammo === 0
+											? "PRESS RB / R TO RELOAD"
+											: hud.pickup === "available"
+												? "MINI-MISSILE AVAILABLE"
+												: hud.pickup === "carried"
+													? "MINI-MISSILE CARRIED"
+													: "2 SHOTGUN • 3 BUBBLES • 4 RAIL"}
 					</em>
 				</weapon-status>
 
@@ -296,6 +298,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>FREE AIM</span>
 						<kbd>1 / Y / WHEEL</kbd>
 						<span>SWITCH</span>
+						<kbd>2–4</kbd>
+						<span>ARMORY</span>
 						<kbd>RMB / LT</kbd>
 						<span>GRENADE</span>
 						<kbd>HOLD E / RB</kbd>

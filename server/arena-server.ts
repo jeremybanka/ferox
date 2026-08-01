@@ -14,6 +14,7 @@ import {
 	type MeleeHitResult,
 	type GrenadeIntent,
 	type MiniMissileIntent,
+	type RailChargeIntent,
 	type PlayerMoveSnapshot,
 	type PlayerDamageImpact,
 	type PlayerDamageSnapshot,
@@ -25,6 +26,7 @@ import {
 	MINI_MISSILE_PICKUP_POSITION,
 	PLAYER_SPAWN_ORDER,
 	PLAYER_SPAWN_POINTS,
+	railChargeFraction,
 } from "../src/game-constants.ts"
 import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
 import {
@@ -68,6 +70,11 @@ const playerLifecycle = new PlayerLifecycle()
 const lastPlayerFire = new Map<string, number>()
 const lastPlayerGrenade = new Map<string, number>()
 const lastPlayerMissile = new Map<string, number>()
+const lastRailChargeId = new Map<string, number>()
+const railCharges = new Map<
+	string,
+	{ clientChargeId: number; startedAt: number }
+>()
 const lastInventoryAction = new Map<string, number>()
 const playerReloads = new Map<string, Exclude<ReloadState, null>>()
 const [pickupX, pickupZ] = MINI_MISSILE_PICKUP_POSITION
@@ -131,6 +138,8 @@ const applyPlayerDamage = (
 		lastPlayerFire.delete(playerId)
 		lastPlayerGrenade.delete(playerId)
 		lastPlayerMissile.delete(playerId)
+		railCharges.delete(playerId)
+		lastRailChargeId.delete(playerId)
 		io.emit("arena:players", [...players.values()])
 	}
 	io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
@@ -188,6 +197,11 @@ const combatSnapshot = (playerId: string): CombatSnapshot => ({
 })
 
 const simulation = new ArenaSimulation({
+	emitBallistic: (snapshot) => io.emit("arena:ballistic", snapshot),
+	emitBallisticEnded: (snapshot) => io.emit("arena:ballistic-ended", snapshot),
+	emitBubble: (snapshot) => io.emit("arena:bubble", snapshot),
+	emitBubblePopped: (snapshot) => io.emit("arena:bubble-popped", snapshot),
+	emitHitscan: (snapshot) => io.emit("arena:hitscan", snapshot),
 	emitDroneDestroyed: (snapshot) => {
 		io.emit("arena:drone-destroyed", snapshot)
 	},
@@ -428,9 +442,17 @@ realtime(
 		}
 		const onFire = (payload: FireIntent): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
-			if (players.get(socketId)?.reload !== null) return
 			const equipped = gunDefinition(armory.activeWeapon(socketId))
-			if (equipped.fire.type !== "projectile") return
+			if (
+				equipped.fire.type !== "projectile" &&
+				equipped.fire.type !== "hitscan" &&
+				equipped.fire.type !== "bubbles"
+			)
+				return
+			if (players.get(socketId)?.reload !== null) {
+				if (equipped.fire.type !== "hitscan") return
+				cancelPlayerReload(socketId)
+			}
 			const now = performance.now()
 			const previous = lastPlayerFire.get(socketId) ?? Number.NEGATIVE_INFINITY
 			if (
@@ -441,8 +463,14 @@ realtime(
 				)
 			)
 				return
-			if (!armory.consumeActive(socketId, "projectile")) return
-			if (!simulation.fire(socketId, payload)) {
+			if (!armory.consumeActive(socketId, equipped.fire.type)) return
+			const accepted =
+				equipped.fire.type === "projectile"
+					? simulation.fire(socketId, payload)
+					: equipped.fire.type === "hitscan"
+						? simulation.fireShotgun(socketId, payload)
+						: simulation.fireBubbles(socketId, payload)
+			if (!accepted) {
 				armory.restoreActive(socketId)
 				return
 			}
@@ -455,6 +483,72 @@ realtime(
 					...nextAcceptedRecoilSignal(player, Date.now() / 1_000),
 				})
 			}
+		}
+		const onRailCharge = (payload: RailChargeIntent): void => {
+			if (
+				!playerLifecycle.isAlive(socketId) ||
+				payload === null ||
+				typeof payload !== "object" ||
+				!Number.isSafeInteger(payload.clientChargeId) ||
+				payload.clientChargeId < 0
+			)
+				return
+			const equipped = gunDefinition(armory.activeWeapon(socketId))
+			if (
+				equipped.fire.type !== "ballistic" ||
+				players.get(socketId)?.reload !== null
+			)
+				return
+			if (payload.type === "start") {
+				if (payload.clientChargeId <= (lastRailChargeId.get(socketId) ?? -1))
+					return
+				lastRailChargeId.set(socketId, payload.clientChargeId)
+				railCharges.set(socketId, {
+					clientChargeId: payload.clientChargeId,
+					startedAt: performance.now(),
+				})
+				return
+			}
+			if (payload.type !== "release") return
+			const charge = railCharges.get(socketId)
+			if (
+				charge === undefined ||
+				charge.clientChargeId !== payload.clientChargeId
+			)
+				return
+			railCharges.delete(socketId)
+			const now = performance.now()
+			if (
+				!isFireCadenceReady(
+					lastPlayerFire.get(socketId),
+					now,
+					equipped.fire.serverMinimumIntervalMs,
+				) ||
+				!armory.consumeActive(socketId, "ballistic")
+			)
+				return
+			if (
+				!simulation.fireRail(
+					socketId,
+					{
+						clientShotId: payload.clientChargeId,
+						direction: payload.direction,
+						origin: payload.origin,
+					},
+					railChargeFraction(now - charge.startedAt),
+				)
+			) {
+				armory.restoreActive(socketId)
+				return
+			}
+			lastPlayerFire.set(socketId, now)
+			emitEquipment(socketId)
+			const player = players.get(socketId)
+			if (player !== undefined)
+				Object.assign(
+					player,
+					nextAcceptedRecoilSignal(player, Date.now() / 1_000),
+				)
 		}
 		const onFireMiniMissile = (payload: MiniMissileIntent): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
@@ -499,6 +593,9 @@ realtime(
 				case "switch":
 					changed = armory.switchActive(socketId, payload.direction)
 					break
+				case "select-secondary":
+					changed = armory.selectSecondary(socketId, payload.weapon)
+					break
 				case "drop-mini-missile":
 					changed = armory.release(socketId, Date.now())
 					pickupChanged = changed
@@ -525,6 +622,7 @@ realtime(
 			}
 			if (!changed) return
 			if (payload.type !== "reload") cancelPlayerReload(socketId)
+			if (payload.type !== "reload") railCharges.delete(socketId)
 			const after = armory.activeWeapon(socketId)
 			if (payload.type === "drop-mini-missile")
 				simulation.cancelLocksByOwner(socketId)
@@ -550,6 +648,7 @@ realtime(
 		gameSocket.on("arena:move", onMove)
 		gameSocket.on("arena:standard-lock", onStandardLock)
 		gameSocket.on("arena:fire", onFire)
+		gameSocket.on("arena:rail-charge", onRailCharge)
 		gameSocket.on("arena:fire-mini-missile", onFireMiniMissile)
 		gameSocket.on("arena:inventory-action", onInventoryAction)
 		gameSocket.on("arena:throw-grenade", onThrowGrenade)
@@ -567,6 +666,8 @@ realtime(
 			lastPlayerFire.delete(socketId)
 			lastPlayerGrenade.delete(socketId)
 			lastPlayerMissile.delete(socketId)
+			railCharges.delete(socketId)
+			lastRailChargeId.delete(socketId)
 			lastInventoryAction.delete(socketId)
 			melee.removePlayer(socketId)
 			emitPickup()
@@ -575,6 +676,7 @@ realtime(
 			gameSocket.off("arena:move", onMove)
 			gameSocket.off("arena:standard-lock", onStandardLock)
 			gameSocket.off("arena:fire", onFire)
+			gameSocket.off("arena:rail-charge", onRailCharge)
 			gameSocket.off("arena:fire-mini-missile", onFireMiniMissile)
 			gameSocket.off("arena:inventory-action", onInventoryAction)
 			gameSocket.off("arena:throw-grenade", onThrowGrenade)
@@ -632,6 +734,8 @@ setInterval(() => {
 		lastPlayerFire.delete(playerId)
 		lastPlayerGrenade.delete(playerId)
 		lastPlayerMissile.delete(playerId)
+		railCharges.delete(playerId)
+		lastRailChargeId.delete(playerId)
 		io.to(playerId).emit("arena:spawn", {
 			damageSequence: playerDamageSequences.get(playerId) ?? 0,
 			position: [spawnX, spawnZ],
@@ -655,9 +759,23 @@ setInterval(() => {
 			continue
 		}
 		if (step.refill !== null) emitEquipment(playerId)
-		if (step.state === null) playerReloads.delete(playerId)
-		else playerReloads.set(playerId, step.state)
-		player.reload = step.state
+		let nextState = step.state
+		if (step.completed && reload.gunId === "shotgun") {
+			const equipment = armory.equipment(playerId)
+			const slot = equipment.slots[reload.slot]
+			if (
+				slot?.weapon === "shotgun" &&
+				slot.ammo < gunDefinition("shotgun").magazineSize
+			) {
+				nextState = startReload(
+					{ ammo: slot.ammo, gunId: "shotgun", slot: reload.slot },
+					nowMs / 1_000,
+				)
+			}
+		}
+		if (nextState === null) playerReloads.delete(playerId)
+		else playerReloads.set(playerId, nextState)
+		player.reload = nextState
 		if (step.refill !== null || step.completed) playersChanged = true
 	}
 	if (playersChanged) io.emit("arena:players", [...players.values()])

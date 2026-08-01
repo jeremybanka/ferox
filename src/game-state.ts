@@ -10,6 +10,7 @@ import type {
 
 export type GameHudState = {
 	ammo: number
+	chargeProgress: number
 	activeSlot: WeaponSlotIndex
 	connection: "connecting" | "offline" | "online"
 	dead: boolean
@@ -44,6 +45,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 	key: "gameHudState",
 	default: {
 		ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
+		chargeProgress: 0,
 		activeSlot: 0,
 		connection: "connecting",
 		dead: false,

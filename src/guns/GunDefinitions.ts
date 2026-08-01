@@ -6,15 +6,28 @@ import {
 	MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS,
 	MINI_MISSILE_SPEED,
 	PLAYER_PROJECTILE_DAMAGE,
+	BUBBLE_GUN_MAGAZINE_SIZE,
+	BUBBLE_SERVER_MINIMUM_INTERVAL_MS,
+	RAIL_GUN_MAGAZINE_SIZE,
+	RAIL_SERVER_MINIMUM_INTERVAL_MS,
+	SHOTGUN_MAGAZINE_SIZE,
+	SHOTGUN_RELOAD_SHELL_SECONDS,
+	SHOTGUN_SERVER_MINIMUM_INTERVAL_MS,
 } from "../game-constants.ts"
 
-export const GUN_IDS = ["arc-blaster", "mini-missile"] as const
+export const GUN_IDS = [
+	"arc-blaster",
+	"shotgun",
+	"bubble-gun",
+	"rail-gun",
+	"mini-missile",
+] as const
 
 export type GunId = (typeof GUN_IDS)[number]
 export type GunModelId = GunId
 export type GunPresentationView = "firstPerson" | "thirdPerson"
 export type GunReloadAnimationId = "arc-cell" | "mini-tube-service"
-export type GunReloadAmmoRule = "refill-magazine"
+export type GunReloadAmmoRule = "insert-shell" | "refill-magazine"
 
 export type GunReloadDefinition = {
 	ammoRule: GunReloadAmmoRule
@@ -38,7 +51,7 @@ export type GunDefinition = {
 	fire: {
 		clientCooldownSeconds: number
 		serverMinimumIntervalMs: number
-		type: "guided-missile" | "projectile"
+		type: "ballistic" | "bubbles" | "guided-missile" | "hitscan" | "projectile"
 	}
 	id: GunId
 	magazineSize: number
@@ -57,6 +70,9 @@ export type GunDefinition = {
 				seekerRange: number
 				speed: number
 		  }
+		| { kind: "hitscan" }
+		| { kind: "bubbles" }
+		| { kind: "ballistic" }
 }
 
 const identityScale = [1, 1, 1] as const
@@ -129,6 +145,99 @@ export const GUN_DEFINITIONS = {
 			seekerRange: MINI_MISSILE_SEEKER_RANGE,
 			speed: MINI_MISSILE_SPEED,
 		},
+	},
+	shotgun: {
+		capabilities: { fire: true, pickup: true, reload: true },
+		fire: {
+			clientCooldownSeconds: 0.74,
+			serverMinimumIntervalMs: SHOTGUN_SERVER_MINIMUM_INTERVAL_MS,
+			type: "hitscan",
+		},
+		id: "shotgun",
+		magazineSize: SHOTGUN_MAGAZINE_SIZE,
+		model: "shotgun",
+		name: "BREACH SHOTGUN",
+		presentation: {
+			firstPerson: {
+				position: [0.35, -0.32, -0.72],
+				rotation: zeroRotation,
+				scale: [0.9, 0.9, 0.9],
+			},
+			thirdPerson: {
+				position: [0, -0.1, -0.2],
+				rotation: [-Math.PI / 2, 0, 0],
+				scale: [0.92, 0.92, 0.92],
+			},
+		},
+		reload: {
+			ammoRule: "insert-shell",
+			animation: "mini-tube-service",
+			durationSeconds: SHOTGUN_RELOAD_SHELL_SECONDS,
+			refillProgress: 0.82,
+		},
+		tuning: { kind: "hitscan" },
+	},
+	"bubble-gun": {
+		capabilities: { fire: true, pickup: true, reload: true },
+		fire: {
+			clientCooldownSeconds: 0.55,
+			serverMinimumIntervalMs: BUBBLE_SERVER_MINIMUM_INTERVAL_MS,
+			type: "bubbles",
+		},
+		id: "bubble-gun",
+		magazineSize: BUBBLE_GUN_MAGAZINE_SIZE,
+		model: "bubble-gun",
+		name: "BUBBLE GUN",
+		presentation: {
+			firstPerson: {
+				position: [0.35, -0.32, -0.72],
+				rotation: zeroRotation,
+				scale: [0.88, 0.88, 0.88],
+			},
+			thirdPerson: {
+				position: [0, -0.1, -0.18],
+				rotation: [-Math.PI / 2, 0, 0],
+				scale: identityScale,
+			},
+		},
+		reload: {
+			ammoRule: "refill-magazine",
+			animation: "arc-cell",
+			durationSeconds: 3.4,
+			refillProgress: 0.86,
+		},
+		tuning: { kind: "bubbles" },
+	},
+	"rail-gun": {
+		capabilities: { fire: true, pickup: true, reload: true },
+		fire: {
+			clientCooldownSeconds: 1.08,
+			serverMinimumIntervalMs: RAIL_SERVER_MINIMUM_INTERVAL_MS,
+			type: "ballistic",
+		},
+		id: "rail-gun",
+		magazineSize: RAIL_GUN_MAGAZINE_SIZE,
+		model: "rail-gun",
+		name: "RAIL GUN",
+		presentation: {
+			firstPerson: {
+				position: [0.35, -0.33, -0.74],
+				rotation: zeroRotation,
+				scale: [0.9, 0.9, 0.9],
+			},
+			thirdPerson: {
+				position: [0, -0.1, -0.2],
+				rotation: [-Math.PI / 2, 0, 0],
+				scale: [0.92, 0.92, 0.92],
+			},
+		},
+		reload: {
+			ammoRule: "refill-magazine",
+			animation: "mini-tube-service",
+			durationSeconds: 2.8,
+			refillProgress: 0.8,
+		},
+		tuning: { kind: "ballistic" },
 	},
 } as const satisfies Record<GunId, GunDefinition>
 
