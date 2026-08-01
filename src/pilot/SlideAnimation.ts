@@ -53,7 +53,7 @@ export function sampleSlideAnimationPose(
 
 	return definePilotPose({
 		root: {
-			position: { y: -0.16 },
+			position: { y: -0.76 },
 			rotation: { x: rootTilt.x, z: rootTilt.z },
 		},
 		hips: {
@@ -67,16 +67,20 @@ export function sampleSlideAnimationPose(
 				z: 0.06 - strafe * 0.24,
 			},
 		},
+		leftShoulder: { rotation: { x: -0.8, y: -0.12, z: -0.8 } },
+		leftArm: { rotation: { z: -0.16 } },
+		leftElbow: { rotation: { x: 2.36 } },
 		leftLeg: {
-			rotation: { x: -0.92, y: -0.18, z: -0.1 - strafe * 0.16 },
+			rotation: { x: 1.72, y: 1.78, z: -0.5 - strafe * 0.16 },
 		},
-		leftKnee: { rotation: { x: 1.52 } },
+		leftKnee: { rotation: { x: -3.22 } },
 		leftFoot: { rotation: { x: -0.42, z: strafe * 0.12 } },
 		rightLeg: {
-			rotation: { x: 0.46, y: 0.14, z: 0.08 - strafe * 0.12 },
+			rotation: { x: 2.46, y: 0.14, z: 0.08 - strafe * 0.12 },
 		},
 		rightKnee: { rotation: { x: 0.5 } },
 		rightFoot: { rotation: { x: -0.16, z: strafe * 0.08 } },
+		rightShoulder: { rotation: { x: 0.6, y: 1.08, z: 1.16 } },
 	})
 }
 
