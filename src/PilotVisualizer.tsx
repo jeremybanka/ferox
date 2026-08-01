@@ -544,7 +544,11 @@ function getLifecyclePoseStats(
 			max: 1,
 			signed: false,
 			unit: "",
-			value: ["flat", "hold"].includes(deathAnimationPhase(progress)) ? 1 : 0,
+			value: ["final-prone", "defeated-hold"].includes(
+				deathAnimationPhase(progress),
+			)
+				? 1
+				: 0,
 		},
 	]
 }

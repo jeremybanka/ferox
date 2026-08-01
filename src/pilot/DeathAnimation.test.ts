@@ -5,49 +5,113 @@ import { PLAYER_RESPAWN_DELAY_MS } from "../game-constants.ts"
 import {
 	DEATH_ANIMATION_DURATION_SECONDS,
 	DEATH_ANIMATION_MARKERS,
+	DEATH_ANIMATION_TIMELINE,
+	DEATH_BACKWARD_SHUFFLE_LEFT_POSE,
+	DEATH_BACKWARD_SHUFFLE_RIGHT_POSE,
+	DEATH_BOTH_KNEES_DROP_POSE,
+	DEATH_DEFEATED_HOLD_POSE,
+	DEATH_FINAL_PRONE_ARMS_UP_POSE,
+	DEATH_FORWARD_FALL_ARMS_UP_POSE,
+	DEATH_IMPACT_UPRIGHT_POSE,
 	deathAnimationLayer,
 	deathAnimationPhase,
 	sampleDeathAnimationPose,
 } from "./DeathAnimation.ts"
 
-test("death sequence phases are ordered and finish before respawn", () => {
+const EXPECTED_PHASES = [
+	["impact", "impact upright"],
+	["shuffle-left", "backward shuffle left"],
+	["shuffle-right", "backward shuffle right"],
+	["knee-drop", "both knees drop"],
+	["forward-fall", "forward fall arms up"],
+	["final-prone", "final prone arms up"],
+	["defeated-hold", "defeated hold"],
+] as const
+
+test("one named timeline drives death phase order, timing, markers, and duration", () => {
+	assert.deepEqual(
+		DEATH_ANIMATION_TIMELINE.map(({ id, poseName }) => [id, poseName]),
+		EXPECTED_PHASES,
+	)
+	assert.equal(
+		DEATH_ANIMATION_DURATION_SECONDS,
+		DEATH_ANIMATION_TIMELINE.at(-1)?.atSeconds,
+	)
 	assert.ok(DEATH_ANIMATION_DURATION_SECONDS < PLAYER_RESPAWN_DELAY_MS / 1_000)
 	assert.deepEqual(
-		DEATH_ANIMATION_MARKERS.map((marker) => marker.progress),
-		DEATH_ANIMATION_MARKERS.map((marker) => marker.progress).toSorted(
-			(a, b) => a - b,
-		),
+		DEATH_ANIMATION_MARKERS,
+		DEATH_ANIMATION_TIMELINE.map(({ atSeconds, id, label }) => ({
+			id,
+			label,
+			progress: atSeconds / DEATH_ANIMATION_DURATION_SECONDS,
+		})),
 	)
-	assert.equal(deathAnimationPhase(0), "impact")
-	assert.equal(deathAnimationPhase(0.2), "shuffle")
-	assert.equal(deathAnimationPhase(0.46), "knees")
-	assert.equal(deathAnimationPhase(0.7), "fall")
-	assert.equal(deathAnimationPhase(0.9), "flat")
-	assert.equal(deathAnimationPhase(1), "hold")
+	const namedPoses = [
+		DEATH_IMPACT_UPRIGHT_POSE,
+		DEATH_BACKWARD_SHUFFLE_LEFT_POSE,
+		DEATH_BACKWARD_SHUFFLE_RIGHT_POSE,
+		DEATH_BOTH_KNEES_DROP_POSE,
+		DEATH_FORWARD_FALL_ARMS_UP_POSE,
+		DEATH_FINAL_PRONE_ARMS_UP_POSE,
+		DEATH_DEFEATED_HOLD_POSE,
+	]
+	for (const [index, phase] of DEATH_ANIMATION_TIMELINE.entries()) {
+		assert.strictEqual(phase.pose, namedPoses[index])
+	}
+	for (const phase of DEATH_ANIMATION_TIMELINE) {
+		assert.equal(
+			deathAnimationPhase(phase.atSeconds / DEATH_ANIMATION_DURATION_SECONDS),
+			phase.id,
+		)
+	}
 })
 
-test("death pose shuffles backward before landing on both knees", () => {
-	const shuffle = sampleDeathAnimationPose(
-		DEATH_ANIMATION_DURATION_SECONDS * 0.2,
-	)
-	assert.ok((shuffle.root?.position?.z ?? 0) > 0.25)
-	assert.ok(Math.abs(shuffle.root?.rotation?.x ?? 0) < 0.1)
+test("death shuffle and kneel use forward-flexing knees", () => {
+	for (const pose of [
+		DEATH_BACKWARD_SHUFFLE_LEFT_POSE,
+		DEATH_BACKWARD_SHUFFLE_RIGHT_POSE,
+		DEATH_BOTH_KNEES_DROP_POSE,
+	]) {
+		assert.ok((pose.leftKnee?.rotation?.x ?? 0) < 0)
+		assert.ok((pose.rightKnee?.rotation?.x ?? 0) < 0)
+	}
 
 	const knees = sampleDeathAnimationPose(
-		DEATH_ANIMATION_DURATION_SECONDS * 0.46,
+		DEATH_ANIMATION_TIMELINE.find(({ id }) => id === "knee-drop")?.atSeconds ??
+			0,
 	)
 	assert.ok((knees.root?.position?.y ?? 0) < -0.5)
-	assert.ok((knees.leftKnee?.rotation?.x ?? 0) > 1.5)
-	assert.ok((knees.rightKnee?.rotation?.x ?? 0) > 1.5)
+	assert.ok((knees.leftLeg?.rotation?.x ?? 0) > 0.7)
+	assert.ok((knees.rightLeg?.rotation?.x ?? 0) > 0.7)
+	assert.ok((knees.leftKnee?.rotation?.x ?? 0) < -1.5)
+	assert.ok((knees.rightKnee?.rotation?.x ?? 0) < -1.5)
 })
 
-test("death pose falls flat forward with both arms raised", () => {
-	const flat = sampleDeathAnimationPose(DEATH_ANIMATION_DURATION_SECONDS * 0.9)
-	assert.ok((flat.root?.rotation?.x ?? 0) < -1.4)
-	assert.ok((flat.root?.position?.z ?? 0) > 0.4)
-	assert.ok((flat.leftShoulder?.rotation?.x ?? 0) < -1.4)
-	assert.ok((flat.rightShoulder?.rotation?.x ?? 0) < -1.4)
+test("fall and prone poses flex elbows naturally with arms outward and up", () => {
+	for (const pose of [
+		DEATH_FORWARD_FALL_ARMS_UP_POSE,
+		DEATH_FINAL_PRONE_ARMS_UP_POSE,
+		DEATH_DEFEATED_HOLD_POSE,
+	]) {
+		assert.ok((pose.leftElbow?.rotation?.x ?? 0) > 0)
+		assert.ok((pose.rightElbow?.rotation?.x ?? 0) > 0)
+		assert.ok((pose.leftShoulder?.rotation?.x ?? 0) > 0)
+		assert.ok((pose.rightShoulder?.rotation?.x ?? 0) > 0)
+		assert.ok((pose.leftShoulder?.rotation?.z ?? 0) < -1.7)
+		assert.ok((pose.rightShoulder?.rotation?.z ?? 0) > 1.7)
+	}
 
+	const prone = sampleDeathAnimationPose(
+		DEATH_ANIMATION_TIMELINE.find(({ id }) => id === "final-prone")
+			?.atSeconds ?? 0,
+	)
+	assert.ok((prone.root?.rotation?.x ?? 0) < -1.4)
+	assert.ok((prone.root?.position?.z ?? 0) > 0.4)
+	assert.ok((prone.leftShoulder?.rotation?.z ?? 0) < -2)
+	assert.ok((prone.rightShoulder?.rotation?.z ?? 0) > 2)
+})
+
+test("death pose holds after the authored sequence", () => {
 	const held = sampleDeathAnimationPose(DEATH_ANIMATION_DURATION_SECONDS + 4)
 	assert.deepEqual(
 		held,
