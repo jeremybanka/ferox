@@ -60,8 +60,9 @@ import {
 	type PilotPointDirection,
 } from "./pilot/DirectionalConstraints.ts"
 import {
-	DEATH_ANIMATION_DURATION_SECONDS,
 	DEATH_ANIMATION_MARKERS,
+	DEATH_PRESENTATION_DURATION_SECONDS,
+	DEATH_RAGDOLL_HANDOFF_SECONDS,
 	deathAnimationLayer,
 	deathAnimationPhase,
 	deathAnimationProgress,
@@ -82,6 +83,7 @@ import {
 	disposePilotModel,
 	setPilotGun,
 } from "./pilot/PilotModel.ts"
+import { PilotRagdollPresentation } from "./pilot/PilotRagdoll.ts"
 import {
 	damageFlinchAnimationLayer,
 	DAMAGE_PREVIEW_CYCLE_SECONDS,
@@ -132,7 +134,7 @@ const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
 	"crouch-run-forward": CROUCH_RUN_DURATION_SECONDS,
 	"crouch-run-left": CROUCH_RUN_DURATION_SECONDS,
 	"crouch-run-right": CROUCH_RUN_DURATION_SECONDS,
-	death: DEATH_ANIMATION_DURATION_SECONDS,
+	death: DEATH_PRESENTATION_DURATION_SECONDS,
 	"double-jump": DOUBLE_JUMP_BURST_SECONDS,
 	forward: 1,
 	idle: IDLE_DURATION_SECONDS,
@@ -544,11 +546,7 @@ function getLifecyclePoseStats(
 			max: 1,
 			signed: false,
 			unit: "",
-			value: ["final-prone", "defeated-hold"].includes(
-				deathAnimationPhase(progress),
-			)
-				? 1
-				: 0,
+			value: deathAnimationPhase(progress) === "ragdoll" ? 1 : 0,
 		},
 	]
 }
@@ -611,7 +609,10 @@ function applyPreviewPose(
 	let isAirborne = false
 	let rootHeight = 0
 	if (baseAnimation === "death") {
-		layers.push(deathAnimationLayer(time))
+		const deathLayer = deathAnimationLayer(
+			Math.min(time, DEATH_RAGDOLL_HANDOFF_SECONDS),
+		)
+		if (deathLayer !== null) layers.push(deathLayer)
 	} else if (getSlideDirection(baseAnimation) !== null) {
 		const slideDirection = getSlideDirection(baseAnimation) ?? "forward"
 		layers.push(idleAnimationLayer(time))
@@ -940,13 +941,15 @@ export function PilotVisualizer(): VNode {
 		gunId,
 		overlays,
 	)
+	const filmDuration =
+		baseAnimation === "death" ? DEATH_RAGDOLL_HANDOFF_SECONDS : duration
 	const keyframeMarkers = getAnimationMarkers(
 		baseAnimation,
 		bunnyhopping,
 		gunId,
 		overlays,
 	)
-	const sampleTimes = getSampleTimes(duration, sampleInterval)
+	const sampleTimes = getSampleTimes(filmDuration, sampleInterval)
 	const poseSample = samplePreviewAirborneMotion(
 		baseAnimation,
 		bunnyhopping,
@@ -1136,6 +1139,10 @@ export function PilotVisualizer(): VNode {
 
 		let frame = 0
 		let previousTime = performance.now()
+		let previousBaseAnimation = controlsRef.current.baseAnimation
+		let previousPreviewTime = controlsRef.current.selectedTime
+		let previousPreviewYaw = controlsRef.current.yaw
+		let deathRagdoll = new PilotRagdollPresentation()
 		let lastTimelineUpdate = 0
 		let lastAlignmentUpdate = 0
 		let weaponsFreePreviewWeight =
@@ -1156,6 +1163,57 @@ export function PilotVisualizer(): VNode {
 			camera.aspect = width / Math.max(height, 1)
 			camera.updateProjectionMatrix()
 			renderer.setSize(width, height, false)
+		}
+		const rebuildDeathRagdoll = (
+			time: number,
+			controls: PilotVisualizerControls,
+			gunId: GunId,
+		): void => {
+			deathRagdoll.dispose()
+			deathRagdoll = new PilotRagdollPresentation()
+			const observedTime = Math.min(
+				time,
+				DEATH_RAGDOLL_HANDOFF_SECONDS - 1 / 120,
+			)
+			applyPreviewPose(
+				rig,
+				"death",
+				controls.overlays,
+				observedTime,
+				{ pitch: controls.targetPitch, yaw: controls.targetYaw },
+				{},
+				controls.bunnyhopping,
+				gunId,
+			)
+			rig.root.rotation.y = controls.yaw
+			deathRagdoll.observeAuthored(rig, observedTime)
+			if (time < DEATH_RAGDOLL_HANDOFF_SECONDS) return
+			applyPreviewPose(
+				rig,
+				"death",
+				controls.overlays,
+				DEATH_RAGDOLL_HANDOFF_SECONDS,
+				{ pitch: controls.targetPitch, yaw: controls.targetYaw },
+				{},
+				controls.bunnyhopping,
+				gunId,
+			)
+			rig.root.rotation.y = controls.yaw
+			deathRagdoll.update(rig, {
+				delta: 0,
+				elapsedSeconds: DEATH_RAGDOLL_HANDOFF_SECONDS,
+				groundHeightAt: () => 0,
+			})
+			let simulatedTime = DEATH_RAGDOLL_HANDOFF_SECONDS
+			while (simulatedTime < time - 1e-9) {
+				const step = Math.min(1 / 60, time - simulatedTime)
+				simulatedTime += step
+				deathRagdoll.update(rig, {
+					delta: step,
+					elapsedSeconds: simulatedTime,
+					groundHeightAt: () => 0,
+				})
+			}
 		}
 		const animate = (now: number): void => {
 			frame = requestAnimationFrame(animate)
@@ -1200,20 +1258,63 @@ export function PilotVisualizer(): VNode {
 							weaponsFreeTarget,
 							weaponsFreePreviewWeight - weaponsFreeStep,
 						)
-			applyPreviewPose(
-				rig,
-				controls.baseAnimation,
-				controls.overlays,
-				timelineRef.current,
-				{
-					pitch: controls.targetPitch,
-					yaw: controls.targetYaw,
-				},
-				{ "weapons-free": weaponsFreePreviewWeight },
-				controls.bunnyhopping,
-				nextGunId,
-			)
-			rig.root.rotation.y = controls.yaw
+			const previewTime = timelineRef.current
+			if (controls.baseAnimation === "death") {
+				const needsRebuild =
+					previousBaseAnimation !== "death" ||
+					previewTime < previousPreviewTime ||
+					Math.abs(controls.yaw - previousPreviewYaw) > 1e-6 ||
+					(!controls.isPlaying &&
+						Math.abs(previewTime - previousPreviewTime) > 1e-6)
+				if (needsRebuild) {
+					rebuildDeathRagdoll(previewTime, controls, nextGunId)
+				} else if (!deathRagdoll.active) {
+					applyPreviewPose(
+						rig,
+						"death",
+						controls.overlays,
+						Math.min(previewTime, DEATH_RAGDOLL_HANDOFF_SECONDS),
+						{ pitch: controls.targetPitch, yaw: controls.targetYaw },
+						{},
+						controls.bunnyhopping,
+						nextGunId,
+					)
+					rig.root.rotation.y = controls.yaw
+					deathRagdoll.update(rig, {
+						delta: elapsed * controls.speed,
+						elapsedSeconds: previewTime,
+						groundHeightAt: () => 0,
+					})
+				} else {
+					deathRagdoll.update(rig, {
+						delta: elapsed * controls.speed,
+						elapsedSeconds: previewTime,
+						groundHeightAt: () => 0,
+					})
+				}
+			} else {
+				if (previousBaseAnimation === "death") {
+					deathRagdoll.dispose()
+					deathRagdoll = new PilotRagdollPresentation()
+				}
+				applyPreviewPose(
+					rig,
+					controls.baseAnimation,
+					controls.overlays,
+					previewTime,
+					{
+						pitch: controls.targetPitch,
+						yaw: controls.targetYaw,
+					},
+					{ "weapons-free": weaponsFreePreviewWeight },
+					controls.bunnyhopping,
+					nextGunId,
+				)
+				rig.root.rotation.y = controls.yaw
+			}
+			previousBaseAnimation = controls.baseAnimation
+			previousPreviewTime = previewTime
+			previousPreviewYaw = controls.yaw
 			const showAlignment = weaponsFreePreviewWeight > 0
 			targetMarker.visible = showAlignment
 			hitscan.visible = showAlignment
@@ -1293,6 +1394,7 @@ export function PilotVisualizer(): VNode {
 		return () => {
 			cancelAnimationFrame(frame)
 			window.removeEventListener("resize", resize)
+			deathRagdoll.dispose()
 			hitscanGeometry.dispose()
 			hitscanMaterial.dispose()
 			targetMarker.geometry.dispose()
@@ -1359,7 +1461,11 @@ export function PilotVisualizer(): VNode {
 				nextGunId,
 				controls.overlays,
 			)
-			const times = getSampleTimes(activeDuration, controls.sampleInterval)
+			const filmDuration =
+				controls.baseAnimation === "death"
+					? DEATH_RAGDOLL_HANDOFF_SECONDS
+					: activeDuration
+			const times = getSampleTimes(filmDuration, controls.sampleInterval)
 			const totalHeight = times.length * FILM_FRAME_HEIGHT
 			renderer.setSize(FILM_FRAME_WIDTH, totalHeight, false)
 
@@ -1699,7 +1805,12 @@ export function PilotVisualizer(): VNode {
 				<filmstrip-header>
 					<section>
 						<strong>POSE FILM</strong>
-						<span>{sampleTimes.length} EXPOSURES</span>
+						<span>
+							{sampleTimes.length} EXPOSURES
+							{baseAnimation === "death"
+								? " · RAGDOLL CONTINUES INTERACTIVELY"
+								: ""}
+						</span>
 					</section>
 					<fieldset>
 						<legend>Frame interval</legend>

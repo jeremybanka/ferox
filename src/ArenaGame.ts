@@ -148,7 +148,10 @@ import {
 	pointBlasterConstraint,
 	waveTowardConstraint,
 } from "./pilot/DirectionalConstraints.ts"
-import { deathAnimationLayer } from "./pilot/DeathAnimation.ts"
+import {
+	DEATH_RAGDOLL_HANDOFF_SECONDS,
+	deathAnimationLayer,
+} from "./pilot/DeathAnimation.ts"
 import { idleAnimationLayer } from "./pilot/IdleAnimation.ts"
 import { PILOT_MODEL_SCALE } from "./pilot/PilotDimensions.ts"
 import {
@@ -158,11 +161,13 @@ import {
 	type PilotRig,
 } from "./pilot/PilotModel.ts"
 import {
+	applyPilotAnimationLayers,
 	FULL_BODY_INFLUENCE,
 	PilotAnimationMixer,
 	sampleDraftAnimation,
 	type PilotAnimationLayer,
 } from "./pilot/PilotAnimation.ts"
+import { PilotRagdollPresentation } from "./pilot/PilotRagdoll.ts"
 import {
 	runAnimationLayer,
 	runDirectionFromLocalVelocity,
@@ -278,6 +283,7 @@ type RemotePilot = {
 	position: THREE.Vector3
 	recoilSequence: number
 	recoilState: RemoteRecoilState
+	ragdoll: PilotRagdollPresentation | null
 	rig: PilotRig
 	reload: ReloadSnapshot | null
 	slideHeading: SlideHeading
@@ -358,6 +364,8 @@ export class ArenaGame {
 	#grenadeSequence = 0
 	#health = 100
 	#localDamageTracker = initialDamageFeedbackTracker()
+	#localDeathRagdoll: PilotRagdollPresentation | null = null
+	#localDeathRig: PilotRig | null = null
 	#hitMarkerClassification: DirectHitResult["classification"] = "normal"
 	#hitMarkerSequence = 0
 	#hitMarkerUntil = 0
@@ -460,6 +468,7 @@ export class ArenaGame {
 
 	dispose(): void {
 		this.#disposed = true
+		this.#disposeLocalDeathRagdoll()
 		this.#reload = cancelReload(this.#reload)
 		this.#audio.dispose()
 		cancelAnimationFrame(this.#animationFrame)
@@ -508,6 +517,7 @@ export class ArenaGame {
 		}
 		for (const id of this.#missiles.keys()) this.#removeMiniMissileVisual(id)
 		for (const model of this.#remotePlayers.values()) {
+			model.ragdoll?.dispose()
 			this.#scene.remove(model.rig.root)
 			disposePilotModel(model.rig)
 		}
@@ -587,6 +597,7 @@ export class ArenaGame {
 
 	readonly #onDisconnect = (): void => {
 		this.#connected = false
+		this.#disposeLocalDeathRagdoll()
 		this.#pickupHoldState = IDLE_HOLD_INPUT_STATE
 		this.#pickupProgress = 0
 		this.#equipmentRevision = -1
@@ -604,6 +615,7 @@ export class ArenaGame {
 		this.#grenadeExplosions.length = 0
 		this.#damageEffects.clear()
 		for (const model of this.#remotePlayers.values()) {
+			model.ragdoll?.dispose()
 			this.#scene.remove(model.rig.root)
 			disposePilotModel(model.rig)
 		}
@@ -634,6 +646,7 @@ export class ArenaGame {
 		this.#dead = false
 		this.#deathStartedAt = null
 		this.#respawnAt = null
+		this.#disposeLocalDeathRagdoll()
 		this.#cancelReloadPresentation()
 		this.#resetTransientState()
 		this.#camera.position.copy(this.#player.position)
@@ -709,6 +722,7 @@ export class ArenaGame {
 					recoilSequence: initialRemoteRecoilTracker(snapshot.recoilSequence)
 						.sequence,
 					recoilState: initialRemoteRecoilState(),
+					ragdoll: null,
 					rig,
 					reload: null,
 					slideHeading: initialSlideHeading(),
@@ -754,7 +768,15 @@ export class ArenaGame {
 			model.crouching = snapshot.crouching
 			model.dead = snapshot.dead === true
 			model.deathStartedAt = snapshot.deathStartedAt
-			if (wasDead && !model.dead) model.position.copy(model.target)
+			if (!wasDead && model.dead) {
+				model.ragdoll?.dispose()
+				model.ragdoll = new PilotRagdollPresentation()
+			}
+			if (wasDead && !model.dead) {
+				model.ragdoll?.dispose()
+				model.ragdoll = null
+				model.position.copy(model.target)
+			}
 			if (
 				snapshot.emote !== null &&
 				(model.emote !== snapshot.emote ||
@@ -775,6 +797,8 @@ export class ArenaGame {
 					state: initialDamageFeedbackTracker().state,
 				}
 				model.recoilState = initialRemoteRecoilState()
+				model.ragdoll?.dispose()
+				model.ragdoll = model.dead ? new PilotRagdollPresentation() : null
 				model.position.copy(model.target)
 				this.#clearDamageEffects(snapshot.id)
 			}
@@ -825,6 +849,7 @@ export class ArenaGame {
 		for (const [id, model] of this.#remotePlayers) {
 			if (!active.has(id)) {
 				this.#clearDamageEffects(id)
+				model.ragdoll?.dispose()
 				this.#scene.remove(model.rig.root)
 				disposePilotModel(model.rig)
 				this.#remotePlayers.delete(id)
@@ -848,7 +873,10 @@ export class ArenaGame {
 			this.#cancelReloadPresentation()
 			this.#resetTransientState()
 		}
-		if (!combat.dead) this.#dead = false
+		if (!combat.dead) {
+			this.#dead = false
+			this.#disposeLocalDeathRagdoll()
+		}
 	}
 
 	readonly #onDirectHit = (result: DirectHitResult): void => {
@@ -2060,6 +2088,53 @@ export class ArenaGame {
 		}
 	}
 
+	#disposeLocalDeathRagdoll(): void {
+		this.#localDeathRagdoll?.dispose()
+		this.#localDeathRagdoll = null
+		if (this.#localDeathRig !== null) disposePilotModel(this.#localDeathRig)
+		this.#localDeathRig = null
+	}
+
+	#updateLocalDeathRagdoll(
+		delta: number,
+		deathElapsed: number,
+	): PilotRig | null {
+		if (!this.#dead) {
+			this.#disposeLocalDeathRagdoll()
+			return null
+		}
+		if (this.#localDeathRig === null) {
+			this.#localDeathRig = createPilotModel(undefined, this.#weaponKind)
+			this.#localDeathRig.root.scale.setScalar(PILOT_MODEL_SCALE)
+			this.#localDeathRagdoll = new PilotRagdollPresentation()
+		}
+		const rig = this.#localDeathRig
+		const ragdoll = this.#localDeathRagdoll
+		if (ragdoll === null) return null
+		if (!ragdoll.active) {
+			const authoredDeath = deathAnimationLayer(
+				Math.min(deathElapsed, DEATH_RAGDOLL_HANDOFF_SECONDS),
+			)
+			applyPilotAnimationLayers(
+				rig,
+				authoredDeath === null ? [] : [authoredDeath],
+			)
+			const poseOffset = rig.root.position.clone()
+			rig.root.position
+				.copy(this.#player.position)
+				.add(new THREE.Vector3(0, -PILOT_STANDING_EYE_HEIGHT, 0))
+				.add(poseOffset)
+			rig.root.rotation.y += this.#player.yaw
+		}
+		ragdoll.update(rig, {
+			carrierVelocity: this.#player.velocity,
+			delta,
+			elapsedSeconds: deathElapsed,
+			groundHeightAt: (x, z) => this.#heightAt(x, z),
+		})
+		return ragdoll.active ? rig : null
+	}
+
 	#updateCamera(delta: number): void {
 		if (this.#slide) {
 			const localSlideVelocity = this.#player.velocity
@@ -2085,16 +2160,26 @@ export class ArenaGame {
 				? Math.max(0, Date.now() / 1_000 - this.#deathStartedAt / 1_000)
 				: 0
 		const deathProgress = THREE.MathUtils.smoothstep(deathElapsed, 0, 0.75)
+		const localDeathRig = this.#updateLocalDeathRagdoll(delta, deathElapsed)
 		const slideTilt = slideTravelTilt(this.#slideHeading, 0.055)
-		this.#camera.position.y -= deathProgress * 0.82
-		this.#camera.rotation.set(
-			this.#player.pitch +
-				deathProgress * 0.24 +
-				slideTilt.x * this.#slidePoseWeight,
-			this.#player.yaw,
-			deathProgress * 0.2 + slideTilt.z * this.#slidePoseWeight,
-			"YXZ",
-		)
+		if (localDeathRig === null) {
+			this.#camera.position.y -= deathProgress * 0.82
+			this.#camera.rotation.set(
+				this.#player.pitch +
+					deathProgress * 0.24 +
+					slideTilt.x * this.#slidePoseWeight,
+				this.#player.yaw,
+				deathProgress * 0.2 + slideTilt.z * this.#slidePoseWeight,
+				"YXZ",
+			)
+		} else {
+			localDeathRig.head.getWorldPosition(this.#camera.position)
+			this.#camera.position.y += 0.08
+			const ragdollLook = localDeathRig.head.getWorldQuaternion(
+				new THREE.Quaternion(),
+			)
+			this.#camera.quaternion.slerp(ragdollLook, Math.min(1, delta * 5))
+		}
 		const speed = Math.hypot(this.#player.velocity.x, this.#player.velocity.z)
 		const bob =
 			Math.sin(performance.now() * 0.012) * Math.min(speed * 0.002, 0.025)
@@ -2366,8 +2451,14 @@ export class ArenaGame {
 				model.deathStartedAt === null
 					? 0
 					: Math.max(0, Date.now() / 1_000 - model.deathStartedAt / 1_000)
+			const ragdollWasActive = model.ragdoll?.active ?? false
 			if (model.dead) {
-				layers.push(deathAnimationLayer(deathElapsed))
+				if (!ragdollWasActive) {
+					const authoredDeath = deathAnimationLayer(
+						Math.min(deathElapsed, DEATH_RAGDOLL_HANDOFF_SECONDS),
+					)
+					if (authoredDeath !== null) layers.push(authoredDeath)
+				}
 			} else if (model.jump > 0) {
 				const airborneMotion = {
 					jumpCount: model.jump === 2 ? (2 as const) : (1 as const),
@@ -2530,7 +2621,9 @@ export class ArenaGame {
 			if (model.jump > 0 && !model.dead) {
 				constraints.push(limitAirborneShoulderSpread)
 			}
-			model.animator.update(model.rig, layers, delta, constraints)
+			if (!ragdollWasActive) {
+				model.animator.update(model.rig, layers, delta, constraints)
+			}
 			const visorTime = Date.now() / 1_000
 			if (model.dead) {
 				model.rig.visorDisplay.setSignal(
@@ -2549,9 +2642,20 @@ export class ArenaGame {
 				)
 			}
 			model.rig.visorDisplay.update(visorTime)
-			const poseOffset = model.rig.root.position.clone()
-			model.rig.root.position.copy(model.position).add(poseOffset)
-			model.rig.root.rotation.y += model.yaw
+			if (!ragdollWasActive) {
+				const poseOffset = model.rig.root.position.clone()
+				model.rig.root.position.copy(model.position).add(poseOffset)
+				model.rig.root.rotation.y += model.yaw
+			}
+			if (model.dead) {
+				model.ragdoll ??= new PilotRagdollPresentation()
+				model.ragdoll.update(model.rig, {
+					carrierVelocity: model.velocity,
+					delta,
+					elapsedSeconds: deathElapsed,
+					groundHeightAt: (x, z) => this.#heightAt(x, z),
+				})
+			}
 			const dustStep = stepSlideDust(
 				{ active: model.dustActive, elapsed: model.dustElapsed },
 				model.sliding && !model.dead,

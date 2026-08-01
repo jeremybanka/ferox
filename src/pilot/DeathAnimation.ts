@@ -5,6 +5,7 @@ import {
 	type PilotAnimationLayer,
 	type PilotPose,
 } from "./PilotAnimation.ts"
+import { PLAYER_RESPAWN_DELAY_MS } from "../game-constants.ts"
 
 export const DEATH_IMPACT_UPRIGHT_POSE = definePilotPose({
 	root: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 } },
@@ -98,7 +99,7 @@ export const DEATH_FORWARD_FALL_ARMS_UP_POSE = definePilotPose({
 	weapon: { rotation: { x: 0.4, z: 0.35 } },
 })
 
-export const DEATH_FINAL_PRONE_ARMS_UP_POSE = definePilotPose({
+export const DEATH_RAGDOLL_MOMENTUM_GUIDE_POSE = definePilotPose({
 	root: { position: { y: -0.78, z: 0.42 }, rotation: { x: -1.44 } },
 	hips: { position: { y: 1.22, z: 0.04 }, rotation: { x: -0.16 } },
 	body: { rotation: { x: 0.22 } },
@@ -119,9 +120,10 @@ export const DEATH_FINAL_PRONE_ARMS_UP_POSE = definePilotPose({
 	weapon: { rotation: { x: 0.62, z: 0.5 } },
 })
 
-export const DEATH_DEFEATED_HOLD_POSE = definePilotPose({
-	...DEATH_FINAL_PRONE_ARMS_UP_POSE,
-})
+const DEATH_RAGDOLL_MOMENTUM_GUIDE = {
+	pose: DEATH_RAGDOLL_MOMENTUM_GUIDE_POSE,
+	seconds: 0.2,
+} as const
 
 /**
  * The single authoritative death-animation timeline. Edit phase names, timings,
@@ -173,46 +175,34 @@ export const DEATH_ANIMATION_TIMELINE = [
 		atSeconds: 1,
 		easingFromPrevious: "linear",
 		id: "forward-fall",
-		label: "forward fall, arms outward and up",
+		label: "forward fall / ragdoll handoff",
 		pose: DEATH_FORWARD_FALL_ARMS_UP_POSE,
 		poseName: "forward fall arms up",
-	},
-	{
-		atSeconds: 1.2,
-		easingFromPrevious: "linear",
-		id: "final-prone",
-		label: "final prone, arms outward and up",
-		pose: DEATH_FINAL_PRONE_ARMS_UP_POSE,
-		poseName: "final prone arms up",
-	},
-	{
-		atSeconds: 2,
-		easingFromPrevious: "smoothstep",
-		id: "defeated-hold",
-		label: "defeated hold",
-		pose: DEATH_DEFEATED_HOLD_POSE,
-		poseName: "defeated hold",
+		ragdollMomentumGuide: DEATH_RAGDOLL_MOMENTUM_GUIDE,
 	},
 ] as const
 
 export type DeathAnimationPhase =
-	(typeof DEATH_ANIMATION_TIMELINE)[number]["id"]
+	| (typeof DEATH_ANIMATION_TIMELINE)[number]["id"]
+	| "ragdoll"
 
-export const DEATH_ANIMATION_DURATION_SECONDS =
+export const DEATH_RAGDOLL_HANDOFF_SECONDS =
 	DEATH_ANIMATION_TIMELINE.at(-1)!.atSeconds
+export const DEATH_PRESENTATION_DURATION_SECONDS =
+	PLAYER_RESPAWN_DELAY_MS / 1_000
 
 export const DEATH_ANIMATION_MARKERS = DEATH_ANIMATION_TIMELINE.map(
 	({ atSeconds, id, label }) => ({
 		id,
 		label,
-		progress: atSeconds / DEATH_ANIMATION_DURATION_SECONDS,
+		progress: atSeconds / DEATH_PRESENTATION_DURATION_SECONDS,
 	}),
 )
 
 const DEATH_KEYFRAMES = definePilotKeyframes({
 	keyframes: DEATH_ANIMATION_TIMELINE.map(
 		({ atSeconds, easingFromPrevious, pose }) => ({
-			at: atSeconds / DEATH_ANIMATION_DURATION_SECONDS,
+			at: atSeconds / DEATH_RAGDOLL_HANDOFF_SECONDS,
 			easingFromPrevious,
 			pose,
 		}),
@@ -238,6 +228,8 @@ const CONTINUOUS_FALL_JOINTS = [
 	"rightLeg",
 	"rightKnee",
 	"rightFoot",
+	"weaponMount",
+	"weapon",
 ] as const
 
 const fallKneesHoldPhase = DEATH_ANIMATION_TIMELINE.find(
@@ -246,20 +238,16 @@ const fallKneesHoldPhase = DEATH_ANIMATION_TIMELINE.find(
 const fallPassThroughPhase = DEATH_ANIMATION_TIMELINE.find(
 	({ id }) => id === "forward-fall",
 )!
-const fallPronePhase = DEATH_ANIMATION_TIMELINE.find(
-	({ id }) => id === "final-prone",
-)!
+const ragdollMomentumGuide = DEATH_RAGDOLL_MOMENTUM_GUIDE
 
-const fallControlPoses = [
-	fallKneesHoldPhase,
-	fallPassThroughPhase,
-	fallPronePhase,
-].map(({ atSeconds }) =>
-	samplePilotKeyframes(
-		DEATH_KEYFRAMES,
-		atSeconds / DEATH_ANIMATION_DURATION_SECONDS,
-	),
+const fallControlPoses = [fallKneesHoldPhase, fallPassThroughPhase].map(
+	({ atSeconds }) =>
+		samplePilotKeyframes(
+			DEATH_KEYFRAMES,
+			atSeconds / DEATH_RAGDOLL_HANDOFF_SECONDS,
+		),
 )
+fallControlPoses.push(ragdollMomentumGuide.pose)
 
 function monotonePassThroughTangent(
 	from: number,
@@ -298,23 +286,16 @@ function hermiteChannel(
 function sampleContinuousFallPose(elapsedSeconds: number): PilotPose | null {
 	if (
 		elapsedSeconds < fallKneesHoldPhase.atSeconds ||
-		elapsedSeconds > fallPronePhase.atSeconds
+		elapsedSeconds > fallPassThroughPhase.atSeconds
 	)
 		return null
 	const holdToPassSeconds =
 		fallPassThroughPhase.atSeconds - fallKneesHoldPhase.atSeconds
-	const passToProneSeconds =
-		fallPronePhase.atSeconds - fallPassThroughPhase.atSeconds
-	const beforePassThrough = elapsedSeconds <= fallPassThroughPhase.atSeconds
-	const duration = beforePassThrough ? holdToPassSeconds : passToProneSeconds
+	const passToGuideSeconds = ragdollMomentumGuide.seconds
+	const duration = holdToPassSeconds
 	const progress = Math.max(
 		0,
-		Math.min(
-			1,
-			beforePassThrough
-				? (elapsedSeconds - fallKneesHoldPhase.atSeconds) / duration
-				: (elapsedSeconds - fallPassThroughPhase.atSeconds) / duration,
-		),
+		Math.min(1, (elapsedSeconds - fallKneesHoldPhase.atSeconds) / duration),
 	)
 	const result: PilotPose = {}
 	for (const joint of CONTINUOUS_FALL_JOINTS) {
@@ -324,33 +305,23 @@ function sampleContinuousFallPose(elapsedSeconds: number): PilotPose | null {
 					(pose) => pose[joint]?.[kind]?.[axis],
 				)
 				if (authored.every((value) => value === undefined)) continue
-				const [kneesHold = 0, passThrough = 0, prone = 0] = authored
+				const [kneesHold = 0, passThrough = 0, guide = 0] = authored
 				const holdSlope = (passThrough - kneesHold) / holdToPassSeconds
-				const proneSlope = (prone - passThrough) / passToProneSeconds
 				const passThroughTangent = monotonePassThroughTangent(
 					kneesHold,
 					passThrough,
-					prone,
+					guide,
 					holdToPassSeconds,
-					passToProneSeconds,
+					passToGuideSeconds,
 				)
-				const value = beforePassThrough
-					? hermiteChannel(
-							kneesHold,
-							passThrough,
-							holdSlope,
-							passThroughTangent,
-							holdToPassSeconds,
-							progress,
-						)
-					: hermiteChannel(
-							passThrough,
-							prone,
-							passThroughTangent,
-							proneSlope,
-							passToProneSeconds,
-							progress,
-						)
+				const value = hermiteChannel(
+					kneesHold,
+					passThrough,
+					holdSlope,
+					passThroughTangent,
+					holdToPassSeconds,
+					progress,
+				)
 				const jointPose = (result[joint] ??= {})
 				const channels = (jointPose[kind] ??= {})
 				channels[axis] = value
@@ -363,12 +334,17 @@ function sampleContinuousFallPose(elapsedSeconds: number): PilotPose | null {
 export function deathAnimationProgress(elapsedSeconds: number): number {
 	return Math.max(
 		0,
-		Math.min(1, elapsedSeconds / DEATH_ANIMATION_DURATION_SECONDS),
+		Math.min(1, elapsedSeconds / DEATH_PRESENTATION_DURATION_SECONDS),
 	)
 }
 
 export function deathAnimationPhase(progress: number): DeathAnimationPhase {
 	const sample = Math.max(0, Math.min(1, progress))
+	if (
+		sample * DEATH_PRESENTATION_DURATION_SECONDS >
+		DEATH_RAGDOLL_HANDOFF_SECONDS
+	)
+		return "ragdoll"
 	let phase: DeathAnimationPhase = DEATH_ANIMATION_TIMELINE[0].id
 	for (const marker of DEATH_ANIMATION_MARKERS) {
 		if (sample < marker.progress) break
@@ -377,22 +353,30 @@ export function deathAnimationPhase(progress: number): DeathAnimationPhase {
 	return phase
 }
 
-export function sampleDeathAnimationPose(elapsedSeconds: number): PilotPose {
+export function sampleDeathAnimationPose(
+	elapsedSeconds: number,
+): PilotPose | null {
+	if (elapsedSeconds > DEATH_RAGDOLL_HANDOFF_SECONDS) return null
+	if (elapsedSeconds === DEATH_RAGDOLL_HANDOFF_SECONDS) {
+		return DEATH_FORWARD_FALL_ARMS_UP_POSE
+	}
 	const continuousFall = sampleContinuousFallPose(elapsedSeconds)
 	if (continuousFall !== null) return continuousFall
 	return samplePilotKeyframes(
 		DEATH_KEYFRAMES,
-		deathAnimationProgress(elapsedSeconds),
+		Math.max(0, Math.min(1, elapsedSeconds / DEATH_RAGDOLL_HANDOFF_SECONDS)),
 	)
 }
 
 export function deathAnimationLayer(
 	elapsedSeconds: number,
-): PilotAnimationLayer {
+): PilotAnimationLayer | null {
+	const pose = sampleDeathAnimationPose(elapsedSeconds)
+	if (pose === null) return null
 	return {
 		fadeSeconds: 0.08,
 		id: "lifecycle:death",
 		mode: "override",
-		pose: sampleDeathAnimationPose(elapsedSeconds),
+		pose,
 	}
 }
