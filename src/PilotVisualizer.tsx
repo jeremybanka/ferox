@@ -17,15 +17,15 @@ import {
 	type SlideAnimation,
 } from "./pilot-visualizer-state.ts"
 import {
-	clampSlideExtremityPercent,
 	normalizeSlideDirectionDegrees,
 	PILOT_VISUALIZER_GROUND_HEIGHT,
+	PILOT_VISUALIZER_SLIDE_SPEED,
 	samplePilotVisualizerSlideVector,
 	sampleStoredPilotVisualizerSlideVector,
-	slideExtremityWeight,
 	slidePresetDirectionDegrees,
 	type PilotVisualizerSlideVector,
 } from "./pilot-visualizer-slide.ts"
+import { clampSlideInclinationDegrees } from "./pilot/SlideSurface.ts"
 import {
 	JUMP_PHYSICS,
 	sampleJumpTrajectory,
@@ -116,6 +116,7 @@ import {
 	reloadAnimationMarkers,
 } from "./pilot/ReloadAnimation.ts"
 import {
+	applySlideWorldYaw,
 	slideAnimationLayer,
 	SLIDE_DURATION_SECONDS,
 	SLIDE_KEYFRAME_MARKERS,
@@ -520,17 +521,31 @@ function getLifecyclePoseStats(
 			},
 			{
 				label: "LATERAL",
-				max: 8,
+				max: PILOT_VISUALIZER_SLIDE_SPEED,
 				signed: true,
 				unit: "m/s",
 				value: motion.localVelocityX,
 			},
 			{
 				label: "FORWARD",
-				max: 8,
+				max: PILOT_VISUALIZER_SLIDE_SPEED,
 				signed: true,
 				unit: "m/s",
 				value: -motion.localVelocityZ,
+			},
+			{
+				label: "INCLINE",
+				max: Math.PI / 3,
+				signed: true,
+				unit: "°",
+				value: slideVector.surface.inclinationRadians,
+			},
+			{
+				label: "VERTICAL",
+				max: PILOT_VISUALIZER_SLIDE_SPEED,
+				signed: true,
+				unit: "m/s",
+				value: slideVector.surfaceVelocity.y,
 			},
 		]
 	}
@@ -582,6 +597,18 @@ function PoseStatBar({ stat }: { stat: PoseStat }): VNode {
 	)
 }
 
+function applyPreviewYaw(
+	rig: ReturnType<typeof createPilotModel>,
+	baseAnimation: BaseAnimation,
+	yaw: number,
+): void {
+	if (getSlideDirection(baseAnimation) !== null) {
+		applySlideWorldYaw(rig.root.quaternion, yaw, rig.root.position)
+		return
+	}
+	rig.root.rotation.y = yaw
+}
+
 function applyPreviewPose(
 	rig: ReturnType<typeof createPilotModel>,
 	baseAnimation: BaseAnimation,
@@ -621,18 +648,17 @@ function applyPreviewPose(
 			slideVector ??
 			samplePilotVisualizerSlideVector(
 				slidePresetDirectionDegrees(baseAnimation) ?? 0,
-				100,
+				0,
 			)
 		layers.push(idleAnimationLayer(time))
 		layers.push({
 			...slideAnimationLayer(
 				activeSlideVector.motion,
 				activeSlideVector.heading,
+				activeSlideVector.surface,
 			),
 			fadeSeconds: 0,
-			weight:
-				slidePreviewWeight(progress) *
-				slideExtremityWeight(activeSlideVector.extremityPercent),
+			weight: slidePreviewWeight(progress),
 		})
 	} else if (activeBunnyhop) {
 		const airborneSample = samplePreviewAirborneMotion(
@@ -898,7 +924,7 @@ export function PilotVisualizer(): VNode {
 	const slideVector = sampleStoredPilotVisualizerSlideVector(controls)
 	const {
 		directionDegrees: slideDirectionDegrees,
-		extremityPercent: slideExtremityPercent,
+		inclinationDegrees: slideInclinationDegrees,
 	} = slideVector
 	const timelineRef = useRef(selectedTime)
 	const controlsRef = useRef<PilotVisualizerControls>(controls)
@@ -944,8 +970,8 @@ export function PilotVisualizer(): VNode {
 	const setSlideDirectionDegrees = (next: number): void => {
 		setControl("slideDirectionDegrees", normalizeSlideDirectionDegrees(next))
 	}
-	const setSlideExtremityPercent = (next: number): void => {
-		setControl("slideExtremityPercent", clampSlideExtremityPercent(next))
+	const setSlideInclinationDegrees = (next: number): void => {
+		setControl("slideInclinationDegrees", clampSlideInclinationDegrees(next))
 	}
 	const setSpeed = (next: number): void => {
 		setControl("speed", next)
@@ -1340,7 +1366,7 @@ export function PilotVisualizer(): VNode {
 					nextGunId,
 					sampleStoredPilotVisualizerSlideVector(controls),
 				)
-				rig.root.rotation.y = controls.yaw
+				applyPreviewYaw(rig, controls.baseAnimation, controls.yaw)
 			}
 			previousBaseAnimation = controls.baseAnimation
 			previousPreviewTime = previewTime
@@ -1484,7 +1510,7 @@ export function PilotVisualizer(): VNode {
 				`${controls.overlays.join(",")}:` +
 				`${controls.sampleInterval}:${controls.yaw.toFixed(4)}:` +
 				`${controls.targetPitch.toFixed(4)}:${controls.targetYaw.toFixed(4)}:` +
-				`${activeSlideVector.directionDegrees}:${activeSlideVector.extremityPercent}`
+				`${activeSlideVector.directionDegrees}:${activeSlideVector.inclinationDegrees}`
 			if (signature === previousSignature) return
 			previousSignature = signature
 			const activeDuration = getPreviewDuration(
@@ -1519,7 +1545,7 @@ export function PilotVisualizer(): VNode {
 					nextGunId,
 					activeSlideVector,
 				)
-				rig.root.rotation.y = controls.yaw
+				applyPreviewYaw(rig, controls.baseAnimation, controls.yaw)
 				applyPreviewVisor(rig, controls.baseAnimation, controls.overlays, time)
 				camera.lookAt(0, 2 + rig.root.position.y, 0)
 				renderer.render(scene, camera)
@@ -1642,7 +1668,7 @@ export function PilotVisualizer(): VNode {
 				<slide-vector-control>
 					<slide-vector-header>
 						<strong>SLIDE VECTOR</strong>
-						<small>0 FWD · 90 RIGHT · 180 BACK · 270 LEFT</small>
+						<small>− UPHILL · 0 FLAT · + DOWNHILL</small>
 					</slide-vector-header>
 					<label>
 						<span>DIRECTION</span>
@@ -1660,19 +1686,19 @@ export function PilotVisualizer(): VNode {
 						<output>{Math.round(slideDirectionDegrees)}°</output>
 					</label>
 					<label>
-						<span>EXTREMITY</span>
+						<span>SLOPE INCLINATION</span>
 						<input
-							aria-label="Slide extremity"
+							aria-label="Slide slope inclination"
 							type="range"
-							min="0"
-							max="100"
+							min="-60"
+							max="60"
 							step="1"
-							value={slideExtremityPercent}
+							value={slideInclinationDegrees}
 							onInput={(event) => {
-								setSlideExtremityPercent(Number(event.currentTarget.value))
+								setSlideInclinationDegrees(Number(event.currentTarget.value))
 							}}
 						/>
-						<output>{Math.round(slideExtremityPercent)}%</output>
+						<output>{Math.round(slideInclinationDegrees)}°</output>
 					</label>
 				</slide-vector-control>
 			)}

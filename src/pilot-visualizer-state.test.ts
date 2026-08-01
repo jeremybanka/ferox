@@ -12,7 +12,6 @@ import {
 	PILOT_VISUALIZER_SLIDE_SPEED,
 	samplePilotVisualizerSlideVector,
 	sampleStoredPilotVisualizerSlideVector,
-	slideExtremityWeight,
 	slidePresetDirectionDegrees,
 } from "./pilot-visualizer-slide.ts"
 
@@ -52,33 +51,60 @@ test("slide direction produces normalized cardinal and diagonal headings", () =>
 		},
 	] as const
 	for (const sample of cases) {
-		const vector = samplePilotVisualizerSlideVector(sample.degrees, 100)
+		const vector = samplePilotVisualizerSlideVector(sample.degrees, 0)
 		assertNear(vector.heading.localX, sample.x)
 		assertNear(vector.heading.localZ, sample.z)
 		assertNear(Math.hypot(vector.heading.localX, vector.heading.localZ), 1)
 	}
 })
 
-test("slide extremity scales velocity at zero, half, and full range", () => {
-	for (const [extremity, speed] of [
-		[0, 0],
-		[50, PILOT_VISUALIZER_SLIDE_SPEED * 0.5],
-		[100, PILOT_VISUALIZER_SLIDE_SPEED],
-	] as const) {
-		const vector = samplePilotVisualizerSlideVector(90, extremity)
+test("signed inclination changes pitch without changing slide speed", () => {
+	for (const inclination of [-60, -30, 0, 30, 60] as const) {
+		const vector = samplePilotVisualizerSlideVector(90, inclination)
 		assertNear(
 			Math.hypot(vector.motion.localVelocityX, vector.motion.localVelocityZ),
-			speed,
+			PILOT_VISUALIZER_SLIDE_SPEED,
 		)
-		assertNear(slideExtremityWeight(extremity), extremity / 100)
+		assertNear(
+			Math.hypot(
+				vector.surfaceVelocity.x,
+				vector.surfaceVelocity.y,
+				vector.surfaceVelocity.z,
+			),
+			PILOT_VISUALIZER_SLIDE_SPEED,
+		)
+		assert.equal(Math.sign(vector.surfaceVelocity.y), -Math.sign(inclination))
 	}
+})
+
+test("degree state converts once to bounded pose radians", () => {
+	for (const [degrees, radians] of [
+		[-60, -Math.PI / 3],
+		[-30, -Math.PI / 6],
+		[0, 0],
+		[30, Math.PI / 6],
+		[60, Math.PI / 3],
+	] as const) {
+		const vector = samplePilotVisualizerSlideVector(0, degrees)
+		assertNear(vector.surface.inclinationRadians, radians)
+		assertNear(
+			(vector.surface.inclinationRadians * 180) / Math.PI,
+			vector.inclinationDegrees,
+		)
+	}
+	const overMaximum = samplePilotVisualizerSlideVector(0, 6_000)
+	const underMinimum = samplePilotVisualizerSlideVector(0, -6_000)
+	assert.equal(overMaximum.inclinationDegrees, 60)
+	assertNear(overMaximum.surface.inclinationRadians, Math.PI / 3)
+	assert.equal(underMinimum.inclinationDegrees, -60)
+	assertNear(underMinimum.surface.inclinationRadians, -Math.PI / 3)
 })
 
 test("359 degrees wraps continuously through forward to zero degrees", () => {
 	assert.equal(normalizeSlideDirectionDegrees(360), 0)
 	assert.equal(normalizeSlideDirectionDegrees(-1), 359)
-	const beforeWrap = samplePilotVisualizerSlideVector(359, 100).heading
-	const afterWrap = samplePilotVisualizerSlideVector(0, 100).heading
+	const beforeWrap = samplePilotVisualizerSlideVector(359, 0).heading
+	const afterWrap = samplePilotVisualizerSlideVector(0, 0).heading
 	const separation = Math.acos(
 		Math.min(
 			1,
@@ -103,9 +129,17 @@ test("stored custom vectors persist outside slide while legacy cardinal state fa
 		sampleStoredPilotVisualizerSlideVector({
 			baseAnimation: "idle",
 			slideDirectionDegrees: 37,
-			slideExtremityPercent: 64,
+			slideInclinationDegrees: -24,
 		}).directionDegrees,
 		37,
+	)
+	assert.equal(
+		sampleStoredPilotVisualizerSlideVector({
+			baseAnimation: "idle",
+			slideDirectionDegrees: 37,
+			slideInclinationDegrees: -24,
+		}).inclinationDegrees,
+		-24,
 	)
 })
 

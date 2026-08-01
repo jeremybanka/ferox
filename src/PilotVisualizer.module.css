@@ -721,6 +721,7 @@ pilot-visualizer.class {
 
 	@media (width <= 900px) {
 		> slide-vector-control {
+			bottom: 18rem;
 			left: 50%;
 			grid-template-columns: 1fr 1fr;
 			width: calc(100% - 2rem);

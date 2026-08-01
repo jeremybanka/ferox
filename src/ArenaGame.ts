@@ -177,12 +177,18 @@ import {
 	sampleFirstPersonReloadPose,
 } from "./pilot/ReloadAnimation.ts"
 import {
+	applySlideWorldYaw,
 	initialSlideHeading,
 	slideAnimationLayer,
 	slideTravelTilt,
 	stepSlideHeading,
 	type SlideHeading,
 } from "./pilot/SlideAnimation.ts"
+import {
+	slideGroundNormalFromGradient,
+	slideSurfaceFrameFromGroundNormal,
+	type SlideSurfaceFrame,
+} from "./pilot/SlideSurface.ts"
 import {
 	WAVE_DURATION_SECONDS,
 	waveAnimationLayer,
@@ -2161,12 +2167,19 @@ export class ArenaGame {
 				: 0
 		const deathProgress = THREE.MathUtils.smoothstep(deathElapsed, 0, 0.75)
 		const localDeathRig = this.#updateLocalDeathRagdoll(delta, deathElapsed)
+		const slideSurface = this.#slideSurfaceAt(
+			this.#player.position.x,
+			this.#player.position.z,
+			this.#player.yaw,
+			this.#slideHeading,
+		)
 		const slideTilt = slideTravelTilt(this.#slideHeading, 0.055)
 		if (localDeathRig === null) {
 			this.#camera.position.y -= deathProgress * 0.82
 			this.#camera.rotation.set(
 				this.#player.pitch +
 					deathProgress * 0.24 +
+					slideSurface.inclinationRadians * 0.16 * this.#slidePoseWeight +
 					slideTilt.x * this.#slidePoseWeight,
 				this.#player.yaw,
 				deathProgress * 0.2 + slideTilt.z * this.#slidePoseWeight,
@@ -2222,6 +2235,30 @@ export class ArenaGame {
 		)
 		this.#camera.updateProjectionMatrix()
 		this.#camera.updateMatrixWorld()
+	}
+
+	#slideSurfaceAt(
+		x: number,
+		z: number,
+		yaw: number,
+		heading: SlideHeading,
+	): SlideSurfaceFrame {
+		const gradient = sampleTerrainGradient(
+			(sampleX, sampleZ) => this.#heightAt(sampleX, sampleZ),
+			x,
+			z,
+		)
+		const worldNormal = slideGroundNormalFromGradient(gradient)
+		const localNormal = new THREE.Vector3(
+			worldNormal.x,
+			worldNormal.y,
+			worldNormal.z,
+		).applyAxisAngle(new THREE.Vector3(0, 1, 0), -yaw)
+		return slideSurfaceFrameFromGroundNormal(heading, {
+			x: localNormal.x,
+			y: localNormal.y,
+			z: localNormal.z,
+		})
 	}
 
 	#updateTargeting(delta: number): void {
@@ -2503,7 +2540,18 @@ export class ArenaGame {
 					slideMotion,
 					delta,
 				)
-				layers.push(slideAnimationLayer(slideMotion, model.slideHeading))
+				layers.push(
+					slideAnimationLayer(
+						slideMotion,
+						model.slideHeading,
+						this.#slideSurfaceAt(
+							model.position.x,
+							model.position.z,
+							model.yaw,
+							model.slideHeading,
+						),
+					),
+				)
 			} else if (model.crouching) {
 				if (horizontalSpeed > 0.35) {
 					layers.push(
@@ -2644,8 +2692,12 @@ export class ArenaGame {
 			model.rig.visorDisplay.update(visorTime)
 			if (!ragdollWasActive) {
 				const poseOffset = model.rig.root.position.clone()
+				if (model.sliding) {
+					applySlideWorldYaw(model.rig.root.quaternion, model.yaw, poseOffset)
+				} else {
+					model.rig.root.rotation.y += model.yaw
+				}
 				model.rig.root.position.copy(model.position).add(poseOffset)
-				model.rig.root.rotation.y += model.yaw
 			}
 			if (model.dead) {
 				model.ragdoll ??= new PilotRagdollPresentation()

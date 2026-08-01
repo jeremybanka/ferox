@@ -4,15 +4,22 @@ import type {
 } from "./pilot-visualizer-state.ts"
 import { PLAYER_SPRINT_SPEED_LIMIT } from "./game-constants.ts"
 import type { SlideHeading, SlideMotion } from "./pilot/SlideAnimation.ts"
+import {
+	clampSlideInclinationDegrees,
+	slideSurfaceFrameFromInclination,
+	type SlideSurfaceFrame,
+} from "./pilot/SlideSurface.ts"
 
 export const PILOT_VISUALIZER_SLIDE_SPEED = PLAYER_SPRINT_SPEED_LIMIT
 export const PILOT_VISUALIZER_GROUND_HEIGHT = -0.15
 
 export type PilotVisualizerSlideVector = {
 	directionDegrees: number
-	extremityPercent: number
 	heading: SlideHeading
+	inclinationDegrees: number
 	motion: SlideMotion
+	surface: SlideSurfaceFrame
+	surfaceVelocity: { x: number; y: number; z: number }
 }
 
 export function normalizeSlideDirectionDegrees(
@@ -22,36 +29,35 @@ export function normalizeSlideDirectionDegrees(
 	return ((directionDegrees % 360) + 360) % 360
 }
 
-export function clampSlideExtremityPercent(extremityPercent: number): number {
-	if (!Number.isFinite(extremityPercent)) return 100
-	return Math.min(100, Math.max(0, extremityPercent))
-}
-
-export function slideExtremityWeight(extremityPercent: number): number {
-	return clampSlideExtremityPercent(extremityPercent) / 100
-}
-
 /** 0° forward, 90° right, 180° backward, and 270° left. */
 export function samplePilotVisualizerSlideVector(
 	directionDegrees: number,
-	extremityPercent: number,
+	inclinationDegrees: number,
 ): PilotVisualizerSlideVector {
 	const normalizedDirection = normalizeSlideDirectionDegrees(directionDegrees)
-	const normalizedExtremity = clampSlideExtremityPercent(extremityPercent)
+	const normalizedInclination = clampSlideInclinationDegrees(inclinationDegrees)
 	const radians = (normalizedDirection * Math.PI) / 180
 	const heading = {
 		localX: Math.sin(radians),
 		localZ: -Math.cos(radians),
 	}
-	const speed =
-		PILOT_VISUALIZER_SLIDE_SPEED * slideExtremityWeight(normalizedExtremity)
+	const surface = slideSurfaceFrameFromInclination(
+		heading,
+		normalizedInclination,
+	)
 	return {
 		directionDegrees: normalizedDirection,
-		extremityPercent: normalizedExtremity,
 		heading,
+		inclinationDegrees: normalizedInclination,
 		motion: {
-			localVelocityX: heading.localX * speed,
-			localVelocityZ: heading.localZ * speed,
+			localVelocityX: heading.localX * PILOT_VISUALIZER_SLIDE_SPEED,
+			localVelocityZ: heading.localZ * PILOT_VISUALIZER_SLIDE_SPEED,
+		},
+		surface,
+		surfaceVelocity: {
+			x: surface.tangent.x * PILOT_VISUALIZER_SLIDE_SPEED,
+			y: surface.tangent.y * PILOT_VISUALIZER_SLIDE_SPEED,
+			z: surface.tangent.z * PILOT_VISUALIZER_SLIDE_SPEED,
 		},
 	}
 }
@@ -79,7 +85,7 @@ export function sampleStoredPilotVisualizerSlideVector(
 		Partial<
 			Pick<
 				PilotVisualizerControls,
-				"slideDirectionDegrees" | "slideExtremityPercent"
+				"slideDirectionDegrees" | "slideInclinationDegrees"
 			>
 		>,
 ): PilotVisualizerSlideVector {
@@ -87,6 +93,6 @@ export function sampleStoredPilotVisualizerSlideVector(
 		controls.slideDirectionDegrees ??
 			slidePresetDirectionDegrees(controls.baseAnimation) ??
 			0,
-		controls.slideExtremityPercent ?? 100,
+		controls.slideInclinationDegrees ?? 0,
 	)
 }
