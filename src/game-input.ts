@@ -9,6 +9,51 @@ export const WEAPON_SWITCH_KEY_CODE = "Digit1"
 export const PICKUP_GAMEPAD_BUTTON = 5
 export const PICKUP_KEY_CODE = "KeyE"
 
+export const PUNCH_GAMEPAD_BUTTON = 11
+export const PUNCH_KEY_CODE = "KeyH"
+export const WAVE_GAMEPAD_BUTTON = 12
+export const WAVE_KEY_CODE = "KeyV"
+export const FISTBUMP_GAMEPAD_BUTTON = 14
+export const FISTBUMP_KEY_CODE = "KeyB"
+export const SALUTE_GAMEPAD_BUTTON = 15
+export const SALUTE_KEY_CODE = "KeyG"
+
+export type GestureInput = "fistbump" | "punch" | "salute" | "wave"
+
+export function keyboardGestureInput(
+	code: string,
+	repeat: boolean,
+): GestureInput | null {
+	if (repeat) return null
+	switch (code) {
+		case PUNCH_KEY_CODE:
+			return "punch"
+		case WAVE_KEY_CODE:
+			return "wave"
+		case FISTBUMP_KEY_CODE:
+			return "fistbump"
+		case SALUTE_KEY_CODE:
+			return "salute"
+		default:
+			return null
+	}
+}
+
+export function gamepadGestureInputs(
+	buttons: readonly ({ pressed?: boolean; value?: number } | undefined)[],
+): Readonly<Record<GestureInput, boolean>> {
+	const pressed = (index: number): boolean => {
+		const button = buttons[index]
+		return button?.pressed === true || (button?.value ?? 0) > 0.5
+	}
+	return {
+		fistbump: pressed(FISTBUMP_GAMEPAD_BUTTON),
+		punch: pressed(PUNCH_GAMEPAD_BUTTON),
+		salute: pressed(SALUTE_GAMEPAD_BUTTON),
+		wave: pressed(WAVE_GAMEPAD_BUTTON),
+	}
+}
+
 export type InputEdge = {
 	held: boolean
 	triggered: boolean

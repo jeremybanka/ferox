@@ -136,6 +136,8 @@ export function observeDamageFeedback(
 		event.damage <= 0 ||
 		(event.source !== "grenade" &&
 			event.source !== "kamikaze" &&
+			event.source !== "melee" &&
+			event.source !== "mini-missile" &&
 			event.source !== "projectile") ||
 		!validVector(event.direction) ||
 		!validVector(event.position)

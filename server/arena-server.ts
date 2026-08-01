@@ -7,14 +7,15 @@ import { Server, type Socket as IoSocket } from "socket.io"
 import {
 	activeEquipmentSlot,
 	isNewInventoryActionIntent,
-	isPilotEmote,
 	isVisorExpression,
 	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
 	type FireIntent,
+	type MeleeHitResult,
 	type GrenadeIntent,
 	type MiniMissileIntent,
 	type PlayerMoveSnapshot,
+	type PlayerDamageImpact,
 	type PlayerDamageSnapshot,
 	type PlayerSnapshot,
 } from "../src/arena-protocol.ts"
@@ -32,6 +33,7 @@ import {
 	type ReloadState,
 } from "../src/ReloadState.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
+import { MeleeCombat } from "./MeleeCombat.ts"
 import { isFireCadenceReady } from "./FireCadence.ts"
 import { MiniMissileArmory, type LockUpdate } from "./MiniMissileArmory.ts"
 import {
@@ -75,6 +77,65 @@ const armory = new MiniMissileArmory([
 	pickupZ,
 ])
 const standardLocks = new StandardLockTracker()
+
+const applyPlayerDamage = (
+	playerId: string,
+	damage: number,
+	impact: PlayerDamageImpact,
+): "damaged" | "died" | "ignored" => {
+	const nowMs = Date.now()
+	const currentHealth = playerLifecycle.get(playerId)?.health ?? 0
+	const result = playerLifecycle.damage(playerId, damage, nowMs)
+	if (result === "ignored") return result
+	const lifecycle = playerLifecycle.get(playerId)
+	if (lifecycle === undefined) return "ignored"
+	const sequence = (playerDamageSequences.get(playerId) ?? 0) + 1
+	playerDamageSequences.set(playerId, sequence)
+	io.emit("arena:player-damaged", {
+		...impact,
+		damage: currentHealth - lifecycle.health,
+		fatal: result === "died",
+		playerId,
+		sequence,
+		serverTime: nowMs / 1_000,
+	} satisfies PlayerDamageSnapshot)
+	if (result === "died") {
+		const player = players.get(playerId)
+		cancelPlayerReload(playerId)
+		if (player !== undefined) {
+			Object.assign(player, {
+				dead: true,
+				deathStartedAt: lifecycle.deathStartedAt,
+				emote: null,
+				freeAim: false,
+				jump: 0,
+				lifeSequence: player.lifeSequence + 1,
+				punchStartedAt: 0,
+				reload: null,
+				recoilStartedAt: 0,
+				respawnAt: lifecycle.respawnAt,
+				sliding: false,
+				sprinting: false,
+				velocity: [0, 0, 0],
+				visorExpression: "defeated",
+				visorStartedAt: nowMs / 1_000,
+				weaponsFree: false,
+			})
+		}
+		simulation.removePlayer(playerId)
+		melee.cancel(playerId)
+		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
+		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
+		if (armory.release(playerId, nowMs)) emitPickup()
+		emitEquipment(playerId)
+		lastPlayerFire.delete(playerId)
+		lastPlayerGrenade.delete(playerId)
+		lastPlayerMissile.delete(playerId)
+		io.emit("arena:players", [...players.values()])
+	}
+	io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
+	return result
+}
 
 const emitMissileLockUpdates = (updates: readonly LockUpdate[]): void => {
 	for (const update of updates) {
@@ -170,58 +231,67 @@ const simulation = new ArenaSimulation({
 	onLockChanged: (attackerId, targetId, locked) => {
 		emitMissileLockUpdates(armory.setLock(attackerId, targetId, locked))
 	},
-	onPlayerDamage: (playerId, damage, impact) => {
-		const nowMs = Date.now()
-		const currentHealth = playerLifecycle.get(playerId)?.health ?? 0
-		const result = playerLifecycle.damage(playerId, damage, nowMs)
-		if (result === "ignored") return
-		const lifecycle = playerLifecycle.get(playerId)
-		if (lifecycle === undefined) return
-		const sequence = (playerDamageSequences.get(playerId) ?? 0) + 1
-		playerDamageSequences.set(playerId, sequence)
-		io.emit("arena:player-damaged", {
-			...impact,
-			damage: currentHealth - lifecycle.health,
-			fatal: result === "died",
-			playerId,
-			sequence,
-			serverTime: nowMs / 1_000,
-		} satisfies PlayerDamageSnapshot)
-		if (result === "died") {
-			const player = players.get(playerId)
-			cancelPlayerReload(playerId)
-			if (player !== undefined) {
-				Object.assign(player, {
-					dead: true,
-					deathStartedAt: lifecycle.deathStartedAt,
-					emote: null,
-					freeAim: false,
-					jump: 0,
-					lifeSequence: player.lifeSequence + 1,
-					reload: null,
-					recoilStartedAt: 0,
-					respawnAt: lifecycle.respawnAt,
-					sliding: false,
-					sprinting: false,
-					velocity: [0, 0, 0],
-					visorExpression: "defeated",
-					visorStartedAt: nowMs / 1_000,
-					weaponsFree: false,
-				})
-			}
-			simulation.removePlayer(playerId)
-			emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
-			emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
-			if (armory.release(playerId, nowMs)) emitPickup()
-			emitEquipment(playerId)
-			lastPlayerFire.delete(playerId)
-			lastPlayerGrenade.delete(playerId)
-			lastPlayerMissile.delete(playerId)
-			io.emit("arena:players", [...players.values()])
-		}
-		io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
-	},
+	onPlayerDamage: (playerId, damage, impact) =>
+		applyPlayerDamage(playerId, damage, impact),
 	seed: ARENA_SEED,
+})
+
+const melee = new MeleeCombat({
+	getPlayers: () =>
+		[...players.values()]
+			.filter((player) => !player.dead)
+			.map((player) => ({
+				id: player.id,
+				position: player.position,
+				yaw: player.rotation[0],
+			})),
+	onActionAccepted: (playerId, intent, startedAtMs) => {
+		const player = players.get(playerId)
+		if (player === undefined) return
+		if (intent.type === "punch") {
+			player.emote = null
+			player.punchSequence += 1
+			player.punchStartedAt = startedAtMs / 1_000
+		} else {
+			player.emote = intent.type
+			player.emoteStartedAt = startedAtMs / 1_000
+		}
+		io.emit("arena:players", [...players.values()])
+	},
+	onFistContact: (result) => io.emit("arena:fist-contact", result),
+	onMeleeHit: (result: MeleeHitResult) => {
+		const attacker = players.get(result.attackerId)
+		const target = players.get(result.targetId)
+		if (
+			attacker === undefined ||
+			target === undefined ||
+			attacker.dead ||
+			target.dead
+		)
+			return
+		const direction: [number, number, number] = [
+			target.position[0] - attacker.position[0],
+			0,
+			target.position[2] - attacker.position[2],
+		]
+		const length = Math.hypot(direction[0], direction[2]) || 1
+		direction[0] /= length
+		direction[2] /= length
+		const outcome = applyPlayerDamage(result.targetId, result.damage, {
+			direction,
+			position: result.position,
+			source: "melee",
+		})
+		if (outcome === "ignored") return
+		io.emit("arena:melee-hit", result)
+		if (outcome === "died") {
+			playerLifecycle.awardScore(result.attackerId)
+			io.to(result.attackerId).emit(
+				"arena:combat",
+				combatSnapshot(result.attackerId),
+			)
+		}
+	},
 })
 
 realtime(
@@ -271,6 +341,8 @@ realtime(
 			jump: 0,
 			lifeSequence: 0,
 			position: [spawnX, 8, spawnZ],
+			punchSequence: 0,
+			punchStartedAt: 0,
 			recoilSequence: 0,
 			recoilStartedAt: 0,
 			rotation: [spawnYaw, 0],
@@ -318,8 +390,6 @@ realtime(
 				typeof payload.sprinting !== "boolean" ||
 				typeof payload.weaponsFree !== "boolean" ||
 				(payload.jump !== 0 && payload.jump !== 1 && payload.jump !== 2) ||
-				(payload.emote !== null && !isPilotEmote(payload.emote)) ||
-				!Number.isFinite(payload.emoteStartedAt) ||
 				payload.aimDirection.length !== 3 ||
 				payload.position.length !== 3 ||
 				payload.rotation.length !== 2 ||
@@ -337,6 +407,7 @@ realtime(
 			const current = players.get(socketId)
 			if (current === undefined) return
 			players.set(socketId, {
+				...current,
 				...payload,
 				equippedWeapon: armory.activeWeapon(socketId),
 				dead: false,
@@ -472,12 +543,17 @@ realtime(
 				lastPlayerGrenade.set(socketId, now)
 			}
 		}
+		const onGesture = (payload: unknown): void => {
+			if (!playerLifecycle.isAlive(socketId)) return
+			melee.accept(socketId, payload, Date.now())
+		}
 		gameSocket.on("arena:move", onMove)
 		gameSocket.on("arena:standard-lock", onStandardLock)
 		gameSocket.on("arena:fire", onFire)
 		gameSocket.on("arena:fire-mini-missile", onFireMiniMissile)
 		gameSocket.on("arena:inventory-action", onInventoryAction)
 		gameSocket.on("arena:throw-grenade", onThrowGrenade)
+		gameSocket.on("arena:gesture", onGesture)
 
 		return () => {
 			simulation.removePlayer(socketId)
@@ -492,6 +568,7 @@ realtime(
 			lastPlayerGrenade.delete(socketId)
 			lastPlayerMissile.delete(socketId)
 			lastInventoryAction.delete(socketId)
+			melee.removePlayer(socketId)
 			emitPickup()
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)
@@ -501,6 +578,7 @@ realtime(
 			gameSocket.off("arena:fire-mini-missile", onFireMiniMissile)
 			gameSocket.off("arena:inventory-action", onInventoryAction)
 			gameSocket.off("arena:throw-grenade", onThrowGrenade)
+			gameSocket.off("arena:gesture", onGesture)
 		}
 	},
 )
@@ -532,6 +610,7 @@ setInterval(() => {
 				arenaHeightAt(ARENA_SEED, spawnX, spawnZ) + 1.72,
 				spawnZ,
 			],
+			punchStartedAt: 0,
 			reload: null,
 			recoilStartedAt: 0,
 			respawnAt: null,
@@ -583,6 +662,7 @@ setInterval(() => {
 	}
 	if (playersChanged) io.emit("arena:players", [...players.values()])
 	simulation.update(delta)
+	melee.update(nowMs)
 	if (armory.update(nowMs)) emitPickup()
 }, 1_000 / 30)
 
