@@ -5,10 +5,6 @@ import { useEffect, useRef } from "preact/hooks"
 
 import css from "./PilotVisualizer.module.css"
 import {
-	WEAPON_RELOAD_DURATION_SECONDS,
-	WEAPON_RELOAD_REFILL_PROGRESS,
-} from "./game-constants.ts"
-import {
 	pilotVisualizerAlignmentAtom,
 	pilotVisualizerAlignmentSweepAtom,
 	pilotVisualizerControlsAtom,
@@ -61,7 +57,13 @@ import {
 	waveTowardConstraint,
 	type PilotPointDirection,
 } from "./pilot/DirectionalConstraints.ts"
-import { deathAnimationLayer } from "./pilot/DeathAnimation.ts"
+import {
+	DEATH_ANIMATION_DURATION_SECONDS,
+	DEATH_ANIMATION_MARKERS,
+	deathAnimationLayer,
+	deathAnimationPhase,
+	deathAnimationProgress,
+} from "./pilot/DeathAnimation.ts"
 import { JUMP_KEYFRAME_MARKERS } from "./pilot/JumpAnimation.ts"
 import {
 	idleAnimationLayer,
@@ -95,7 +97,10 @@ import {
 	RUN_KEYFRAME_MARKERS,
 	type RunDirection,
 } from "./pilot/RunAnimation.ts"
-import { reloadAnimationLayer } from "./pilot/ReloadAnimation.ts"
+import {
+	reloadAnimationLayer,
+	reloadAnimationMarkers,
+} from "./pilot/ReloadAnimation.ts"
 import {
 	slideAnimationLayer,
 	SLIDE_DURATION_SECONDS,
@@ -146,42 +151,29 @@ const JUMP_RECOVERY_SECONDS = LANDING_RECOVERY_SECONDS
 const JUMP_PREVIEW_DURATION_SECONDS =
 	JUMP_TRAJECTORY.duration + JUMP_RECOVERY_SECONDS
 
-const BASE_DURATION_SECONDS: Readonly<Record<BaseAnimation, number>> = {
-	backward: 1,
-	crouch: 2.4,
-	"crouch-run-backward": CROUCH_RUN_DURATION_SECONDS,
-	"crouch-run-forward": CROUCH_RUN_DURATION_SECONDS,
-	"crouch-run-left": CROUCH_RUN_DURATION_SECONDS,
-	"crouch-run-right": CROUCH_RUN_DURATION_SECONDS,
-	death: 1.2,
-	"double-jump": DOUBLE_JUMP_BURST_SECONDS,
-	forward: 1,
-	idle: IDLE_DURATION_SECONDS,
-	jump: JUMP_PREVIEW_DURATION_SECONDS,
-	left: 1,
-	reload: WEAPON_RELOAD_DURATION_SECONDS,
-	right: 1,
-	slide: SLIDE_DURATION_SECONDS,
-	"slide-backward": SLIDE_DURATION_SECONDS,
-	"slide-forward": SLIDE_DURATION_SECONDS,
-	"slide-left": SLIDE_DURATION_SECONDS,
-	"slide-right": SLIDE_DURATION_SECONDS,
-}
+type NonReloadBaseAnimation = Exclude<BaseAnimation, "reload">
 
-const RELOAD_PREVIEW_MARKERS: readonly AnimationMarker[] = [
-	{ label: "start", progress: 0 },
-	{ label: "cell release", progress: 0.24 },
-	{ label: "cell seat", progress: 0.58 },
-	{ label: "refill", progress: WEAPON_RELOAD_REFILL_PROGRESS },
-	{ label: "ready", progress: 1 },
-]
-
-const DEATH_PREVIEW_MARKERS: readonly AnimationMarker[] = [
-	{ label: "impact", progress: 0 },
-	{ label: "collapse", progress: 0.3 },
-	{ label: "grounded", progress: 0.6 },
-	{ label: "defeated hold", progress: 1 },
-]
+const BASE_DURATION_SECONDS: Readonly<Record<NonReloadBaseAnimation, number>> =
+	{
+		backward: 1,
+		crouch: 2.4,
+		"crouch-run-backward": CROUCH_RUN_DURATION_SECONDS,
+		"crouch-run-forward": CROUCH_RUN_DURATION_SECONDS,
+		"crouch-run-left": CROUCH_RUN_DURATION_SECONDS,
+		"crouch-run-right": CROUCH_RUN_DURATION_SECONDS,
+		death: DEATH_ANIMATION_DURATION_SECONDS,
+		"double-jump": DOUBLE_JUMP_BURST_SECONDS,
+		forward: 1,
+		idle: IDLE_DURATION_SECONDS,
+		jump: JUMP_PREVIEW_DURATION_SECONDS,
+		left: 1,
+		right: 1,
+		slide: SLIDE_DURATION_SECONDS,
+		"slide-backward": SLIDE_DURATION_SECONDS,
+		"slide-forward": SLIDE_DURATION_SECONDS,
+		"slide-left": SLIDE_DURATION_SECONDS,
+		"slide-right": SLIDE_DURATION_SECONDS,
+	}
 
 const BUNNYHOP_GROUND_SECONDS = 0.22
 const BUNNYHOP_DURATION_SECONDS =
@@ -320,7 +312,11 @@ function slidePreviewWeight(progress: number): number {
 function getPreviewDuration(
 	baseAnimation: BaseAnimation,
 	bunnyhopping: boolean,
+	gunId: GunId = DEFAULT_GUN_ID,
 ): number {
+	if (baseAnimation === "reload") {
+		return gunDefinition(gunId).reload.durationSeconds
+	}
 	return bunnyhopping && supportsBunnyhop(baseAnimation)
 		? BUNNYHOP_DURATION_SECONDS
 		: BASE_DURATION_SECONDS[baseAnimation]
@@ -329,6 +325,7 @@ function getPreviewDuration(
 function getAnimationMarkers(
 	baseAnimation: BaseAnimation,
 	bunnyhopping = false,
+	gunId: GunId = DEFAULT_GUN_ID,
 ): readonly AnimationMarker[] {
 	if (bunnyhopping && supportsBunnyhop(baseAnimation)) {
 		return BUNNYHOP_MARKERS
@@ -342,8 +339,11 @@ function getAnimationMarkers(
 	if (baseAnimation === "jump") return JUMP_PREVIEW_MARKERS
 	if (baseAnimation === "double-jump") return DOUBLE_JUMP_KEYFRAME_MARKERS
 	if (getSlideDirection(baseAnimation) !== null) return SLIDE_KEYFRAME_MARKERS
-	if (baseAnimation === "reload") return RELOAD_PREVIEW_MARKERS
-	if (baseAnimation === "death") return DEATH_PREVIEW_MARKERS
+	if (baseAnimation === "reload") {
+		const reload = gunDefinition(gunId).reload
+		return reloadAnimationMarkers(reload.animation, reload.refillProgress)
+	}
+	if (baseAnimation === "death") return DEATH_ANIMATION_MARKERS
 	return []
 }
 
@@ -504,9 +504,10 @@ function getPoseStats(
 function getLifecyclePoseStats(
 	baseAnimation: BaseAnimation,
 	time: number,
+	gunId: GunId,
 ): readonly PoseStat[] | null {
 	if (!isLifecycleAnimation(baseAnimation)) return null
-	const duration = BASE_DURATION_SECONDS[baseAnimation]
+	const duration = getPreviewDuration(baseAnimation, false, gunId)
 	const progress = THREE.MathUtils.clamp(time / duration, 0, 1)
 	const slideDirection = getSlideDirection(baseAnimation)
 	if (slideDirection !== null) {
@@ -539,6 +540,7 @@ function getLifecyclePoseStats(
 		]
 	}
 	if (baseAnimation === "reload") {
+		const reload = gunDefinition(gunId).reload
 		return [
 			{ label: "TIMELINE", max: 1, signed: false, unit: "", value: progress },
 			{
@@ -553,7 +555,7 @@ function getLifecyclePoseStats(
 				max: 1,
 				signed: false,
 				unit: "",
-				value: progress >= WEAPON_RELOAD_REFILL_PROGRESS ? 1 : 0,
+				value: progress >= reload.refillProgress ? 1 : 0,
 			},
 		]
 	}
@@ -564,14 +566,14 @@ function getLifecyclePoseStats(
 			max: 1,
 			signed: false,
 			unit: "",
-			value: THREE.MathUtils.smoothstep(time, 0, 0.72),
+			value: deathAnimationProgress(time),
 		},
 		{
 			label: "DEFEATED",
 			max: 1,
 			signed: false,
 			unit: "",
-			value: progress >= 0.6 ? 1 : 0,
+			value: ["flat", "hold"].includes(deathAnimationPhase(progress)) ? 1 : 0,
 		},
 	]
 }
@@ -613,9 +615,10 @@ function applyPreviewPose(
 	direction: PilotPointDirection,
 	overlayWeights: Partial<Record<OverlayAnimation, number>> = {},
 	bunnyhopping = false,
+	gunId: GunId = DEFAULT_GUN_ID,
 ): void {
 	const activeBunnyhop = bunnyhopping && supportsBunnyhop(baseAnimation)
-	const duration = getPreviewDuration(baseAnimation, activeBunnyhop)
+	const duration = getPreviewDuration(baseAnimation, activeBunnyhop, gunId)
 	const progress = Math.min(1, Math.max(0, time / duration))
 	const weaponsFreeWeight =
 		overlayWeights["weapons-free"] ??
@@ -628,8 +631,11 @@ function applyPreviewPose(
 	if (baseAnimation === "death") {
 		layers.push(deathAnimationLayer(time))
 	} else if (baseAnimation === "reload") {
+		const reload = gunDefinition(gunId).reload
 		layers.push(idleAnimationLayer(time))
-		layers.push(reloadAnimationLayer(progress))
+		layers.push(
+			reloadAnimationLayer(reload.animation, progress, reload.refillProgress),
+		)
 	} else if (getSlideDirection(baseAnimation) !== null) {
 		const slideDirection = getSlideDirection(baseAnimation) ?? "forward"
 		layers.push(idleAnimationLayer(time))
@@ -910,6 +916,8 @@ export function PilotVisualizer(): VNode {
 		setControl("bunnyhopping", next)
 	}
 	const setGunId = (next: GunId): void => {
+		timelineRef.current = 0
+		setSelectedTime(0)
 		setControl("gunId", next)
 	}
 	const setIsPlaying = (next: boolean): void => {
@@ -938,8 +946,12 @@ export function PilotVisualizer(): VNode {
 	const setYaw = (next: number | ((current: number) => number)): void => {
 		setControl("yaw", next)
 	}
-	const duration = getPreviewDuration(baseAnimation, bunnyhopping)
-	const keyframeMarkers = getAnimationMarkers(baseAnimation, bunnyhopping)
+	const duration = getPreviewDuration(baseAnimation, bunnyhopping, gunId)
+	const keyframeMarkers = getAnimationMarkers(
+		baseAnimation,
+		bunnyhopping,
+		gunId,
+	)
 	const sampleTimes = getSampleTimes(duration, sampleInterval)
 	const poseSample = samplePreviewAirborneMotion(
 		baseAnimation,
@@ -949,6 +961,7 @@ export function PilotVisualizer(): VNode {
 	const lifecyclePoseStats = getLifecyclePoseStats(
 		baseAnimation,
 		Math.min(selectedTime, duration),
+		gunId,
 	)
 	const poseStats = lifecyclePoseStats ?? getPoseStats(poseSample)
 	const poseDiagnosticsActive =
@@ -1154,6 +1167,7 @@ export function PilotVisualizer(): VNode {
 			const activeDuration = getPreviewDuration(
 				controls.baseAnimation,
 				controls.bunnyhopping,
+				nextGunId,
 			)
 			if (controls.isPlaying) {
 				timelineRef.current =
@@ -1192,6 +1206,7 @@ export function PilotVisualizer(): VNode {
 				},
 				{ "weapons-free": weaponsFreePreviewWeight },
 				controls.bunnyhopping,
+				nextGunId,
 			)
 			rig.root.rotation.y = controls.yaw
 			const showAlignment = weaponsFreePreviewWeight > 0
@@ -1336,6 +1351,7 @@ export function PilotVisualizer(): VNode {
 			const activeDuration = getPreviewDuration(
 				controls.baseAnimation,
 				controls.bunnyhopping,
+				nextGunId,
 			)
 			const times = getSampleTimes(activeDuration, controls.sampleInterval)
 			const totalHeight = times.length * FILM_FRAME_HEIGHT
@@ -1356,6 +1372,7 @@ export function PilotVisualizer(): VNode {
 					},
 					{},
 					controls.bunnyhopping,
+					nextGunId,
 				)
 				rig.root.rotation.y = controls.yaw
 				applyPreviewVisor(rig, controls.baseAnimation, controls.overlays, time)

@@ -24,9 +24,13 @@ import {
 	MINI_MISSILE_PICKUP_POSITION,
 	PLAYER_SPAWN_ORDER,
 	PLAYER_SPAWN_POINTS,
-	WEAPON_RELOAD_DURATION_SECONDS,
 } from "../src/game-constants.ts"
 import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
+import {
+	advanceReload,
+	startReload,
+	type ReloadState,
+} from "../src/ReloadState.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
 import { isFireCadenceReady } from "./FireCadence.ts"
 import { MiniMissileArmory, type LockUpdate } from "./MiniMissileArmory.ts"
@@ -63,6 +67,7 @@ const lastPlayerFire = new Map<string, number>()
 const lastPlayerGrenade = new Map<string, number>()
 const lastPlayerMissile = new Map<string, number>()
 const lastInventoryAction = new Map<string, number>()
+const playerReloads = new Map<string, Exclude<ReloadState, null>>()
 const [pickupX, pickupZ] = MINI_MISSILE_PICKUP_POSITION
 const armory = new MiniMissileArmory([
 	pickupX,
@@ -106,10 +111,11 @@ const emitPickup = (): void => {
 
 const cancelPlayerReload = (playerId: string): boolean => {
 	const player = players.get(playerId)
-	if (player === undefined || !player.reloading) return false
-	player.reloading = false
-	player.reloadStartedAt = 0
-	return true
+	const hadSession = playerReloads.delete(playerId)
+	if (player === undefined) return hadSession
+	const hadSnapshot = player.reload !== null
+	player.reload = null
+	return hadSession || hadSnapshot
 }
 
 const combatSnapshot = (playerId: string): CombatSnapshot => ({
@@ -183,6 +189,7 @@ const simulation = new ArenaSimulation({
 		} satisfies PlayerDamageSnapshot)
 		if (result === "died") {
 			const player = players.get(playerId)
+			cancelPlayerReload(playerId)
 			if (player !== undefined) {
 				Object.assign(player, {
 					dead: true,
@@ -191,8 +198,7 @@ const simulation = new ArenaSimulation({
 					freeAim: false,
 					jump: 0,
 					lifeSequence: player.lifeSequence + 1,
-					reloading: false,
-					reloadStartedAt: 0,
+					reload: null,
 					recoilStartedAt: 0,
 					respawnAt: lifecycle.respawnAt,
 					sliding: false,
@@ -268,8 +274,7 @@ realtime(
 			recoilSequence: 0,
 			recoilStartedAt: 0,
 			rotation: [spawnYaw, 0],
-			reloading: false,
-			reloadStartedAt: 0,
+			reload: null,
 			respawnAt: null,
 			sliding: false,
 			sprinting: false,
@@ -340,8 +345,7 @@ realtime(
 				lifeSequence: current.lifeSequence,
 				recoilSequence: current.recoilSequence,
 				recoilStartedAt: current.recoilStartedAt,
-				reloading: current.reloading,
-				reloadStartedAt: current.reloadStartedAt,
+				reload: current.reload,
 				respawnAt: null,
 			})
 			reconcileStandardLocks()
@@ -353,7 +357,7 @@ realtime(
 		}
 		const onFire = (payload: FireIntent): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
-			if (players.get(socketId)?.reloading === true) return
+			if (players.get(socketId)?.reload !== null) return
 			const equipped = gunDefinition(armory.activeWeapon(socketId))
 			if (equipped.fire.type !== "projectile") return
 			const now = performance.now()
@@ -383,7 +387,7 @@ realtime(
 		}
 		const onFireMiniMissile = (payload: MiniMissileIntent): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
-			if (players.get(socketId)?.reloading === true) return
+			if (players.get(socketId)?.reload !== null) return
 			const equipped = gunDefinition(armory.activeWeapon(socketId))
 			if (equipped.fire.type !== "guided-missile") return
 			const now = performance.now()
@@ -429,15 +433,22 @@ realtime(
 					pickupChanged = changed
 					break
 				case "reload":
-					if (players.get(socketId)?.reloading === true) return
+					if (players.get(socketId)?.reload !== null) return
 					const equipment = armory.equipment(socketId)
 					const slot = activeEquipmentSlot(equipment)
-					const gun = gunDefinition(slot.weapon)
-					if (!gun.capabilities.reload || slot.ammo >= gun.magazineSize) return
 					const player = players.get(socketId)
 					if (player === undefined) return
-					player.reloading = true
-					player.reloadStartedAt = Date.now() / 1_000
+					const reload = startReload(
+						{
+							ammo: slot.ammo,
+							gunId: slot.weapon,
+							slot: equipment.activeSlot,
+						},
+						Date.now() / 1_000,
+					)
+					if (reload === null) return
+					playerReloads.set(socketId, reload)
+					player.reload = reload
 					changed = true
 					break
 			}
@@ -476,6 +487,7 @@ realtime(
 			playerSpawnSlots.delete(socketId)
 			playerDamageSequences.delete(socketId)
 			playerLifecycle.delete(socketId)
+			playerReloads.delete(socketId)
 			lastPlayerFire.delete(socketId)
 			lastPlayerGrenade.delete(socketId)
 			lastPlayerMissile.delete(socketId)
@@ -520,8 +532,7 @@ setInterval(() => {
 				arenaHeightAt(ARENA_SEED, spawnX, spawnZ) + 1.72,
 				spawnZ,
 			],
-			reloading: false,
-			reloadStartedAt: 0,
+			reload: null,
 			recoilStartedAt: 0,
 			respawnAt: null,
 			rotation: [spawnYaw, 0],
@@ -536,6 +547,8 @@ setInterval(() => {
 		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
 		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
 		if (armory.release(playerId, nowMs)) emitPickup()
+		armory.resetLoadout(playerId)
+		playerReloads.delete(playerId)
 		emitEquipment(playerId)
 		lastPlayerFire.delete(playerId)
 		lastPlayerGrenade.delete(playerId)
@@ -548,18 +561,25 @@ setInterval(() => {
 		io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
 		playersChanged = true
 	}
-	for (const [playerId, player] of players) {
-		if (
-			!player.reloading ||
-			nowMs / 1_000 - player.reloadStartedAt < WEAPON_RELOAD_DURATION_SECONDS
-		)
+	for (const [playerId, reload] of playerReloads) {
+		const player = players.get(playerId)
+		if (player === undefined || !playerLifecycle.isAlive(playerId)) {
+			playerReloads.delete(playerId)
+			if (player !== undefined) player.reload = null
 			continue
-		player.reloading = false
-		player.reloadStartedAt = 0
-		if (playerLifecycle.isAlive(playerId) && armory.reloadActive(playerId)) {
-			emitEquipment(playerId)
 		}
-		playersChanged = true
+		const step = advanceReload(reload, nowMs / 1_000)
+		if (step.refill !== null && !armory.refillReload(playerId, step.refill)) {
+			playerReloads.delete(playerId)
+			player.reload = null
+			playersChanged = true
+			continue
+		}
+		if (step.refill !== null) emitEquipment(playerId)
+		if (step.state === null) playerReloads.delete(playerId)
+		else playerReloads.set(playerId, step.state)
+		player.reload = step.state
+		if (step.refill !== null || step.completed) playersChanged = true
 	}
 	if (playersChanged) io.emit("arena:players", [...players.values()])
 	simulation.update(delta)

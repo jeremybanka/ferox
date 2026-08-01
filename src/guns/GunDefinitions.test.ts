@@ -6,6 +6,7 @@ import {
 	isInventoryActionIntent,
 	isNewEquipmentSnapshot,
 	isNewInventoryActionIntent,
+	isReloadSnapshot,
 } from "../arena-protocol.ts"
 import {
 	MINI_MISSILE_AMMO,
@@ -54,12 +55,28 @@ describe("gun definitions", () => {
 			reload: true,
 		})
 		expect(blaster.fire.type).toBe("projectile")
+		expect(blaster.reload).toEqual({
+			ammoRule: "refill-magazine",
+			animation: "arc-cell",
+			durationSeconds: 1.65,
+			refillProgress: 0.72,
+		})
 		expect(launcher.capabilities).toEqual({
 			fire: true,
 			pickup: true,
-			reload: false,
+			reload: true,
 		})
 		expect(launcher.fire.type).toBe("guided-missile")
+		expect(launcher.reload).toEqual({
+			ammoRule: "refill-magazine",
+			animation: "mini-tube-service",
+			durationSeconds: 2.4,
+			refillProgress: 0.78,
+		})
+		expect(launcher.reload.animation).not.toBe(blaster.reload.animation)
+		expect(launcher.reload.durationSeconds).toBeGreaterThan(
+			blaster.reload.durationSeconds,
+		)
 		expect(launcher.magazineSize).toBe(MINI_MISSILE_AMMO)
 		expect(launcher.magazineSize).toBe(24)
 		expect(launcher.fire.clientCooldownSeconds).toBe(
@@ -81,6 +98,22 @@ describe("gun definitions", () => {
 })
 
 describe("equipment protocol", () => {
+	test("validates coherent captured reload timing for remote snapshots", () => {
+		const reload = {
+			completesAt: 12.4,
+			gunId: "mini-missile",
+			refillAt: 11.872,
+			refilled: false,
+			slot: 1,
+			startedAt: 10,
+		}
+		expect(isReloadSnapshot(reload)).toBe(true)
+		expect(isReloadSnapshot({ ...reload, gunId: "railgun" })).toBe(false)
+		expect(isReloadSnapshot({ ...reload, slot: 2 })).toBe(false)
+		expect(isReloadSnapshot({ ...reload, refillAt: 13 })).toBe(false)
+		expect(isReloadSnapshot({ ...reload, clientAmmo: 4 })).toBe(false)
+	})
+
 	test("accepts strict sequenced inventory actions without client gun IDs", () => {
 		expect(
 			isInventoryActionIntent({ clientActionId: 1, type: "collect" }),

@@ -22,6 +22,7 @@ import type {
 	PlayerMoveSnapshot,
 	PlayerDamageSnapshot,
 	PlayerSnapshot,
+	ReloadSnapshot,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
 	StandardLockIntent,
@@ -53,7 +54,6 @@ import {
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
-	WEAPON_RELOAD_DURATION_SECONDS,
 } from "./game-constants.ts"
 import {
 	contextualRightBumperAction,
@@ -116,9 +116,7 @@ import {
 } from "./pilot-targeting.ts"
 import {
 	cancelReload,
-	initialReloadState,
 	reloadProgress,
-	startReload,
 	type ReloadState,
 } from "./ReloadState.ts"
 import { stepSlideDust } from "./SlideDustState.ts"
@@ -167,8 +165,17 @@ import {
 	runAnimationLayer,
 	runDirectionFromLocalVelocity,
 } from "./pilot/RunAnimation.ts"
-import { reloadAnimationLayer } from "./pilot/ReloadAnimation.ts"
-import { slideAnimationLayer } from "./pilot/SlideAnimation.ts"
+import {
+	reloadAnimationLayer,
+	sampleFirstPersonReloadPose,
+} from "./pilot/ReloadAnimation.ts"
+import {
+	initialSlideHeading,
+	slideAnimationLayer,
+	slideTravelTilt,
+	stepSlideHeading,
+	type SlideHeading,
+} from "./pilot/SlideAnimation.ts"
 import {
 	WAVE_DURATION_SECONDS,
 	waveAnimationLayer,
@@ -269,8 +276,8 @@ type RemotePilot = {
 	recoilSequence: number
 	recoilState: RemoteRecoilState
 	rig: PilotRig
-	reloading: boolean
-	reloadStartedAt: number
+	reload: ReloadSnapshot | null
+	slideHeading: SlideHeading
 	sliding: boolean
 	sprinting: boolean
 	target: THREE.Vector3
@@ -364,11 +371,7 @@ export class ArenaGame {
 	#recoilPulse = 0
 	#recoilState: RecoilSpreadState = initialRecoilSpreadState()
 	#rightBumperHeld = false
-	#reload: ReloadState = initialReloadState()
-	#reloadConfirmed = false
-	#reloadRequestedRevision = -1
-	#reloadSlot: WeaponSlotIndex | null = null
-	#reloadWeapon: WeaponKind | null = null
+	#reload: ReloadState = null
 	#respawnAt: number | null = null
 	#score = 0
 	#shotSequence = 0
@@ -384,6 +387,7 @@ export class ArenaGame {
 	#shotHeld = false
 	#slide = false
 	#slideDustElapsed = 0
+	#slideHeading = initialSlideHeading()
 	#slidePoseWeight = 0
 	#wasSliding = false
 	#snapshotElapsed = 0
@@ -649,7 +653,10 @@ export class ArenaGame {
 	readonly #onPlayers = (players: PlayerSnapshot[]): void => {
 		const active = new Set<string>()
 		for (const snapshot of players) {
-			if (snapshot.id === this.#socket.id) continue
+			if (snapshot.id === this.#socket.id) {
+				this.#reload = snapshot.dead ? null : snapshot.reload
+				continue
+			}
 			if (!isGunId(snapshot.equippedWeapon)) continue
 			active.add(snapshot.id)
 			let model = this.#remotePlayers.get(snapshot.id)
@@ -691,8 +698,8 @@ export class ArenaGame {
 						.sequence,
 					recoilState: initialRemoteRecoilState(),
 					rig,
-					reloading: false,
-					reloadStartedAt: 0,
+					reload: null,
+					slideHeading: initialSlideHeading(),
 					sliding: false,
 					sprinting: false,
 					target: new THREE.Vector3(),
@@ -718,6 +725,7 @@ export class ArenaGame {
 				)
 			if (isNew) model.position.copy(model.target)
 			const wasDead = model.dead
+			const wasSliding = model.sliding
 			const previousJump = model.jump
 			const previousVerticalVelocity = model.velocity.y
 			const animationEventTime = performance.now() / 1_000
@@ -780,9 +788,17 @@ export class ArenaGame {
 				model.landingImpactVelocity = Math.max(0, -previousVerticalVelocity)
 			}
 			model.sprinting = snapshot.sprinting
-			model.reloading = snapshot.reloading === true && !model.dead
-			model.reloadStartedAt = snapshot.reloadStartedAt
+			model.reload = model.dead ? null : snapshot.reload
 			model.sliding = snapshot.sliding === true && !model.dead
+			if (model.sliding && !wasSliding) {
+				const localSlideVelocity = model.velocity
+					.clone()
+					.applyAxisAngle(new THREE.Vector3(0, 1, 0), -model.yaw)
+				model.slideHeading = initialSlideHeading({
+					localVelocityX: localSlideVelocity.x,
+					localVelocityZ: localSlideVelocity.z,
+				})
+			}
 			model.weaponsFree = snapshot.weaponsFree === true
 			model.weapon = snapshot.equippedWeapon
 			setPilotGun(model.rig, model.weapon)
@@ -901,20 +917,13 @@ export class ArenaGame {
 
 	readonly #onEquipment = (equipment: unknown): void => {
 		if (!isNewEquipmentSnapshot(equipment, this.#equipmentRevision)) return
-		const previousAmmo = this.#ammo
 		const active = activeEquipmentSlot(equipment)
-		if (this.#reload.reloading) {
+		if (this.#reload !== null) {
 			const matchesRequestedSlot =
-				equipment.activeSlot === this.#reloadSlot &&
-				active.weapon === this.#reloadWeapon
+				equipment.activeSlot === this.#reload.slot &&
+				active.weapon === this.#reload.gunId
 			if (!matchesRequestedSlot) {
 				this.#cancelReloadPresentation()
-			} else if (
-				equipment.revision > this.#reloadRequestedRevision &&
-				active.ammo > previousAmmo &&
-				active.ammo >= gunDefinition(active.weapon).magazineSize
-			) {
-				this.#reloadConfirmed = true
 			}
 		}
 		this.#equipmentRevision = equipment.revision
@@ -1174,10 +1183,6 @@ export class ArenaGame {
 
 	#cancelReloadPresentation(): void {
 		this.#reload = cancelReload(this.#reload)
-		this.#reloadConfirmed = false
-		this.#reloadRequestedRevision = -1
-		this.#reloadSlot = null
-		this.#reloadWeapon = null
 	}
 
 	#resetTransientState(): void {
@@ -1186,6 +1191,7 @@ export class ArenaGame {
 		this.#player.jumps = 0
 		this.#crouching = false
 		this.#slide = false
+		this.#slideHeading = initialSlideHeading()
 		this.#slidePoseWeight = 0
 		this.#wasSliding = false
 		this.#slideDustElapsed = 0
@@ -1271,9 +1277,8 @@ export class ArenaGame {
 
 	#updatePhysics(delta: number): void {
 		if (
-			this.#reload.reloading &&
-			this.#reloadConfirmed &&
-			reloadProgress(this.#reload, Date.now() / 1_000) >= 1
+			this.#reload !== null &&
+			Date.now() / 1_000 >= this.#reload.completesAt
 		) {
 			this.#cancelReloadPresentation()
 		}
@@ -1371,6 +1376,7 @@ export class ArenaGame {
 			},
 			ground,
 		)
+		const wasPhysicsSliding = this.#slide
 		const slideStep = stepSlidePhysics(
 			{
 				sliding: this.#slide,
@@ -1391,6 +1397,15 @@ export class ArenaGame {
 		this.#player.velocity.x = slideStep.x
 		this.#player.velocity.z = slideStep.z
 		this.#slide = slideStep.sliding
+		if (this.#slide && !wasPhysicsSliding) {
+			const localSlideVelocity = this.#player.velocity
+				.clone()
+				.applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.#player.yaw)
+			this.#slideHeading = initialSlideHeading({
+				localVelocityX: localSlideVelocity.x,
+				localVelocityZ: localSlideVelocity.z,
+			})
+		}
 
 		const keyboardX =
 			Number(this.#keys.has("KeyD")) - Number(this.#keys.has("KeyA"))
@@ -1565,19 +1580,11 @@ export class ArenaGame {
 		if (
 			!this.#connected ||
 			this.#dead ||
-			this.#reload.reloading ||
+			this.#reload !== null ||
 			!gun.capabilities.reload ||
 			this.#ammo >= gun.magazineSize
 		)
 			return
-		this.#reload = startReload(
-			initialReloadState(this.#ammo),
-			Date.now() / 1_000,
-		)
-		this.#reloadConfirmed = false
-		this.#reloadRequestedRevision = this.#equipmentRevision
-		this.#reloadSlot = this.#activeSlot
-		this.#reloadWeapon = this.#weaponKind
 		this.#socket.emit("arena:inventory-action", {
 			clientActionId: this.#nextInventoryActionId(),
 			type: "reload",
@@ -1587,7 +1594,7 @@ export class ArenaGame {
 	#fire(): void {
 		if (
 			this.#dead ||
-			this.#reload.reloading ||
+			this.#reload !== null ||
 			this.#fireCooldown > 0 ||
 			this.#ammo === 0
 		)
@@ -2012,6 +2019,19 @@ export class ArenaGame {
 	}
 
 	#updateCamera(delta: number): void {
+		if (this.#slide) {
+			const localSlideVelocity = this.#player.velocity
+				.clone()
+				.applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.#player.yaw)
+			this.#slideHeading = stepSlideHeading(
+				this.#slideHeading,
+				{
+					localVelocityX: localSlideVelocity.x,
+					localVelocityZ: localSlideVelocity.z,
+				},
+				delta,
+			)
+		}
 		this.#slidePoseWeight = THREE.MathUtils.lerp(
 			this.#slidePoseWeight,
 			this.#slide && !this.#dead ? 1 : 0,
@@ -2023,32 +2043,48 @@ export class ArenaGame {
 				? Math.max(0, Date.now() / 1_000 - this.#deathStartedAt / 1_000)
 				: 0
 		const deathProgress = THREE.MathUtils.smoothstep(deathElapsed, 0, 0.75)
+		const slideTilt = slideTravelTilt(this.#slideHeading, 0.055)
 		this.#camera.position.y -= deathProgress * 0.82
 		this.#camera.rotation.set(
-			this.#player.pitch + deathProgress * 0.24,
+			this.#player.pitch +
+				deathProgress * 0.24 +
+				slideTilt.x * this.#slidePoseWeight,
 			this.#player.yaw,
-			deathProgress * 0.2 + this.#slidePoseWeight * 0.055,
+			deathProgress * 0.2 + slideTilt.z * this.#slidePoseWeight,
 			"YXZ",
 		)
 		const speed = Math.hypot(this.#player.velocity.x, this.#player.velocity.z)
 		const bob =
 			Math.sin(performance.now() * 0.012) * Math.min(speed * 0.002, 0.025)
 		const presentation = gunPresentation(this.#weaponKind, "firstPerson")
-		const progress = reloadProgress(this.#reload, Date.now() / 1_000)
-		const reloadArc = Math.sin(progress * Math.PI)
+		const reloadPose =
+			this.#reload === null
+				? { positionOffset: [0, 0, 0] as const }
+				: sampleFirstPersonReloadPose(
+						gunDefinition(this.#reload.gunId).reload.animation,
+						reloadProgress(this.#reload, Date.now() / 1_000),
+						gunDefinition(this.#reload.gunId).reload.refillProgress,
+					)
 		this.#weapon.position.y = THREE.MathUtils.lerp(
 			this.#weapon.position.y,
-			presentation.position[1] + bob - reloadArc * 0.24 + deathProgress * 0.38,
+			presentation.position[1] +
+				bob +
+				reloadPose.positionOffset[1] +
+				deathProgress * 0.38,
 			delta * 8,
 		)
 		this.#weapon.position.z = THREE.MathUtils.lerp(
 			this.#weapon.position.z,
-			presentation.position[2] + reloadArc * 0.12 + deathProgress * 0.5,
+			presentation.position[2] +
+				reloadPose.positionOffset[2] +
+				deathProgress * 0.5,
 			delta * 18,
 		)
 		this.#weapon.position.x = THREE.MathUtils.lerp(
 			this.#weapon.position.x,
-			presentation.position[0] + this.#slidePoseWeight * 0.09,
+			presentation.position[0] +
+				reloadPose.positionOffset[0] +
+				this.#slidePoseWeight * 0.09,
 			delta * 9,
 		)
 		const targetFov = speed > 10 ? 83 : 76
@@ -2240,14 +2276,6 @@ export class ArenaGame {
 			desired.multiply(
 				new THREE.Quaternion().setFromEuler(new THREE.Euler(0.8, 0, 0.5)),
 			)
-		} else if (this.#reload.reloading) {
-			const progress = reloadProgress(this.#reload, Date.now() / 1_000)
-			const arc = Math.sin(progress * Math.PI)
-			desired.multiply(
-				new THREE.Quaternion().setFromEuler(
-					new THREE.Euler(0.58 * arc, -0.28 * arc, 0.46 * arc),
-				),
-			)
 		} else if (this.#slide) {
 			desired.multiply(
 				new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.08, 0, 0.13)),
@@ -2262,6 +2290,17 @@ export class ArenaGame {
 			desired.setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction)
 		} else if (this.#targetingState === "escaping") {
 			desired.setFromEuler(new THREE.Euler(1.05, 0, 0))
+		}
+		if (!this.#dead && this.#reload !== null) {
+			const reload = gunDefinition(this.#reload.gunId).reload
+			const pose = sampleFirstPersonReloadPose(
+				reload.animation,
+				reloadProgress(this.#reload, Date.now() / 1_000),
+				reload.refillProgress,
+			)
+			desired.multiply(
+				new THREE.Quaternion().setFromEuler(new THREE.Euler(...pose.rotation)),
+			)
 		}
 		this.#weapon.quaternion.slerp(desired, Math.min(1, delta * 9))
 	}
@@ -2322,12 +2361,16 @@ export class ArenaGame {
 				layers.push(airborneVelocityLayer(airborneMotion))
 				layers.push(airborneMomentumLayer(airborneMotion, momentumWeight))
 			} else if (model.sliding) {
-				layers.push(
-					slideAnimationLayer({
-						localVelocityX: localVelocity.x,
-						localVelocityZ: localVelocity.z,
-					}),
+				const slideMotion = {
+					localVelocityX: localVelocity.x,
+					localVelocityZ: localVelocity.z,
+				}
+				model.slideHeading = stepSlideHeading(
+					model.slideHeading,
+					slideMotion,
+					delta,
 				)
+				layers.push(slideAnimationLayer(slideMotion, model.slideHeading))
 			} else if (model.crouching) {
 				if (horizontalSpeed > 0.35) {
 					layers.push(
@@ -2374,14 +2417,16 @@ export class ArenaGame {
 			if (waving && !model.dead) {
 				layers.push(waveAnimationLayer(waveElapsed / WAVE_DURATION_SECONDS))
 			}
-			if (model.reloading && !model.dead) {
-				const progress = THREE.MathUtils.clamp(
-					(Date.now() / 1_000 - model.reloadStartedAt) /
-						WEAPON_RELOAD_DURATION_SECONDS,
-					0,
-					1,
+			if (model.reload !== null && !model.dead) {
+				const progress = reloadProgress(model.reload, Date.now() / 1_000)
+				const reload = gunDefinition(model.reload.gunId).reload
+				layers.push(
+					reloadAnimationLayer(
+						reload.animation,
+						progress,
+						reload.refillProgress,
+					),
 				)
-				layers.push(reloadAnimationLayer(progress))
 			}
 			const localAimDirection = model.aimDirection
 				.clone()
@@ -2404,7 +2449,7 @@ export class ArenaGame {
 							weaponsFreeTarget,
 							model.weaponsFreeWeight - weaponsFreeStep,
 						)
-			if (model.weaponsFree && !model.reloading && !model.dead) {
+			if (model.weaponsFree && model.reload === null && !model.dead) {
 				layers.push(
 					weaponsFreeLayer(pointingDirection.pitch, pointingDirection.yaw),
 				)
@@ -2433,7 +2478,7 @@ export class ArenaGame {
 			if (
 				model.weaponsFreeWeight > 0 &&
 				!model.sprinting &&
-				!model.reloading &&
+				model.reload === null &&
 				!model.dead
 			) {
 				constraints.push(
@@ -2559,7 +2604,7 @@ export class ArenaGame {
 			reticleY: this.#reticleY,
 			recoilPulse: this.#recoilPulse,
 			recoilSpread: normalizedRecoilSpread(this.#recoilState),
-			reloading: this.#reload.reloading,
+			reloading: this.#reload !== null,
 			reloadProgress: reloadProgress(this.#reload, Date.now() / 1_000),
 			respawnRemaining:
 				this.#dead && this.#respawnAt !== null

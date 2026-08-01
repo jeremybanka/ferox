@@ -3,9 +3,21 @@ import {
 	type PilotAnimationLayer,
 	type PilotPose,
 } from "./PilotAnimation.ts"
-import { slideDirectionFromMotion, type SlideMotion } from "./SlideDirection.ts"
+import {
+	initialSlideHeading,
+	type SlideHeading,
+	type SlideMotion,
+} from "./SlideDirection.ts"
 
-export { slideDirectionFromMotion, type SlideMotion } from "./SlideDirection.ts"
+export {
+	initialSlideHeading,
+	SLIDE_HEADING_MIN_SPEED,
+	SLIDE_HEADING_RESPONSE,
+	slideDirectionFromMotion,
+	stepSlideHeading,
+	type SlideHeading,
+	type SlideMotion,
+} from "./SlideDirection.ts"
 
 export const SLIDE_DURATION_SECONDS = 1.4
 
@@ -17,18 +29,32 @@ export const SLIDE_KEYFRAME_MARKERS = [
 	{ label: "neutral", progress: 1 },
 ] as const
 
-export function sampleSlideAnimationPose(motion: SlideMotion): PilotPose {
-	const direction = slideDirectionFromMotion(motion)
-	const strafe = direction === "left" ? -1 : direction === "right" ? 1 : 0
-	const forward =
-		direction === "forward" ? 1 : direction === "backward" ? -1 : 0
-	const bodyPitch = forward > 0 ? 0.58 : forward < 0 ? 0.22 : 0.42
-	const hipsPitch = forward > 0 ? -0.52 : forward < 0 ? -0.18 : -0.34
+export function slideTravelTilt(
+	heading: SlideHeading,
+	amount: number,
+): { x: number; z: number } {
+	return {
+		x: heading.localZ * amount,
+		z: -heading.localX * amount,
+	}
+}
+
+export function sampleSlideAnimationPose(
+	motion: SlideMotion,
+	heading = initialSlideHeading(motion),
+): PilotPose {
+	const strafe = heading.localX
+	const forward = -heading.localZ
+	const rootTilt = slideTravelTilt(heading, 0.14)
+	const bodyPitch =
+		0.42 + Math.max(0, forward) * 0.16 - Math.max(0, -forward) * 0.2
+	const hipsPitch =
+		-0.34 - Math.max(0, forward) * 0.18 + Math.max(0, -forward) * 0.16
 
 	return definePilotPose({
 		root: {
 			position: { y: -0.16 },
-			rotation: { x: -0.08 * forward, z: -0.04 - strafe * 0.14 },
+			rotation: { x: rootTilt.x, z: rootTilt.z },
 		},
 		hips: {
 			position: { y: 1.08, z: 0.18 - forward * 0.04 },
@@ -51,21 +77,17 @@ export function sampleSlideAnimationPose(motion: SlideMotion): PilotPose {
 		},
 		rightKnee: { rotation: { x: 0.5 } },
 		rightFoot: { rotation: { x: -0.16, z: strafe * 0.08 } },
-		leftShoulder: {
-			rotation: { x: -0.28, y: -0.2, z: -0.42 - strafe * 0.12 },
-		},
-		rightShoulder: {
-			rotation: { x: 0.32, y: 0.1, z: 0.2 - strafe * 0.12 },
-		},
 	})
 }
 
-export function slideAnimationLayer(motion: SlideMotion): PilotAnimationLayer {
-	const direction = slideDirectionFromMotion(motion)
+export function slideAnimationLayer(
+	motion: SlideMotion,
+	heading = initialSlideHeading(motion),
+): PilotAnimationLayer {
 	return {
 		fadeSeconds: 0.16,
-		id: `locomotion:slide-${direction}`,
+		id: "locomotion:slide",
 		mode: "override",
-		pose: sampleSlideAnimationPose(motion),
+		pose: sampleSlideAnimationPose(motion, heading),
 	}
 }

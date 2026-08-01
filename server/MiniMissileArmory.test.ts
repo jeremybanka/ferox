@@ -58,14 +58,45 @@ test("switching preserves ownership and per-slot ammo", () => {
 	])
 })
 
-test("reload applies only to the authoritative active reloadable slot", () => {
+test("captured reload refills ARC and Mini only while slot and gun stay active", () => {
 	const armory = new MiniMissileArmory([0, 0, 0])
 	armory.connect("pilot")
 	assert.equal(armory.consumeActive("pilot", "projectile"), true)
-	assert.equal(armory.reloadActive("pilot"), true)
+	assert.equal(
+		armory.refillReload("pilot", { gunId: "arc-blaster", slot: 0 }),
+		true,
+	)
 	assert.equal(activeEquipmentSlot(armory.equipment("pilot")).ammo, 28)
+	assert.equal(
+		armory.refillReload("pilot", { gunId: "arc-blaster", slot: 0 }),
+		false,
+	)
 	armory.collect("pilot", [0, 0, 0])
-	assert.equal(armory.reloadActive("pilot"), false)
+	assert.equal(armory.consumeMiniMissile("pilot"), true)
+	assert.equal(
+		armory.refillReload("pilot", { gunId: "arc-blaster", slot: 0 }),
+		false,
+	)
+	assert.equal(
+		armory.refillReload("pilot", { gunId: "mini-missile", slot: 1 }),
+		true,
+	)
+	assert.equal(activeEquipmentSlot(armory.equipment("pilot")).ammo, 24)
+})
+
+test("switch, drop, and death invalidate captured reloads without late ammo", () => {
+	const armory = new MiniMissileArmory([0, 0, 0])
+	armory.connect("pilot")
+	armory.collect("pilot", [0, 0, 0])
+	armory.consumeMiniMissile("pilot")
+	const miniReload = { gunId: "mini-missile", slot: 1 } as const
+	assert.equal(armory.switchActive("pilot", -1), true)
+	assert.equal(armory.refillReload("pilot", miniReload), false)
+	assert.equal(armory.equipment("pilot").slots[1]?.ammo, 23)
+	assert.equal(armory.switchActive("pilot", 1), true)
+	assert.equal(armory.release("pilot", 1_000), true)
+	assert.equal(armory.refillReload("pilot", miniReload), false)
+	assert.equal(armory.equipment("pilot").slots[1], null)
 })
 
 test("dropping clears only slot two and returns a fully refilled pickup", () => {
@@ -146,6 +177,22 @@ test("explicit death release of an empty launcher clears slot two", () => {
 		armory.pickup().respawnAt,
 		2_000 + MINI_MISSILE_PICKUP_RESPAWN_SECONDS * 1_000,
 	)
+})
+
+test("respawn reset restores a full ARC-only default loadout", () => {
+	const armory = new MiniMissileArmory([0, 0, 0])
+	armory.connect("pilot")
+	armory.consumeActive("pilot", "projectile")
+	armory.collect("pilot", [0, 0, 0])
+	armory.consumeMiniMissile("pilot")
+	assert.equal(armory.release("pilot", 2_000), true)
+	assert.equal(armory.resetLoadout("pilot"), true)
+	assert.deepEqual(armory.equipment("pilot"), {
+		activeSlot: 0,
+		revision: 5,
+		slots: [{ ammo: 28, weapon: "arc-blaster" }, null],
+	})
+	assert.equal(armory.resetLoadout("unknown"), false)
 })
 
 test("disconnect releases an empty launcher and reconnect starts ARC-only", () => {

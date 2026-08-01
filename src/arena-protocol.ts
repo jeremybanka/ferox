@@ -45,8 +45,7 @@ export type PlayerSnapshot = {
 	position: Vector3Tuple
 	recoilSequence: number
 	recoilStartedAt: number
-	reloading: boolean
-	reloadStartedAt: number
+	reload: ReloadSnapshot | null
 	respawnAt: number | null
 	rotation: [number, number]
 	sliding: boolean
@@ -66,8 +65,7 @@ export type PlayerMoveSnapshot = Omit<
 	| "lifeSequence"
 	| "recoilSequence"
 	| "recoilStartedAt"
-	| "reloading"
-	| "reloadStartedAt"
+	| "reload"
 	| "respawnAt"
 >
 
@@ -197,6 +195,44 @@ export type MiniMissilePickupSnapshot = {
 }
 
 export type WeaponSlotIndex = 0 | 1
+
+export type ReloadSnapshot = {
+	completesAt: number
+	gunId: WeaponKind
+	refillAt: number
+	refilled: boolean
+	slot: WeaponSlotIndex
+	startedAt: number
+}
+
+export function isReloadSnapshot(value: unknown): value is ReloadSnapshot {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	if (
+		!Object.keys(record).every((key) =>
+			[
+				"completesAt",
+				"gunId",
+				"refillAt",
+				"refilled",
+				"slot",
+				"startedAt",
+			].includes(key),
+		) ||
+		Object.keys(record).length !== 6 ||
+		!isGunId(record["gunId"]) ||
+		(record["slot"] !== 0 && record["slot"] !== 1) ||
+		typeof record["refilled"] !== "boolean" ||
+		!Number.isFinite(record["startedAt"]) ||
+		!Number.isFinite(record["refillAt"]) ||
+		!Number.isFinite(record["completesAt"])
+	)
+		return false
+	return (
+		(record["startedAt"] as number) <= (record["refillAt"] as number) &&
+		(record["refillAt"] as number) <= (record["completesAt"] as number)
+	)
+}
 
 export type EquipmentSlotSnapshot = {
 	ammo: number

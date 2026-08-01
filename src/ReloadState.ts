@@ -1,58 +1,76 @@
-import {
-	WEAPON_MAGAZINE_SIZE,
-	WEAPON_RELOAD_DURATION_SECONDS,
-	WEAPON_RELOAD_REFILL_PROGRESS,
-} from "./game-constants.ts"
+import type {
+	ReloadSnapshot,
+	WeaponKind,
+	WeaponSlotIndex,
+} from "./arena-protocol.ts"
+import { gunDefinition } from "./guns/GunDefinitions.ts"
 
-export type ReloadState = {
+export type ReloadState = ReloadSnapshot | null
+
+export type ReloadRequest = {
 	ammo: number
-	refilled: boolean
-	reloading: boolean
-	startedAt: number
+	gunId: WeaponKind
+	slot: WeaponSlotIndex
 }
 
-export function initialReloadState(ammo = WEAPON_MAGAZINE_SIZE): ReloadState {
-	return { ammo, refilled: false, reloading: false, startedAt: 0 }
+export type ReloadStep = {
+	completed: boolean
+	refill: ReloadSnapshot | null
+	state: ReloadState
 }
 
 export function startReload(
-	state: ReloadState,
+	request: ReloadRequest,
 	nowSeconds: number,
 ): ReloadState {
-	if (state.reloading || state.ammo >= WEAPON_MAGAZINE_SIZE) return state
-	return { ...state, refilled: false, reloading: true, startedAt: nowSeconds }
+	const gun = gunDefinition(request.gunId)
+	if (
+		!gun.capabilities.reload ||
+		request.ammo < 0 ||
+		request.ammo >= gun.magazineSize ||
+		!Number.isFinite(nowSeconds)
+	)
+		return null
+	const refillAt =
+		nowSeconds + gun.reload.durationSeconds * gun.reload.refillProgress
+	return {
+		completesAt: nowSeconds + gun.reload.durationSeconds,
+		gunId: request.gunId,
+		refillAt,
+		refilled: false,
+		slot: request.slot,
+		startedAt: nowSeconds,
+	}
 }
 
-export function cancelReload(state: ReloadState): ReloadState {
-	if (!state.reloading) return state
-	return { ...state, refilled: false, reloading: false, startedAt: 0 }
+export function cancelReload(_state: ReloadState): ReloadState {
+	return null
 }
 
 export function reloadProgress(state: ReloadState, nowSeconds: number): number {
-	if (!state.reloading) return 0
-	return Math.min(
-		1,
-		Math.max(0, nowSeconds - state.startedAt) / WEAPON_RELOAD_DURATION_SECONDS,
-	)
+	if (state === null) return 0
+	const duration = state.completesAt - state.startedAt
+	if (duration <= 0) return 1
+	return Math.min(1, Math.max(0, nowSeconds - state.startedAt) / duration)
 }
 
-export function updateReload(
+export function advanceReload(
 	state: ReloadState,
 	nowSeconds: number,
-): ReloadState {
-	if (!state.reloading) return state
-	const progress = reloadProgress(state, nowSeconds)
-	let next = state
-	if (!state.refilled && progress >= WEAPON_RELOAD_REFILL_PROGRESS) {
-		next = { ...next, ammo: WEAPON_MAGAZINE_SIZE, refilled: true }
+): ReloadStep {
+	if (state === null) return { completed: false, refill: null, state: null }
+	const refill = !state.refilled && nowSeconds >= state.refillAt ? state : null
+	const next = refill === null ? state : { ...state, refilled: true }
+	if (nowSeconds >= state.completesAt) {
+		return { completed: true, refill, state: null }
 	}
-	if (progress >= 1) {
-		return { ...next, refilled: false, reloading: false, startedAt: 0 }
-	}
-	return next
+	return { completed: false, refill, state: next }
 }
 
-export function spendRound(state: ReloadState): ReloadState {
-	if (state.reloading || state.ammo <= 0) return state
-	return { ...state, ammo: state.ammo - 1 }
+export function isReloadForEquipment(
+	state: ReloadState,
+	slot: WeaponSlotIndex,
+	gunId: WeaponKind,
+): boolean {
+	return state !== null && state.slot === slot && state.gunId === gunId
 }

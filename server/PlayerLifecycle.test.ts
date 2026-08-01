@@ -3,12 +3,10 @@ import { test } from "vitest"
 
 import { PLAYER_RESPAWN_DELAY_MS } from "../src/game-constants.ts"
 import {
+	advanceReload,
 	cancelReload,
-	initialReloadState,
 	reloadProgress,
-	spendRound,
 	startReload,
-	updateReload,
 } from "../src/ReloadState.ts"
 import { stepSlideDust } from "../src/SlideDustState.ts"
 import { PlayerLifecycle } from "./PlayerLifecycle.ts"
@@ -50,28 +48,53 @@ test("dead players are excluded and disconnects cancel pending respawns", () => 
 	assert.deepEqual(lifecycle.advance(PLAYER_RESPAWN_DELAY_MS), [])
 })
 
-test("reload refills once at the defined phase and gates rounds", () => {
-	let state = initialReloadState(7)
-	state = startReload(state, 100)
-	assert.equal(startReload(state, 101), state)
-	assert.equal(spendRound(state), state)
+test("ARC reload captures authoritative timing and emits one refill phase", () => {
+	let state = startReload({ ammo: 7, gunId: "arc-blaster", slot: 0 }, 100)
+	assert.deepEqual(state, {
+		completesAt: 101.65,
+		gunId: "arc-blaster",
+		refillAt: 101.188,
+		refilled: false,
+		slot: 0,
+		startedAt: 100,
+	})
 	assert.ok(reloadProgress(state, 100.5) > 0)
 
-	state = updateReload(state, 101.2)
-	assert.equal(state.ammo, 28)
-	assert.equal(state.reloading, true)
-	state = updateReload(state, 101.65)
-	assert.equal(state.ammo, 28)
-	assert.equal(state.reloading, false)
+	let step = advanceReload(state, 101.187)
+	assert.equal(step.refill, null)
+	state = step.state
+	step = advanceReload(state, 101.188)
+	assert.equal(step.refill?.gunId, "arc-blaster")
+	assert.equal(step.state?.refilled, true)
+	state = step.state
+	step = advanceReload(state, 101.4)
+	assert.equal(step.refill, null)
+	assert.equal(step.completed, false)
+	step = advanceReload(step.state, 101.65)
+	assert.deepEqual(step, { completed: true, refill: null, state: null })
 })
 
-test("reload eligibility and cancellation never award late ammo", () => {
-	const full = initialReloadState()
-	assert.equal(startReload(full, 10), full)
-	const partial = startReload(initialReloadState(4), 10)
-	const cancelled = cancelReload(partial)
-	assert.equal(cancelled.reloading, false)
-	assert.equal(updateReload(cancelled, 50).ammo, 4)
+test("per-gun timing, eligibility, and cancellation never emit late refill", () => {
+	assert.equal(
+		startReload({ ammo: 28, gunId: "arc-blaster", slot: 0 }, 10),
+		null,
+	)
+	const mini = startReload({ ammo: 4, gunId: "mini-missile", slot: 1 }, 10)
+	assert.deepEqual(mini, {
+		completesAt: 12.4,
+		gunId: "mini-missile",
+		refillAt: 11.872,
+		refilled: false,
+		slot: 1,
+		startedAt: 10,
+	})
+	const cancelled = cancelReload(mini)
+	assert.equal(cancelled, null)
+	assert.deepEqual(advanceReload(cancelled, 50), {
+		completed: false,
+		refill: null,
+		state: null,
+	})
 })
 
 test("slide dust emits on entry and a bounded cadence, then resets", () => {

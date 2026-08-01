@@ -75,9 +75,6 @@ export const PLAYER_SPRINT_SPEED_LIMIT = 14.8
 export const PLAYER_SLIDE_DUST_CADENCE_SECONDS = 0.14
 export const PLAYER_SLIDE_DUST_LIFETIME_SECONDS = 0.52
 export const PLAYER_SLIDE_DUST_BUDGET = 24
-export const WEAPON_MAGAZINE_SIZE = 28
-export const WEAPON_RELOAD_DURATION_SECONDS = 1.65
-export const WEAPON_RELOAD_REFILL_PROGRESS = 0.72
 export const PLAYER_SPAWN_POINTS: readonly PlayerSpawnPoint[] = Array.from(
 	{ length: PLAYER_POPULATION_CAP },
 	(_, index) => {
