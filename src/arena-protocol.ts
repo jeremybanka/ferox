@@ -122,30 +122,41 @@ export function isMiniMissileTargetRef(
 	)
 }
 
-export type MiniMissilePickupIntent = {
-	clientPickupId: number
-}
+export type InventoryActionIntent =
+	| { clientActionId: number; type: "collect" }
+	| { clientActionId: number; direction: -1 | 1; type: "switch" }
+	| { clientActionId: number; type: "drop-mini-missile" | "reload" }
 
-export function isMiniMissilePickupIntent(
+export function isInventoryActionIntent(
 	value: unknown,
-): value is MiniMissilePickupIntent {
-	return (
-		value !== null &&
-		typeof value === "object" &&
-		Number.isSafeInteger(
-			(value as { clientPickupId?: unknown }).clientPickupId,
-		) &&
-		(value as { clientPickupId: number }).clientPickupId >= 0
+): value is InventoryActionIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	if (
+		!Number.isSafeInteger(record["clientActionId"]) ||
+		(record["clientActionId"] as number) < 0
 	)
+		return false
+	switch (record["type"]) {
+		case "collect":
+		case "drop-mini-missile":
+		case "reload":
+			return Object.keys(record).length === 2
+		case "switch":
+			return (
+				Object.keys(record).length === 3 &&
+				(record["direction"] === -1 || record["direction"] === 1)
+			)
+		default:
+			return false
+	}
 }
 
-export function isNewMiniMissilePickupIntent(
+export function isNewInventoryActionIntent(
 	value: unknown,
 	lastAcceptedId: number,
-): value is MiniMissilePickupIntent {
-	return (
-		isMiniMissilePickupIntent(value) && value.clientPickupId > lastAcceptedId
-	)
+): value is InventoryActionIntent {
+	return isInventoryActionIntent(value) && value.clientActionId > lastAcceptedId
 }
 
 export type MiniMissilePhase = "falling" | "powered"
@@ -174,22 +185,42 @@ export type MiniMissilePickupSnapshot = {
 	respawnAt: number | null
 }
 
-export type EquipmentSnapshot = {
+export type WeaponSlotIndex = 0 | 1
+
+export type EquipmentSlotSnapshot = {
 	ammo: number
 	weapon: WeaponKind
 }
 
-export type EquipIntent = {
-	weapon: WeaponKind
+export type EquipmentSlots = readonly [
+	EquipmentSlotSnapshot,
+	EquipmentSlotSnapshot | null,
+]
+
+export type EquipmentSnapshot = {
+	activeSlot: WeaponSlotIndex
+	revision: number
+	slots: EquipmentSlots
 }
 
-export function isEquipIntent(value: unknown): value is EquipIntent {
+export function activeEquipmentSlot(
+	equipment: EquipmentSnapshot,
+): EquipmentSlotSnapshot {
+	return equipment.slots[equipment.activeSlot] ?? equipment.slots[0]
+}
+
+function isEquipmentSlotSnapshot(
+	value: unknown,
+): value is EquipmentSlotSnapshot {
 	if (value === null || typeof value !== "object") return false
 	const record = value as Record<string, unknown>
 	return (
-		Object.keys(record).length === 1 &&
+		Object.keys(record).length === 2 &&
+		Object.hasOwn(record, "ammo") &&
 		Object.hasOwn(record, "weapon") &&
-		isGunId(record["weapon"])
+		isGunId(record["weapon"]) &&
+		Number.isSafeInteger(record["ammo"]) &&
+		(record["ammo"] as number) >= 0
 	)
 }
 
@@ -198,14 +229,27 @@ export function isEquipmentSnapshot(
 ): value is EquipmentSnapshot {
 	if (value === null || typeof value !== "object") return false
 	const record = value as Record<string, unknown>
+	const slots = record["slots"]
+	if (!Array.isArray(slots) || slots.length !== 2) return false
 	return (
-		Object.keys(record).every((key) => key === "ammo" || key === "weapon") &&
-		Object.hasOwn(record, "ammo") &&
-		Object.hasOwn(record, "weapon") &&
-		isGunId(record["weapon"]) &&
-		Number.isSafeInteger(record["ammo"]) &&
-		(record["ammo"] as number) >= 0
+		Object.keys(record).length === 3 &&
+		(record["activeSlot"] === 0 || record["activeSlot"] === 1) &&
+		Number.isSafeInteger(record["revision"]) &&
+		(record["revision"] as number) >= 0 &&
+		isEquipmentSlotSnapshot(slots[0]) &&
+		slots[0].weapon === "arc-blaster" &&
+		(slots[1] === null ||
+			(isEquipmentSlotSnapshot(slots[1]) &&
+				slots[1].weapon === "mini-missile")) &&
+		slots[record["activeSlot"] as WeaponSlotIndex] !== null
 	)
+}
+
+export function isNewEquipmentSnapshot(
+	value: unknown,
+	lastAcceptedRevision: number,
+): value is EquipmentSnapshot {
+	return isEquipmentSnapshot(value) && value.revision > lastAcceptedRevision
 }
 
 export type IncomingLockSnapshot = {

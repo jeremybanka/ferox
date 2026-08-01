@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest"
 
-import { isEquipIntent, isEquipmentSnapshot } from "../arena-protocol.ts"
+import {
+	activeEquipmentSlot,
+	isEquipmentSnapshot,
+	isInventoryActionIntent,
+	isNewEquipmentSnapshot,
+	isNewInventoryActionIntent,
+} from "../arena-protocol.ts"
 import {
 	DEFAULT_GUN_ID,
 	GUN_DEFINITIONS,
@@ -59,24 +65,68 @@ describe("gun definitions", () => {
 })
 
 describe("equipment protocol", () => {
-	test("accepts strict equip intents for every registered gun", () => {
-		for (const weapon of GUN_IDS) expect(isEquipIntent({ weapon })).toBe(true)
-		expect(isEquipIntent({ ammo: 0, weapon: "arc-blaster" })).toBe(false)
-		expect(isEquipIntent({ weapon: "railgun" })).toBe(false)
-		expect(isEquipIntent(null)).toBe(false)
+	test("accepts strict sequenced inventory actions without client gun IDs", () => {
+		expect(
+			isInventoryActionIntent({ clientActionId: 1, type: "collect" }),
+		).toBe(true)
+		expect(
+			isInventoryActionIntent({
+				clientActionId: 2,
+				direction: -1,
+				type: "switch",
+			}),
+		).toBe(true)
+		expect(
+			isInventoryActionIntent({
+				clientActionId: 3,
+				type: "drop-mini-missile",
+			}),
+		).toBe(true)
+		expect(isInventoryActionIntent({ clientActionId: 4, type: "reload" })).toBe(
+			true,
+		)
+		expect(
+			isInventoryActionIntent({
+				clientActionId: 5,
+				type: "switch",
+				weapon: "mini-missile",
+			}),
+		).toBe(false)
+		expect(
+			isNewInventoryActionIntent({ clientActionId: 5, type: "collect" }, 4),
+		).toBe(true)
+		expect(
+			isNewInventoryActionIntent({ clientActionId: 5, type: "collect" }, 5),
+		).toBe(false)
 	})
 
-	test("accepts strict authoritative snapshots and rejects bad ammo or IDs", () => {
-		for (const weapon of GUN_IDS) {
-			expect(isEquipmentSnapshot({ ammo: 1, weapon })).toBe(true)
-		}
-		expect(isEquipmentSnapshot({ ammo: -1, weapon: "arc-blaster" })).toBe(false)
-		expect(isEquipmentSnapshot({ ammo: 1.5, weapon: "arc-blaster" })).toBe(
-			false,
-		)
-		expect(isEquipmentSnapshot({ ammo: 1, weapon: "railgun" })).toBe(false)
+	test("accepts strict authoritative two-slot snapshots", () => {
+		const snapshot = {
+			activeSlot: 1,
+			revision: 4,
+			slots: [
+				{ ammo: 27, weapon: "arc-blaster" },
+				{ ammo: 5, weapon: "mini-missile" },
+			],
+		} as const
+		expect(isEquipmentSnapshot(snapshot)).toBe(true)
+		expect(isNewEquipmentSnapshot(snapshot, 3)).toBe(true)
+		expect(isNewEquipmentSnapshot(snapshot, 4)).toBe(false)
+		expect(activeEquipmentSlot(snapshot)).toEqual(snapshot.slots[1])
+		expect(isEquipmentSnapshot({ ...snapshot, activeSlot: 2 })).toBe(false)
+		expect(isEquipmentSnapshot({ ...snapshot, revision: -1 })).toBe(false)
 		expect(
-			isEquipmentSnapshot({ ammo: 1, extra: true, weapon: "arc-blaster" }),
+			isEquipmentSnapshot({
+				...snapshot,
+				slots: [snapshot.slots[0], null],
+			}),
 		).toBe(false)
+		expect(
+			isEquipmentSnapshot({
+				...snapshot,
+				slots: [{ ammo: -1, weapon: "arc-blaster" }, snapshot.slots[1]],
+			}),
+		).toBe(false)
+		expect(isEquipmentSnapshot({ ...snapshot, extra: true })).toBe(false)
 	})
 })

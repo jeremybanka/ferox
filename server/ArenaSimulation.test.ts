@@ -112,6 +112,27 @@ test("player projectiles damage another pilot across a simulation tick", () => {
 	expect(endedProjectiles).toEqual([{ id: 1 }])
 })
 
+test("player projectile intent IDs reject replay before spawning", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 1.72, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const simulation = makeSimulation(players, () => undefined, [])
+	const intent = {
+		clientShotId: 7,
+		direction: [0, 0, -1] as [number, number, number],
+		origin: [0, 1, 0] as [number, number, number],
+	}
+	expect(simulation.fire("shooter", intent)).toBe(true)
+	expect(simulation.fire("shooter", intent)).toBe(false)
+	expect(simulation.fire("shooter", { ...intent, clientShotId: 6 })).toBe(false)
+	expect(simulation.fire("shooter", { ...intent, clientShotId: 8 })).toBe(true)
+})
+
 test("standing headshots deal double damage and report the authoritative classification", () => {
 	const players: SimulationPlayer[] = [
 		{

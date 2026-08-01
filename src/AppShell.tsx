@@ -140,13 +140,17 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				<pickup-prompt
 					data-active={hud.pickup === "nearby"}
 					aria-hidden={hud.pickup !== "nearby"}
+					style={{ "--pickup-progress": hud.pickupProgress }}
 				>
 					<strong>MINI-MISSILE READY</strong>
 					<span>
 						<kbd>E</kbd>
-						<kbd>Y / △</kbd>
-						PICK UP
+						<kbd>RB</kbd>
+						HOLD TO PICK UP
 					</span>
+					<pickup-progress aria-hidden="true">
+						<i />
+					</pickup-progress>
 				</pickup-prompt>
 
 				<smart-target-zone data-state={hud.targeting} aria-hidden="true">
@@ -229,6 +233,18 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</player-vitals>
 
 				<weapon-status>
+					<weapon-slots aria-label="Weapon slots">
+						{hud.weaponSlots.map((slot, index) => (
+							<weapon-slot key={index} data-active={hud.activeSlot === index}>
+								<b>{index + 1}</b>
+								<span>
+									{slot === null
+										? "EMPTY"
+										: `${gunDefinition(slot.weapon).name} ${String(slot.ammo).padStart(2, "0")}`}
+								</span>
+							</weapon-slot>
+						))}
+					</weapon-slots>
 					<small>{gun.name}</small>
 					<ammo-count>
 						<strong>{String(hud.ammo).padStart(2, "0")}</strong>
@@ -238,11 +254,11 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						{gun.fire.type === "guided-missile"
 							? hud.ammo === 0
 								? "ORDNANCE SPENT"
-								: "GUIDANCE ARMED • X TO DROP"
+								: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH • X TO DROP"
 							: hud.ammo === 0
 								? "PRESS RB / R TO RELOAD"
 								: hud.pickup === "nearby"
-									? "E / Y TO PICK UP"
+									? "HOLD E / RB TO PICK UP"
 									: hud.pickup === "available"
 										? "MINI-MISSILE AVAILABLE"
 										: hud.pickup === "carried"
@@ -268,11 +284,11 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>LOCK</span>
 						<kbd>LB HOLD</kbd>
 						<span>FREE AIM</span>
-						<kbd>RB</kbd>
-						<span>RELOAD</span>
+						<kbd>1 / Y / WHEEL</kbd>
+						<span>SWITCH</span>
 						<kbd>RMB / LT</kbd>
 						<span>GRENADE</span>
-						<kbd>E / Y</kbd>
+						<kbd>HOLD E / RB</kbd>
 						<span>PICK UP</span>
 						<kbd>D-PAD ↑</kbd>
 						<span>WAVE</span>

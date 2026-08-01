@@ -5,16 +5,15 @@ import type { UserKey } from "atom.io/realtime"
 import { Server, type Socket as IoSocket } from "socket.io"
 
 import {
+	activeEquipmentSlot,
+	isNewInventoryActionIntent,
 	isPilotEmote,
-	isNewMiniMissilePickupIntent,
-	isEquipIntent,
 	isVisorExpression,
 	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
 	type FireIntent,
 	type GrenadeIntent,
 	type MiniMissileIntent,
-	type MiniMissilePickupIntent,
 	type PlayerMoveSnapshot,
 	type PlayerDamageSnapshot,
 	type PlayerSnapshot,
@@ -62,7 +61,7 @@ const playerScores = new Map<string, number>()
 const lastPlayerFire = new Map<string, number>()
 const lastPlayerGrenade = new Map<string, number>()
 const lastPlayerMissile = new Map<string, number>()
-const lastPlayerPickup = new Map<string, number>()
+const lastInventoryAction = new Map<string, number>()
 const [pickupX, pickupZ] = MINI_MISSILE_PICKUP_POSITION
 const armory = new MiniMissileArmory([
 	pickupX,
@@ -89,7 +88,8 @@ const emitEquipment = (playerId: string): void => {
 	const equipment = armory.equipment(playerId)
 	io.to(playerId).emit("arena:equipment", equipment)
 	const player = players.get(playerId)
-	if (player !== undefined) player.equippedWeapon = equipment.weapon
+	if (player !== undefined)
+		player.equippedWeapon = activeEquipmentSlot(equipment).weapon
 }
 
 const emitPickup = (): void => {
@@ -308,7 +308,7 @@ realtime(
 			const current = players.get(socketId)
 			players.set(socketId, {
 				...payload,
-				equippedWeapon: armory.equipment(socketId).weapon,
+				equippedWeapon: armory.activeWeapon(socketId),
 				id: socketId,
 				lifeSequence: current?.lifeSequence ?? 0,
 				recoilSequence: current?.recoilSequence ?? 0,
@@ -321,13 +321,18 @@ realtime(
 			emitStandardLockUpdates(standardLocks.reconcile(players))
 		}
 		const onFire = (payload: FireIntent): void => {
-			const equipped = gunDefinition(armory.equipment(socketId).weapon)
+			const equipped = gunDefinition(armory.activeWeapon(socketId))
 			if (equipped.fire.type !== "projectile") return
 			const now = performance.now()
 			const previous = lastPlayerFire.get(socketId) ?? Number.NEGATIVE_INFINITY
 			if (now - previous < equipped.fire.serverMinimumIntervalMs) return
-			if (!simulation.fire(socketId, payload)) return
+			if (!armory.consumeActive(socketId, "projectile")) return
+			if (!simulation.fire(socketId, payload)) {
+				armory.restoreActive(socketId)
+				return
+			}
 			lastPlayerFire.set(socketId, now)
+			emitEquipment(socketId)
 			const player = players.get(socketId)
 			if (player !== undefined) {
 				players.set(socketId, {
@@ -337,7 +342,7 @@ realtime(
 			}
 		}
 		const onFireMiniMissile = (payload: MiniMissileIntent): void => {
-			const equipped = gunDefinition(armory.equipment(socketId).weapon)
+			const equipped = gunDefinition(armory.activeWeapon(socketId))
 			if (equipped.fire.type !== "guided-missile") return
 			const now = performance.now()
 			const previous =
@@ -354,26 +359,40 @@ realtime(
 			lastPlayerMissile.set(socketId, now)
 			emitEquipment(socketId)
 		}
-		const onCollectMiniMissile = (payload: MiniMissilePickupIntent): void => {
-			const previous = lastPlayerPickup.get(socketId) ?? -1
-			if (!isNewMiniMissilePickupIntent(payload, previous)) return
-			lastPlayerPickup.set(socketId, payload.clientPickupId)
-			const player = players.get(socketId)
-			if (player === undefined || !armory.collect(socketId, player.position))
-				return
-			emitEquipment(socketId)
-			emitPickup()
-			io.emit("arena:players", [...players.values()])
-		}
-		const onEquip = (payload: unknown): void => {
-			if (!isEquipIntent(payload)) return
-			const previousWeapon = armory.equipment(socketId).weapon
-			if (!armory.equip(socketId, payload.weapon, Date.now())) return
-			if (previousWeapon !== payload.weapon)
+		const onInventoryAction = (payload: unknown): void => {
+			const previous = lastInventoryAction.get(socketId) ?? -1
+			if (!isNewInventoryActionIntent(payload, previous)) return
+			lastInventoryAction.set(socketId, payload.clientActionId)
+			const before = armory.activeWeapon(socketId)
+			let changed = false
+			let pickupChanged = false
+			switch (payload.type) {
+				case "collect": {
+					const player = players.get(socketId)
+					changed =
+						player !== undefined && armory.collect(socketId, player.position)
+					pickupChanged = changed
+					break
+				}
+				case "switch":
+					changed = armory.switchActive(socketId, payload.direction)
+					break
+				case "drop-mini-missile":
+					changed = armory.release(socketId, Date.now())
+					pickupChanged = changed
+					break
+				case "reload":
+					changed = armory.reloadActive(socketId)
+					break
+			}
+			if (!changed) return
+			const after = armory.activeWeapon(socketId)
+			if (payload.type === "drop-mini-missile")
 				simulation.cancelLocksByOwner(socketId)
 			emitEquipment(socketId)
-			emitStandardLockUpdates(standardLocks.reconcile(players))
-			emitPickup()
+			if (before !== after)
+				emitStandardLockUpdates(standardLocks.reconcile(players))
+			if (pickupChanged) emitPickup()
 			io.emit("arena:players", [...players.values()])
 		}
 		const onThrowGrenade = (payload: GrenadeIntent): void => {
@@ -389,8 +408,7 @@ realtime(
 		gameSocket.on("arena:standard-lock", onStandardLock)
 		gameSocket.on("arena:fire", onFire)
 		gameSocket.on("arena:fire-mini-missile", onFireMiniMissile)
-		gameSocket.on("arena:collect-mini-missile", onCollectMiniMissile)
-		gameSocket.on("arena:equip", onEquip)
+		gameSocket.on("arena:inventory-action", onInventoryAction)
 		gameSocket.on("arena:throw-grenade", onThrowGrenade)
 
 		return () => {
@@ -406,7 +424,7 @@ realtime(
 			lastPlayerFire.delete(socketId)
 			lastPlayerGrenade.delete(socketId)
 			lastPlayerMissile.delete(socketId)
-			lastPlayerPickup.delete(socketId)
+			lastInventoryAction.delete(socketId)
 			emitPickup()
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)
@@ -414,8 +432,7 @@ realtime(
 			gameSocket.off("arena:standard-lock", onStandardLock)
 			gameSocket.off("arena:fire", onFire)
 			gameSocket.off("arena:fire-mini-missile", onFireMiniMissile)
-			gameSocket.off("arena:collect-mini-missile", onCollectMiniMissile)
-			gameSocket.off("arena:equip", onEquip)
+			gameSocket.off("arena:inventory-action", onInventoryAction)
 			gameSocket.off("arena:throw-grenade", onThrowGrenade)
 		}
 	},
@@ -428,6 +445,7 @@ setInterval(() => {
 	lastSimulationTick = now
 	simulation.update(delta)
 	let pickupChanged = armory.update(Date.now())
+	let playersChanged = false
 	for (const playerId of players.keys()) {
 		if (
 			armory.releaseIfSpent(
@@ -438,9 +456,11 @@ setInterval(() => {
 		) {
 			emitEquipment(playerId)
 			pickupChanged = true
+			playersChanged = true
 		}
 	}
 	if (pickupChanged) emitPickup()
+	if (playersChanged) io.emit("arena:players", [...players.values()])
 }, 1_000 / 30)
 
 setInterval(() => {

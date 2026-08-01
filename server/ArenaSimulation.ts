@@ -182,6 +182,7 @@ export class ArenaSimulation {
 	readonly #getPlayers: ArenaSimulationOptions["getPlayers"]
 	readonly #grenades: GrenadeState[] = []
 	readonly #lastMissileIntent = new Map<string, number>()
+	readonly #lastProjectileIntent = new Map<string, number>()
 	readonly #missiles: MiniMissileState[] = []
 	readonly #onDroneKilled: ArenaSimulationOptions["onDroneKilled"]
 	readonly #onDirectHit: ArenaSimulationOptions["onDirectHit"]
@@ -251,6 +252,7 @@ export class ArenaSimulation {
 
 	removePlayer(playerId: string): void {
 		this.#lastMissileIntent.delete(playerId)
+		this.#lastProjectileIntent.delete(playerId)
 		for (let index = this.#missiles.length - 1; index >= 0; index -= 1) {
 			const missile = this.#missiles[index]
 			if (missile === undefined) continue
@@ -286,6 +288,8 @@ export class ArenaSimulation {
 		) {
 			return false
 		}
+		if (intent.clientShotId <= (this.#lastProjectileIntent.get(playerId) ?? -1))
+			return false
 		const origin = new THREE.Vector3(...intent.origin)
 		const playerPosition = new THREE.Vector3(...player.position)
 		if (origin.distanceTo(playerPosition) > 3) return false
@@ -301,6 +305,7 @@ export class ArenaSimulation {
 			playerId,
 			intent.clientShotId,
 		)
+		this.#lastProjectileIntent.set(playerId, intent.clientShotId)
 		return true
 	}
 

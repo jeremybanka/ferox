@@ -2,10 +2,15 @@ import { atom } from "atom.io"
 
 import { ARENA_SEED } from "./game-constants.ts"
 import { DEFAULT_GUN_ID, gunDefinition } from "./guns/GunDefinitions.ts"
-import type { WeaponKind } from "./arena-protocol.ts"
+import type {
+	EquipmentSlots,
+	WeaponKind,
+	WeaponSlotIndex,
+} from "./arena-protocol.ts"
 
 export type GameHudState = {
 	ammo: number
+	activeSlot: WeaponSlotIndex
 	connection: "connecting" | "offline" | "online"
 	drones: number
 	health: number
@@ -18,6 +23,7 @@ export type GameHudState = {
 	lockCountdown: number
 	players: number
 	pickup: "available" | "carried" | "nearby" | "respawning"
+	pickupProgress: number
 	reticleX: number
 	reticleY: number
 	recoilPulse: number
@@ -27,12 +33,14 @@ export type GameHudState = {
 	speed: number
 	targeting: "acquired" | "escaping" | "free" | "idle" | "locked" | "lost"
 	weapon: WeaponKind
+	weaponSlots: EquipmentSlots
 }
 
 export const gameHudStateAtom = atom<GameHudState>({
 	key: "gameHudState",
 	default: {
 		ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
+		activeSlot: 0,
 		connection: "connecting",
 		drones: 0,
 		health: 100,
@@ -45,6 +53,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 		lockCountdown: 0,
 		players: 1,
 		pickup: "respawning",
+		pickupProgress: 0,
 		reticleX: 0.5,
 		reticleY: 0.5,
 		recoilPulse: 0,
@@ -54,6 +63,13 @@ export const gameHudStateAtom = atom<GameHudState>({
 		speed: 0,
 		targeting: "idle",
 		weapon: DEFAULT_GUN_ID,
+		weaponSlots: [
+			{
+				ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
+				weapon: DEFAULT_GUN_ID,
+			},
+			null,
+		],
 	},
 })
 

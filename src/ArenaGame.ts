@@ -6,17 +6,17 @@ import type {
 	CombatSnapshot,
 	DirectHitResult,
 	DroneDestroyedSnapshot,
-	EquipIntent,
+	EquipmentSlots,
 	FireIntent,
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
 	GrenadeSnapshot,
 	IncomingLockSnapshot,
 	IncomingStandardLockSnapshot,
+	InventoryActionIntent,
 	MiniMissileEndedSnapshot,
 	MiniMissileExplodedSnapshot,
 	MiniMissileIntent,
-	MiniMissilePickupIntent,
 	MiniMissilePickupSnapshot,
 	MiniMissileSnapshot,
 	PlayerMoveSnapshot,
@@ -25,11 +25,16 @@ import type {
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
 	StandardLockIntent,
+	WeaponSlotIndex,
 	PilotEmote,
 	VisorExpression,
 	WeaponKind,
 } from "./arena-protocol.ts"
-import { isEquipmentSnapshot, isVisorExpression } from "./arena-protocol.ts"
+import {
+	activeEquipmentSlot,
+	isNewEquipmentSnapshot,
+	isVisorExpression,
+} from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
 import { DamageParticleBurst } from "./DamageParticles.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
@@ -48,9 +53,15 @@ import {
 	TARGET_LOST_FLASH_MS,
 } from "./game-constants.ts"
 import {
+	contextualRightBumperAction,
+	debounceWheelInput,
+	IDLE_HOLD_INPUT_STATE,
 	inputEdge,
 	isPickupGamepadInput,
-	isPickupKeyboardInput,
+	isWeaponSwitchGamepadInput,
+	isWeaponSwitchKeyboardInput,
+	updateHoldInput,
+	type HoldInputState,
 } from "./game-input.ts"
 import type { GameHudState } from "./game-state.ts"
 import {
@@ -306,10 +317,13 @@ export class ArenaGame {
 	#shotSequence = 0
 	#missileSequence = 0
 	#pickupAvailable = false
-	#pickupHeld = false
+	#pickupHoldState: HoldInputState = IDLE_HOLD_INPUT_STATE
+	#pickupProgress = 0
 	#pickupOwnerId: string | null = null
 	readonly #pickupPosition = new THREE.Vector3()
-	#pickupSequence = 0
+	#inventoryActionSequence = 0
+	#switchHeld = false
+	#lastWheelEventAt: number | null = null
 	#shotHeld = false
 	#slide = false
 	#snapshotElapsed = 0
@@ -326,6 +340,15 @@ export class ArenaGame {
 	#waveUntil = 0
 	#weaponsFreeUntil = 0
 	#weaponKind: WeaponKind = DEFAULT_GUN_ID
+	#activeSlot: WeaponSlotIndex = 0
+	#equipmentRevision = -1
+	#equipmentSlots: EquipmentSlots = [
+		{
+			ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
+			weapon: DEFAULT_GUN_ID,
+		},
+		null,
+	]
 
 	constructor(options: ArenaGameOptions) {
 		this.#canvas = options.canvas
@@ -367,6 +390,7 @@ export class ArenaGame {
 		window.removeEventListener("keyup", this.#onKeyUp)
 		window.removeEventListener("mousemove", this.#onMouseMove)
 		window.removeEventListener("mousedown", this.#onMouseDown)
+		window.removeEventListener("wheel", this.#onWheel)
 		window.removeEventListener("contextmenu", this.#onContextMenu)
 		window.removeEventListener("resize", this.#resize)
 		this.#socket.off("connect", this.#onConnect)
@@ -417,23 +441,10 @@ export class ArenaGame {
 	readonly #onKeyDown = (event: KeyboardEvent): void => {
 		this.#keys.add(event.code)
 		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
-		const gun = gunDefinition(this.#weaponKind)
-		if (
-			event.code === "KeyR" &&
-			gun.capabilities.reload &&
-			this.#ammo < gun.magazineSize
-		)
-			this.#ammo = gun.magazineSize
-		if (isPickupKeyboardInput(event.code, event.repeat)) this.#requestPickup()
-		if (
-			event.code === "KeyX" &&
-			!event.repeat &&
-			this.#weaponKind !== DEFAULT_GUN_ID
-		) {
-			this.#socket.emit("arena:equip", {
-				weapon: DEFAULT_GUN_ID,
-			} satisfies EquipIntent)
-		}
+		if (event.code === "KeyR" && !event.repeat) this.#requestReload()
+		if (isWeaponSwitchKeyboardInput(event.code, event.repeat))
+			this.#requestSwitch(1)
+		if (event.code === "KeyX" && !event.repeat) this.#requestDrop()
 	}
 
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
@@ -449,6 +460,17 @@ export class ArenaGame {
 			-1.42,
 			1.42,
 		)
+	}
+
+	readonly #onWheel = (event: WheelEvent): void => {
+		const update = debounceWheelInput(
+			event.deltaY,
+			performance.now(),
+			this.#lastWheelEventAt,
+		)
+		this.#lastWheelEventAt = update.lastEventAtMs
+		if (!update.triggered || update.direction === null) return
+		this.#requestSwitch(update.direction === "next" ? 1 : -1)
 	}
 
 	readonly #onMouseDown = (event: MouseEvent): void => {
@@ -474,11 +496,15 @@ export class ArenaGame {
 
 	readonly #onConnect = (): void => {
 		this.#connected = true
+		this.#equipmentRevision = -1
 		this.#socket.emit("arena:ready")
 	}
 
 	readonly #onDisconnect = (): void => {
 		this.#connected = false
+		this.#pickupHoldState = IDLE_HOLD_INPUT_STATE
+		this.#pickupProgress = 0
+		this.#equipmentRevision = -1
 		this.#drones.reset()
 		for (const projectile of this.#projectiles) {
 			this.#scene.remove(projectile.mesh)
@@ -509,6 +535,8 @@ export class ArenaGame {
 			!Number.isSafeInteger(spawn.damageSequence)
 		)
 			return
+		this.#pickupHoldState = IDLE_HOLD_INPUT_STATE
+		this.#pickupProgress = 0
 		this.#player.position.set(
 			x,
 			this.#heightAt(x, z) + PILOT_STANDING_EYE_HEIGHT,
@@ -770,10 +798,17 @@ export class ArenaGame {
 	}
 
 	readonly #onEquipment = (equipment: unknown): void => {
-		if (!isEquipmentSnapshot(equipment)) return
-		this.#weaponKind = equipment.weapon
-		this.#ammo = equipment.ammo
-		this.#setLocalGunModel(equipment.weapon)
+		if (!isNewEquipmentSnapshot(equipment, this.#equipmentRevision)) return
+		this.#equipmentRevision = equipment.revision
+		this.#activeSlot = equipment.activeSlot
+		this.#equipmentSlots = [
+			{ ...equipment.slots[0] },
+			equipment.slots[1] === null ? null : { ...equipment.slots[1] },
+		]
+		const active = activeEquipmentSlot(equipment)
+		this.#weaponKind = active.weapon
+		this.#ammo = active.ammo
+		this.#setLocalGunModel(active.weapon)
 	}
 
 	readonly #onIncomingLock = (lock: IncomingLockSnapshot): void => {
@@ -852,6 +887,7 @@ export class ArenaGame {
 		window.addEventListener("keyup", this.#onKeyUp)
 		window.addEventListener("mousemove", this.#onMouseMove)
 		window.addEventListener("mousedown", this.#onMouseDown)
+		window.addEventListener("wheel", this.#onWheel, { passive: true })
 		window.addEventListener("contextmenu", this.#onContextMenu)
 		window.addEventListener("resize", this.#resize)
 		this.#socket.on("connect", this.#onConnect)
@@ -1028,6 +1064,7 @@ export class ArenaGame {
 		pickup: boolean
 		reload: boolean
 		sprint: boolean
+		switchWeapon: boolean
 		wave: boolean
 		x: number
 		y: number
@@ -1044,6 +1081,7 @@ export class ArenaGame {
 				pickup: false,
 				reload: false,
 				sprint: false,
+				switchWeapon: false,
 				wave: false,
 				x: 0,
 				y: 0,
@@ -1063,6 +1101,7 @@ export class ArenaGame {
 		const pickup = isPickupGamepadInput(gamepad.buttons)
 		const reload = gamepad.buttons[5]?.pressed ?? false
 		const sprint = gamepad.buttons[10]?.pressed ?? false
+		const switchWeapon = isWeaponSwitchGamepadInput(gamepad.buttons)
 		const wave = gamepad.buttons[12]?.pressed ?? false
 		return {
 			crouch,
@@ -1073,6 +1112,7 @@ export class ArenaGame {
 			pickup,
 			reload,
 			sprint,
+			switchWeapon,
 			wave,
 			x: deadzone(gamepad.axes[0] ?? 0),
 			y: deadzone(gamepad.axes[1] ?? 0),
@@ -1081,9 +1121,26 @@ export class ArenaGame {
 
 	#updatePhysics(delta: number): void {
 		const gamepad = this.#pollGamepad()
-		const pickupEdge = inputEdge(gamepad.pickup, this.#pickupHeld)
-		this.#pickupHeld = pickupEdge.held
-		if (pickupEdge.triggered) this.#requestPickup()
+		const switchEdge = inputEdge(gamepad.switchWeapon, this.#switchHeld)
+		this.#switchHeld = switchEdge.held
+		if (switchEdge.triggered) this.#requestSwitch(1)
+		const pickupNearby = this.#isPickupNearby()
+		const activeGun = gunDefinition(this.#weaponKind)
+		const rightBumperAction = contextualRightBumperAction(
+			pickupNearby,
+			activeGun.capabilities.reload && this.#ammo < activeGun.magazineSize,
+		)
+		const pickupPressed =
+			this.#keys.has("KeyE") ||
+			(gamepad.pickup && rightBumperAction === "pickup")
+		const pickupHold = updateHoldInput(
+			this.#pickupHoldState,
+			this.#connected && pickupNearby && pickupPressed,
+			performance.now(),
+		)
+		this.#pickupHoldState = pickupHold.state
+		this.#pickupProgress = pickupHold.progress
+		if (pickupHold.event === "completed") this.#requestPickup()
 		if (gamepad.wave && !this.#dPadUpHeld) {
 			this.#waveStartedAt = Date.now() / 1_000
 			this.#waveUntil = performance.now() / 1_000 + WAVE_DURATION_SECONDS
@@ -1111,9 +1168,9 @@ export class ArenaGame {
 		if (
 			gamepad.reload &&
 			!this.#rightBumperHeld &&
-			gunDefinition(this.#weaponKind).capabilities.reload
+			rightBumperAction === "reload"
 		)
-			this.#ammo = gunDefinition(this.#weaponKind).magazineSize
+			this.#requestReload()
 		this.#rightBumperHeld = gamepad.reload
 		const lookSensitivity = this.#freeAim ? 1.15 : 2.7
 		this.#player.yaw -= this.#lookGamepad.x * delta * lookSensitivity
@@ -1231,11 +1288,57 @@ export class ArenaGame {
 		this.#grenadeCooldown -= delta
 	}
 
+	#isPickupNearby(): boolean {
+		return (
+			this.#pickupAvailable &&
+			this.#equipmentSlots[1] === null &&
+			this.#player.position.distanceTo(this.#pickupPosition) <=
+				MINI_MISSILE_PICKUP_RADIUS
+		)
+	}
+
+	#nextInventoryActionId(): number {
+		this.#inventoryActionSequence += 1
+		return this.#inventoryActionSequence
+	}
+
 	#requestPickup(): void {
-		this.#pickupSequence += 1
-		this.#socket.emit("arena:collect-mini-missile", {
-			clientPickupId: this.#pickupSequence,
-		} satisfies MiniMissilePickupIntent)
+		if (!this.#connected) return
+		this.#socket.emit("arena:inventory-action", {
+			clientActionId: this.#nextInventoryActionId(),
+			type: "collect",
+		} satisfies InventoryActionIntent)
+	}
+
+	#requestSwitch(direction: -1 | 1): void {
+		if (!this.#connected || this.#equipmentSlots[1] === null) return
+		this.#socket.emit("arena:inventory-action", {
+			clientActionId: this.#nextInventoryActionId(),
+			direction,
+			type: "switch",
+		} satisfies InventoryActionIntent)
+	}
+
+	#requestDrop(): void {
+		if (!this.#connected || this.#equipmentSlots[1] === null) return
+		this.#socket.emit("arena:inventory-action", {
+			clientActionId: this.#nextInventoryActionId(),
+			type: "drop-mini-missile",
+		} satisfies InventoryActionIntent)
+	}
+
+	#requestReload(): void {
+		const gun = gunDefinition(this.#weaponKind)
+		if (
+			!this.#connected ||
+			!gun.capabilities.reload ||
+			this.#ammo >= gun.magazineSize
+		)
+			return
+		this.#socket.emit("arena:inventory-action", {
+			clientActionId: this.#nextInventoryActionId(),
+			type: "reload",
+		} satisfies InventoryActionIntent)
 	}
 
 	#fire(): void {
@@ -1251,7 +1354,6 @@ export class ArenaGame {
 		this.#fireCooldown = gun.fire.clientCooldownSeconds
 		this.#weaponsFreeUntil =
 			performance.now() / 1_000 + WEAPONS_FREE_COOLDOWN_SECONDS
-		if (gun.fire.type === "projectile") this.#ammo -= 1
 		this.#camera.position.copy(this.#player.position)
 		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
 		this.#camera.updateMatrixWorld(true)
@@ -2016,12 +2118,10 @@ export class ArenaGame {
 		this.#hudElapsed += delta
 		if (this.#hudElapsed < 0.09) return
 		this.#hudElapsed = 0
-		const pickupNearby =
-			this.#pickupAvailable &&
-			this.#player.position.distanceTo(this.#pickupPosition) <=
-				MINI_MISSILE_PICKUP_RADIUS
+		const pickupNearby = this.#isPickupNearby()
 		this.#onHud({
 			ammo: this.#ammo,
+			activeSlot: this.#activeSlot,
 			connection: this.#connected
 				? "online"
 				: this.#socket.active
@@ -2038,14 +2138,14 @@ export class ArenaGame {
 			lockCountdown: Math.ceil(this.#targetEscapeRemaining),
 			players: this.#remotePlayers.size + 1,
 			pickup:
-				gunDefinition(this.#weaponKind).capabilities.pickup ||
-				this.#pickupOwnerId !== null
+				this.#equipmentSlots[1] !== null || this.#pickupOwnerId !== null
 					? "carried"
 					: pickupNearby
 						? "nearby"
 						: this.#pickupAvailable
 							? "available"
 							: "respawning",
+			pickupProgress: pickupNearby ? this.#pickupProgress : 0,
 			reticleX: this.#reticleX,
 			reticleY: this.#reticleY,
 			recoilPulse: this.#recoilPulse,
@@ -2057,6 +2157,12 @@ export class ArenaGame {
 			),
 			targeting: this.#targetingState,
 			weapon: this.#weaponKind,
+			weaponSlots: [
+				{ ...this.#equipmentSlots[0] },
+				this.#equipmentSlots[1] === null
+					? null
+					: { ...this.#equipmentSlots[1] },
+			],
 		})
 	}
 
