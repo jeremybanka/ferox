@@ -187,7 +187,7 @@ export function sampleSlideAnimationPose(
 			}),
 		},
 		leftKnee: {
-			rotation: { x: Math.PI, y: 0, z: 0 },
+			rotation: { x: -Math.PI, y: 0, z: 0 },
 		},
 		leftFoot: {
 			rotation: constrainLegRotation("leftFoot", {
@@ -198,7 +198,7 @@ export function sampleSlideAnimationPose(
 		},
 		rightLeg: {
 			rotation: constrainLegRotation("rightLeg", {
-				x: 2.46,
+				x: 1.1,
 				y: 0.14,
 				z: 0.08 - strafe * 0.12,
 			}),
