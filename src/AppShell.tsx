@@ -153,6 +153,17 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					</pickup-progress>
 				</pickup-prompt>
 
+				<drone-recovery-prompt
+					data-active={hud.droneWreckNearby}
+					aria-hidden={!hud.droneWreckNearby}
+				>
+					<strong>DRONE CORE RECOVERABLE</strong>
+					<span>
+						<kbd>E</kbd>
+						<kbd>RB</kbd> TAP TO SALVAGE
+					</span>
+				</drone-recovery-prompt>
+
 				<smart-target-zone data-state={hud.targeting} aria-hidden="true">
 					<free-aim-label>
 						<strong>FREE AIM</strong>
@@ -204,6 +215,17 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<small>✅ TARGET LOCKED</small>
 					</target-lock-box>
 				</cross-hair>
+				<lead-cross-hair
+					data-visible={hud.leadReticleVisible}
+					style={{
+						"--lead-reticle-x": `${hud.leadReticleX * 100}%`,
+						"--lead-reticle-y": `${hud.leadReticleY * 100}%`,
+					}}
+					aria-hidden="true"
+				>
+					<i />
+					<i />
+				</lead-cross-hair>
 
 				<speed-readout data-active={hud.speed > 2}>
 					<small>VELOCITY</small>
@@ -233,6 +255,13 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</player-vitals>
 
 				<weapon-status>
+					<grenade-status data-active={hud.grenadeKind === "drone"}>
+						<kbd>2 / X</kbd>
+						<strong>
+							{hud.grenadeKind === "drone" ? "DRONE SHURIKEN" : "FRAG"}
+						</strong>
+						<span>×{hud.droneGrenades}</span>
+					</grenade-status>
 					<weapon-slots aria-label="Weapon slots">
 						{hud.weaponSlots.map((slot, index) => (
 							<weapon-slot key={index} data-active={hud.activeSlot === index}>
@@ -298,6 +327,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>SWITCH</span>
 						<kbd>RMB / LT</kbd>
 						<span>GRENADE</span>
+						<kbd>2 / X</kbd>
+						<span>GRENADE TYPE</span>
 						<kbd>HOLD E / RB</kbd>
 						<span>PICK UP</span>
 						<kbd>R / RB</kbd>

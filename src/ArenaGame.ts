@@ -6,6 +6,8 @@ import type {
 	CombatSnapshot,
 	DirectHitResult,
 	DroneDestroyedSnapshot,
+	DroneInventorySnapshot,
+	DroneRecoveryIntent,
 	EquipmentSlots,
 	FireIntent,
 	FistContactResult,
@@ -13,6 +15,8 @@ import type {
 	GestureIntent,
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
+	GrenadeKind,
+	GrenadeSelectionIntent,
 	GrenadeSnapshot,
 	IncomingLockSnapshot,
 	IncomingStandardLockSnapshot,
@@ -46,8 +50,10 @@ import type { GameAudioDefinition } from "./audio/GameAudioDefinitions.ts"
 import { DamageParticleBurst } from "./DamageParticles.ts"
 import { FistContactParticleBurst } from "./FistContactParticles.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
+import { DroneSalvageSystem } from "./DroneSalvageSystem.ts"
 import {
 	FREE_AIM_TAP_THRESHOLD_MS,
+	DRONE_WRECK_RECOVERY_RADIUS,
 	GRENADE_BOUNCE_DAMPING,
 	GRENADE_FUSE_SECONDS,
 	GRENADE_GRAVITY,
@@ -59,6 +65,12 @@ import {
 	PLAYER_SLIDE_DUST_BUDGET,
 	PLAYER_SLIDE_DUST_LIFETIME_SECONDS,
 	SMART_TARGET_RADIUS_SCREEN,
+	SMART_TARGET_LEAD_DAMPING,
+	SMART_TARGET_LEAD_DEAD_ZONE_RADIANS_PER_SECOND,
+	SMART_TARGET_LEAD_DRIVE,
+	SMART_TARGET_LEAD_MAX_SCREEN_OFFSET,
+	SMART_TARGET_LEAD_MAX_STEP_SECONDS,
+	SMART_TARGET_LEAD_SPRING,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
 } from "./game-constants.ts"
@@ -68,6 +80,8 @@ import {
 	IDLE_HOLD_INPUT_STATE,
 	inputEdge,
 	gamepadGestureInputs,
+	isGrenadeSwitchGamepadInput,
+	isGrenadeSwitchKeyboardInput,
 	isPickupGamepadInput,
 	isWeaponSwitchGamepadInput,
 	isWeaponSwitchKeyboardInput,
@@ -215,7 +229,10 @@ import {
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 import {
 	pilotSmartTargetCandidateFromRoot,
+	INITIAL_SMART_TARGET_LEAD,
+	sameSmartTarget,
 	selectBestSmartTarget,
+	stepSmartTargetLead,
 	type SmartTargetCandidate,
 	type SmartTargetRef,
 } from "./smart-targeting.ts"
@@ -339,6 +356,7 @@ export class ArenaGame {
 	readonly #canvas: HTMLCanvasElement
 	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 280)
 	readonly #drones: DroneBotSystem
+	readonly #droneSalvage: DroneSalvageSystem
 	readonly #damageEffects = new BoundedDamageEffects<DamageParticleBurst>()
 	readonly #fistContactEffects =
 		new BoundedDamageEffects<FistContactParticleBurst>()
@@ -400,6 +418,10 @@ export class ArenaGame {
 	#freeAim = false
 	#grenadeCooldown = 0
 	#grenadeHeld = false
+	#grenadeSwitchHeld = false
+	#grenadeKind: GrenadeKind = "standard"
+	#droneGrenades = 0
+	#droneActionSequence = 0
 	#grenadeSequence = 0
 	#health = 100
 	#localDamageTracker = initialDamageFeedbackTracker()
@@ -418,6 +440,13 @@ export class ArenaGame {
 	#lockedTargetId: SmartTargetRef | null = null
 	#lockToggleQueued = false
 	#lookGamepad = new THREE.Vector2()
+	#cameraAngularVelocity = new THREE.Vector2()
+	#mouseLookDelta = new THREE.Vector2()
+	#mouseLookDragging = false
+	#leadOffset = { ...INITIAL_SMART_TARGET_LEAD }
+	#leadTargetId: SmartTargetRef | null = null
+	#leadReticleX = 0.5
+	#leadReticleY = 0.5
 	#noiseTimer = 0
 	#reticleX = 0.5
 	#reticleY = 0.5
@@ -490,6 +519,7 @@ export class ArenaGame {
 		this.#drones = new DroneBotSystem({
 			scene: this.#scene,
 		})
+		this.#droneSalvage = new DroneSalvageSystem(this.#scene)
 		this.#bindEvents()
 		this.#player.position.y = this.#heightAt(0, 13) + PILOT_STANDING_EYE_HEIGHT
 		this.#connected = this.#socket.connected
@@ -513,6 +543,7 @@ export class ArenaGame {
 		window.removeEventListener("keyup", this.#onKeyUp)
 		window.removeEventListener("mousemove", this.#onMouseMove)
 		window.removeEventListener("mousedown", this.#onMouseDown)
+		window.removeEventListener("mouseup", this.#onMouseUp)
 		window.removeEventListener("wheel", this.#onWheel)
 		window.removeEventListener("contextmenu", this.#onContextMenu)
 		window.removeEventListener("resize", this.#resize)
@@ -526,6 +557,7 @@ export class ArenaGame {
 		this.#socket.off("arena:melee-hit", this.#onMeleeHit)
 		this.#socket.off("arena:fist-contact", this.#onFistContact)
 		this.#socket.off("arena:drone-destroyed", this.#onDroneDestroyed)
+		this.#socket.off("arena:drone-inventory", this.#onDroneInventory)
 		this.#socket.off("arena:grenade", this.#onGrenade)
 		this.#socket.off("arena:grenade-exploded", this.#onGrenadeExploded)
 		this.#socket.off("arena:equipment", this.#onEquipment)
@@ -542,6 +574,7 @@ export class ArenaGame {
 		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
+		this.#droneSalvage.dispose()
 		this.#damageEffects.clear()
 		this.#fistContactEffects.clear()
 		for (const flash of this.#muzzleFlashes) {
@@ -578,6 +611,9 @@ export class ArenaGame {
 		if (event.code === "KeyR" && !event.repeat) this.#requestReload()
 		if (isWeaponSwitchKeyboardInput(event.code, event.repeat))
 			this.#requestSwitch(1)
+		if (isGrenadeSwitchKeyboardInput(event.code, event.repeat))
+			this.#requestGrenadeCycle()
+		if (event.code === "KeyE" && !event.repeat) this.#requestDroneRecovery()
 		if (event.code === "KeyX" && !event.repeat) this.#requestDrop()
 		const gesture = keyboardGestureInput(event.code, event.repeat)
 		if (gesture !== null) this.#requestGesture(gesture)
@@ -589,8 +625,14 @@ export class ArenaGame {
 
 	readonly #onMouseMove = (event: MouseEvent): void => {
 		if (this.#dead) return
-		if (document.pointerLockElement !== this.#canvas) return
+		if (
+			document.pointerLockElement !== this.#canvas &&
+			!this.#mouseLookDragging
+		)
+			return
 		const sensitivity = this.#freeAim ? 0.000_85 : 0.0018
+		this.#mouseLookDelta.x += event.movementX * sensitivity
+		this.#mouseLookDelta.y += event.movementY * sensitivity
 		this.#player.yaw -= event.movementX * sensitivity
 		this.#player.pitch = THREE.MathUtils.clamp(
 			this.#player.pitch - event.movementY * sensitivity,
@@ -615,8 +657,13 @@ export class ArenaGame {
 			if (event.target !== this.#canvas) return
 			this.start()
 		}
+		if (event.target === this.#canvas) this.#mouseLookDragging = true
 		if (event.button === 0) this.#fire()
 		if (event.button === 2) this.#throwGrenade()
+	}
+
+	readonly #onMouseUp = (): void => {
+		this.#mouseLookDragging = false
 	}
 
 	readonly #onContextMenu = (event: MouseEvent): void => {
@@ -645,6 +692,9 @@ export class ArenaGame {
 		this.#equipmentRevision = -1
 		this.#cancelReloadPresentation()
 		this.#drones.reset()
+		this.#droneSalvage.dispose()
+		this.#droneGrenades = 0
+		this.#grenadeKind = "standard"
 		for (const projectile of this.#projectiles) {
 			this.#scene.remove(projectile.mesh)
 		}
@@ -1043,6 +1093,17 @@ export class ArenaGame {
 		this.#drones.showDestroyed(destroyed)
 	}
 
+	readonly #onDroneInventory = (inventory: DroneInventorySnapshot): void => {
+		if (
+			!Number.isSafeInteger(inventory.count) ||
+			inventory.count < 0 ||
+			(inventory.selected !== "drone" && inventory.selected !== "standard")
+		)
+			return
+		this.#droneGrenades = inventory.count
+		this.#grenadeKind = inventory.selected
+	}
+
 	readonly #onGrenade = (grenade: GrenadeSnapshot): void => {
 		this.#spawnGrenade(grenade)
 	}
@@ -1157,6 +1218,7 @@ export class ArenaGame {
 
 	readonly #onSnapshot = (snapshot: ArenaSnapshot): void => {
 		this.#drones.applySnapshot(snapshot)
+		this.#droneSalvage.applySnapshot(snapshot)
 		const activeMissiles = new Set<number>()
 		for (const missile of snapshot.missiles) {
 			activeMissiles.add(missile.id)
@@ -1173,6 +1235,7 @@ export class ArenaGame {
 		window.addEventListener("keyup", this.#onKeyUp)
 		window.addEventListener("mousemove", this.#onMouseMove)
 		window.addEventListener("mousedown", this.#onMouseDown)
+		window.addEventListener("mouseup", this.#onMouseUp)
 		window.addEventListener("wheel", this.#onWheel, { passive: true })
 		window.addEventListener("contextmenu", this.#onContextMenu)
 		window.addEventListener("resize", this.#resize)
@@ -1186,6 +1249,7 @@ export class ArenaGame {
 		this.#socket.on("arena:melee-hit", this.#onMeleeHit)
 		this.#socket.on("arena:fist-contact", this.#onFistContact)
 		this.#socket.on("arena:drone-destroyed", this.#onDroneDestroyed)
+		this.#socket.on("arena:drone-inventory", this.#onDroneInventory)
 		this.#socket.on("arena:grenade", this.#onGrenade)
 		this.#socket.on("arena:grenade-exploded", this.#onGrenadeExploded)
 		this.#socket.on("arena:equipment", this.#onEquipment)
@@ -1394,6 +1458,7 @@ export class ArenaGame {
 		salute: boolean
 		sprint: boolean
 		switchWeapon: boolean
+		switchGrenade: boolean
 		wave: boolean
 		x: number
 		y: number
@@ -1414,6 +1479,7 @@ export class ArenaGame {
 				salute: false,
 				sprint: false,
 				switchWeapon: false,
+				switchGrenade: false,
 				wave: false,
 				x: 0,
 				y: 0,
@@ -1435,6 +1501,7 @@ export class ArenaGame {
 		const sprint = gamepad.buttons[10]?.pressed ?? false
 		const switchWeapon = isWeaponSwitchGamepadInput(gamepad.buttons)
 		const gestures = gamepadGestureInputs(gamepad.buttons)
+		const switchGrenade = isGrenadeSwitchGamepadInput(gamepad.buttons)
 		return {
 			crouch,
 			fire,
@@ -1448,6 +1515,7 @@ export class ArenaGame {
 			salute: gestures.salute,
 			sprint,
 			switchWeapon,
+			switchGrenade,
 			wave: gestures.wave,
 			x: deadzone(gamepad.axes[0] ?? 0),
 			y: deadzone(gamepad.axes[1] ?? 0),
@@ -1471,10 +1539,17 @@ export class ArenaGame {
 		const switchEdge = inputEdge(gamepad.switchWeapon, this.#switchHeld)
 		this.#switchHeld = switchEdge.held
 		if (switchEdge.triggered) this.#requestSwitch(1)
-		const pickupNearby = this.#isPickupNearby()
+		const grenadeSwitchEdge = inputEdge(
+			gamepad.switchGrenade,
+			this.#grenadeSwitchHeld,
+		)
+		this.#grenadeSwitchHeld = grenadeSwitchEdge.held
+		if (grenadeSwitchEdge.triggered) this.#requestGrenadeCycle()
+		const droneWreckNearby = this.#isDroneWreckNearby()
+		const pickupNearby = this.#isPickupNearby() && !droneWreckNearby
 		const activeGun = gunDefinition(this.#weaponKind)
 		const rightBumperAction = contextualRightBumperAction(
-			pickupNearby,
+			pickupNearby || droneWreckNearby,
 			activeGun.capabilities.reload && this.#ammo < activeGun.magazineSize,
 		)
 		const pickupPressed =
@@ -1512,6 +1587,8 @@ export class ArenaGame {
 			this.#freeAim = false
 		}
 		this.#leftBumperHeld = freeAimPressed
+		if (gamepad.reload && !this.#rightBumperHeld && droneWreckNearby)
+			this.#requestDroneRecovery()
 		if (
 			gamepad.reload &&
 			!this.#rightBumperHeld &&
@@ -1520,6 +1597,13 @@ export class ArenaGame {
 			this.#requestReload()
 		this.#rightBumperHeld = gamepad.reload
 		const lookSensitivity = this.#freeAim ? 1.15 : 2.7
+		this.#cameraAngularVelocity.set(
+			this.#mouseLookDelta.x / Math.max(delta, 1 / 240) +
+				this.#lookGamepad.x * lookSensitivity,
+			this.#mouseLookDelta.y / Math.max(delta, 1 / 240) +
+				this.#lookGamepad.y * lookSensitivity * 0.84,
+		)
+		this.#mouseLookDelta.set(0, 0)
 		this.#player.yaw -= this.#lookGamepad.x * delta * lookSensitivity
 		this.#player.pitch = THREE.MathUtils.clamp(
 			this.#player.pitch - this.#lookGamepad.y * delta * lookSensitivity * 0.84,
@@ -1725,9 +1809,43 @@ export class ArenaGame {
 		)
 	}
 
+	#isDroneWreckNearby(): boolean {
+		return (
+			this.#droneSalvage.nearestWreck(
+				this.#player.position,
+				DRONE_WRECK_RECOVERY_RADIUS,
+			) !== null
+		)
+	}
+
 	#nextInventoryActionId(): number {
 		this.#inventoryActionSequence += 1
 		return this.#inventoryActionSequence
+	}
+
+	#nextDroneActionId(): number {
+		this.#droneActionSequence += 1
+		return this.#droneActionSequence
+	}
+
+	#requestGrenadeCycle(): void {
+		if (!this.#connected || this.#dead) return
+		this.#socket.emit("arena:cycle-grenade", {
+			clientActionId: this.#nextDroneActionId(),
+		} satisfies GrenadeSelectionIntent)
+	}
+
+	#requestDroneRecovery(): void {
+		if (!this.#connected || this.#dead) return
+		const wreck = this.#droneSalvage.nearestWreck(
+			this.#player.position,
+			DRONE_WRECK_RECOVERY_RADIUS,
+		)
+		if (wreck === null) return
+		this.#socket.emit("arena:recover-drone", {
+			clientActionId: this.#nextDroneActionId(),
+			wreckId: wreck.id,
+		} satisfies DroneRecoveryIntent)
 	}
 
 	#requestPickup(): void {
@@ -1873,6 +1991,7 @@ export class ArenaGame {
 		this.#socket.emit("arena:throw-grenade", {
 			clientGrenadeId: this.#grenadeSequence,
 			direction: direction.toArray(),
+			kind: this.#grenadeKind,
 			origin: origin.toArray(),
 		} satisfies GrenadeIntent)
 	}
@@ -2084,11 +2203,24 @@ export class ArenaGame {
 			this.#acquiredTargetId === null
 				? null
 				: this.#getSmartTargetPosition(this.#acquiredTargetId)
-		return acquiredPosition === null
-			? new THREE.Vector3(0, 0, -1)
-					.applyQuaternion(this.#camera.quaternion)
-					.normalize()
-			: acquiredPosition.sub(origin).normalize()
+		if (acquiredPosition === null) {
+			return new THREE.Vector3(0, 0, -1)
+				.applyQuaternion(this.#camera.quaternion)
+				.normalize()
+		}
+		if (
+			this.#targetingState !== "acquired" &&
+			this.#targetingState !== "locked"
+		) {
+			return acquiredPosition.sub(origin).normalize()
+		}
+		const projected = acquiredPosition.clone().project(this.#camera)
+		const ledPoint = new THREE.Vector3(
+			this.#leadReticleX * 2 - 1,
+			1 - this.#leadReticleY * 2,
+			projected.z,
+		).unproject(this.#camera)
+		return ledPoint.sub(origin).normalize()
 	}
 
 	#spawnProjectile(
@@ -2509,7 +2641,7 @@ export class ArenaGame {
 
 	#getSmartTargetCandidates(): SmartTargetCandidate[] {
 		const candidates: SmartTargetCandidate[] = this.#drones
-			.getTargetCandidates()
+			.getTargetCandidates(this.#socket.id)
 			.map((candidate) => ({
 				position: candidate.position.toArray(),
 				ref: { id: candidate.id, kind: "drone" },
@@ -2574,6 +2706,45 @@ export class ArenaGame {
 		this.#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
 		this.#targetLostFlashRemaining = TARGET_LOST_FLASH_MS
 		this.#targetingState = "lost"
+	}
+
+	#updateSmartTargetLead(delta: number): void {
+		const active =
+			(this.#targetingState === "acquired" ||
+				this.#targetingState === "locked") &&
+			this.#acquiredTargetId !== null
+		const targetId = active ? this.#acquiredTargetId : null
+		if (!sameSmartTarget(this.#leadTargetId, targetId)) {
+			this.#leadOffset = { ...INITIAL_SMART_TARGET_LEAD }
+		}
+		this.#leadTargetId = targetId
+		if (!active) {
+			this.#leadOffset = { ...INITIAL_SMART_TARGET_LEAD }
+		}
+		this.#leadOffset = stepSmartTargetLead(
+			this.#leadOffset,
+			this.#cameraAngularVelocity,
+			delta,
+			{
+				damping: SMART_TARGET_LEAD_DAMPING,
+				deadZone: SMART_TARGET_LEAD_DEAD_ZONE_RADIANS_PER_SECOND,
+				drive: SMART_TARGET_LEAD_DRIVE,
+				maxOffset: SMART_TARGET_LEAD_MAX_SCREEN_OFFSET,
+				maxStepSeconds: SMART_TARGET_LEAD_MAX_STEP_SECONDS,
+				spring: SMART_TARGET_LEAD_SPRING,
+			},
+			active,
+		)
+		this.#leadReticleX = THREE.MathUtils.clamp(
+			this.#reticleX + this.#leadOffset.x,
+			0.02,
+			0.98,
+		)
+		this.#leadReticleY = THREE.MathUtils.clamp(
+			this.#reticleY + this.#leadOffset.y,
+			0.02,
+			0.98,
+		)
 	}
 
 	#updateWeaponPosture(delta: number): void {
@@ -2957,7 +3128,15 @@ export class ArenaGame {
 			incomingMissileLocks: this.#incomingMissileLocks,
 			incomingStandardLocks: this.#incomingStandardLocks,
 			drones: this.#drones.count,
+			droneGrenades: this.#droneGrenades,
+			droneWreckNearby: this.#isDroneWreckNearby(),
+			grenadeKind: this.#grenadeKind,
 			jump: this.#player.jumps,
+			leadReticleVisible:
+				this.#targetingState === "acquired" ||
+				this.#targetingState === "locked",
+			leadReticleX: this.#leadReticleX,
+			leadReticleY: this.#leadReticleY,
 			lockCountdown: Math.ceil(this.#targetEscapeRemaining),
 			players: this.#remotePlayers.size + 1,
 			pickup:
@@ -3051,6 +3230,7 @@ export class ArenaGame {
 		}
 		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)
 		this.#drones.update(delta)
+		this.#droneSalvage.update(delta)
 		this.#updateMuzzleFlashes(delta)
 		this.#damageEffects.update(delta)
 		this.#fistContactEffects.update(delta)
@@ -3061,6 +3241,7 @@ export class ArenaGame {
 		this.#updateRemotePlayers(delta)
 		this.#updateCamera(delta)
 		this.#updateTargeting(delta)
+		this.#updateSmartTargetLead(delta)
 		this.#syncStandardLockIntent()
 		this.#updateWeaponPosture(delta)
 		this.#sendSnapshot(delta)

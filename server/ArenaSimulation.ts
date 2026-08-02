@@ -5,9 +5,12 @@ import type {
 	DirectHitClassification,
 	DirectHitResult,
 	DroneDestroyedSnapshot,
+	DroneInventorySnapshot,
 	DroneMood,
+	DronePayloadSnapshot,
 	DronePersonality,
 	DroneSnapshot,
+	DroneWreckSnapshot,
 	FireIntent,
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
@@ -26,9 +29,20 @@ import { isMiniMissileTargetRef } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
 import {
 	DRONE_AUDITORY_RADIUS,
+	DEPLOYED_DRONE_LIFETIME_SECONDS,
+	DEPLOYED_DRONE_OWNER_CAP,
+	DRONE_ARENA_BOUND,
+	DRONE_HARD_RECOVERY_DISTANCE,
+	DRONE_PAYLOAD_ACTIVATION_DISTANCE,
+	DRONE_PAYLOAD_LIFETIME_SECONDS,
+	DRONE_PAYLOAD_SPEED,
 	DRONE_POPULATION_CAP,
+	DRONE_RETURN_SPEED,
+	DRONE_SOFT_LEASH_DISTANCE,
 	DRONE_VISION_DISTANCE,
 	DRONE_VISION_HALF_ANGLE,
+	DRONE_WRECK_LIFETIME_SECONDS,
+	DRONE_WRECK_RECOVERY_RADIUS,
 	GRENADE_BLAST_RADIUS,
 	GRENADE_BOUNCE_DAMPING,
 	GRENADE_FUSE_SECONDS,
@@ -38,6 +52,7 @@ import {
 	GRENADE_THROW_SPEED,
 	PLAYER_HEADSHOT_MULTIPLIER,
 	PLAYER_PROJECTILE_DAMAGE,
+	RECOVERED_DRONE_INVENTORY_CAP,
 	grenadeDamageAtDistance,
 	MINI_MISSILE_BLAST_RADIUS,
 	MINI_MISSILE_GRAVITY,
@@ -73,6 +88,7 @@ export type SimulationPlayer = {
 export type SimulationDroneSeed = {
 	health?: number
 	id: number
+	ownerId?: string | null
 	personality?: DronePersonality
 	position: Vector3Tuple
 	stationary?: boolean
@@ -89,6 +105,7 @@ type DroneState = {
 	health: number
 	id: number
 	mood: DroneMood
+	ownerId: string | null
 	personality: DronePersonality
 	position: THREE.Vector3
 	stationary: boolean
@@ -97,6 +114,25 @@ type DroneState = {
 	velocity: THREE.Vector3
 	wanderAngle: number
 	yaw: number
+	expiresAt: number
+}
+
+type DroneWreckState = {
+	expiresAt: number
+	id: number
+	personality: DronePersonality
+	position: THREE.Vector3
+}
+
+type DronePayloadState = {
+	distanceTraveled: number
+	id: number
+	life: number
+	ownerId: string
+	personality: DronePersonality
+	position: THREE.Vector3
+	rotation: number
+	velocity: THREE.Vector3
 }
 
 type ProjectileState = {
@@ -171,6 +207,9 @@ const TMP_B = new THREE.Vector3()
 
 export class ArenaSimulation {
 	readonly #drones: DroneState[] = []
+	readonly #droneInventories = new Map<string, DroneInventorySnapshot>()
+	readonly #dronePayloads: DronePayloadState[] = []
+	readonly #droneWrecks: DroneWreckState[] = []
 	readonly #emitDroneDestroyed: ArenaSimulationOptions["emitDroneDestroyed"]
 	readonly #emitGrenade: ArenaSimulationOptions["emitGrenade"]
 	readonly #emitGrenadeExploded: ArenaSimulationOptions["emitGrenadeExploded"]
@@ -181,6 +220,7 @@ export class ArenaSimulation {
 	readonly #emitProjectileEnded: ArenaSimulationOptions["emitProjectileEnded"]
 	readonly #getPlayers: ArenaSimulationOptions["getPlayers"]
 	readonly #grenades: GrenadeState[] = []
+	readonly #lastGrenadeIntent = new Map<string, number>()
 	readonly #lastMissileIntent = new Map<string, number>()
 	readonly #lastProjectileIntent = new Map<string, number>()
 	readonly #missiles: MiniMissileState[] = []
@@ -193,6 +233,7 @@ export class ArenaSimulation {
 	readonly #seed: number
 	#elapsed = 0
 	#nextDroneId = 1
+	#nextPayloadId = 1
 	#nextGrenadeId = 1
 	#nextMissileId = 1
 	#nextProjectileId = 1
@@ -223,6 +264,7 @@ export class ArenaSimulation {
 				health: seed.health ?? BODY_HEALTH[personality],
 				id: seed.id,
 				mood: "idle",
+				ownerId: seed.ownerId ?? null,
 				personality,
 				position: new THREE.Vector3(...seed.position),
 				stationary: seed.stationary ?? true,
@@ -231,9 +273,56 @@ export class ArenaSimulation {
 				velocity: new THREE.Vector3(),
 				wanderAngle: 0,
 				yaw: 0,
+				expiresAt: Number.POSITIVE_INFINITY,
 			})
 			this.#nextDroneId = Math.max(this.#nextDroneId, seed.id + 1)
 		}
+	}
+
+	connectPlayer(playerId: string): void {
+		this.#droneInventories.set(playerId, { count: 0, selected: "standard" })
+	}
+
+	droneInventory(playerId: string): DroneInventorySnapshot {
+		return (
+			this.#droneInventories.get(playerId) ?? { count: 0, selected: "standard" }
+		)
+	}
+
+	cycleGrenade(playerId: string): boolean {
+		const inventory = this.#droneInventories.get(playerId)
+		if (inventory === undefined) return false
+		inventory.selected =
+			inventory.selected === "standard" ? "drone" : "standard"
+		return true
+	}
+
+	recoverDrone(playerId: string, wreckId: number): boolean {
+		const player = this.#getPlayers().find(
+			(candidate) => candidate.id === playerId,
+		)
+		const inventory = this.#droneInventories.get(playerId)
+		const index = this.#droneWrecks.findIndex((wreck) => wreck.id === wreckId)
+		const wreck = this.#droneWrecks[index]
+		if (
+			player === undefined ||
+			inventory === undefined ||
+			wreck === undefined ||
+			inventory.count >= RECOVERED_DRONE_INVENTORY_CAP ||
+			wreck.position.distanceTo(new THREE.Vector3(...player.position)) >
+				DRONE_WRECK_RECOVERY_RADIUS
+		)
+			return false
+		this.#droneWrecks.splice(index, 1)
+		inventory.count += 1
+		inventory.selected = "drone"
+		return true
+	}
+
+	resetPlayerInventory(playerId: string): void {
+		const inventory = this.#droneInventories.get(playerId)
+		if (inventory !== undefined)
+			Object.assign(inventory, { count: 0, selected: "standard" })
 	}
 
 	get droneCount(): number {
@@ -250,8 +339,22 @@ export class ArenaSimulation {
 		if (drone !== undefined) this.#destroyDrone(drone, true, null)
 	}
 
-	removePlayer(playerId: string): void {
+	removePlayer(playerId: string, disconnected = false): void {
+		if (disconnected) {
+			this.#droneInventories.delete(playerId)
+			for (let index = this.#dronePayloads.length - 1; index >= 0; index -= 1) {
+				if (this.#dronePayloads[index]?.ownerId === playerId)
+					this.#dronePayloads.splice(index, 1)
+			}
+			for (let index = this.#drones.length - 1; index >= 0; index -= 1) {
+				const drone = this.#drones[index]
+				if (drone?.ownerId === playerId) this.#destroyDrone(drone, true, null)
+			}
+		} else {
+			this.resetPlayerInventory(playerId)
+		}
 		this.#lastMissileIntent.delete(playerId)
+		this.#lastGrenadeIntent.delete(playerId)
 		this.#lastProjectileIntent.delete(playerId)
 		for (let index = this.#missiles.length - 1; index >= 0; index -= 1) {
 			const missile = this.#missiles[index]
@@ -315,9 +418,13 @@ export class ArenaSimulation {
 		)
 		if (player === undefined) return false
 		if (
+			intent === null ||
+			typeof intent !== "object" ||
 			!this.#isVector(intent.origin) ||
 			!this.#isVector(intent.direction) ||
-			!Number.isSafeInteger(intent.clientGrenadeId)
+			!Number.isSafeInteger(intent.clientGrenadeId) ||
+			(intent.kind !== "drone" && intent.kind !== "standard") ||
+			intent.clientGrenadeId <= (this.#lastGrenadeIntent.get(playerId) ?? -1)
 		) {
 			return false
 		}
@@ -326,6 +433,36 @@ export class ArenaSimulation {
 		if (origin.distanceTo(playerPosition) > 3) return false
 		const direction = new THREE.Vector3(...intent.direction)
 		if (direction.lengthSq() < 0.8 || direction.lengthSq() > 1.2) return false
+		const inventory = this.#droneInventories.get(playerId)
+		if (intent.kind === "drone") {
+			if (inventory?.selected !== "drone" || inventory.count <= 0) return false
+			const deployed = this.#drones.filter(
+				(drone) => drone.ownerId === playerId,
+			).length
+			const payloads = this.#dronePayloads.filter(
+				(payload) => payload.ownerId === playerId,
+			).length
+			if (deployed + payloads >= DEPLOYED_DRONE_OWNER_CAP) return false
+			inventory.count -= 1
+			const velocity = direction
+				.normalize()
+				.multiplyScalar(DRONE_PAYLOAD_SPEED)
+				.addScaledVector(new THREE.Vector3(...player.velocity), 0.35)
+			this.#dronePayloads.push({
+				distanceTraveled: 0,
+				id: this.#nextPayloadId++,
+				life: DRONE_PAYLOAD_LIFETIME_SECONDS,
+				ownerId: playerId,
+				personality: "bully",
+				position: origin,
+				rotation: 0,
+				velocity,
+			})
+			this.#lastGrenadeIntent.set(playerId, intent.clientGrenadeId)
+			return true
+		}
+		if (intent.kind !== "standard" || inventory?.selected === "drone")
+			return false
 
 		const id = this.#nextGrenadeId
 		this.#nextGrenadeId += 1
@@ -347,6 +484,7 @@ export class ArenaSimulation {
 			ownerId: playerId,
 			velocity: velocity.toArray(),
 		})
+		this.#lastGrenadeIntent.set(playerId, intent.clientGrenadeId)
 		return true
 	}
 
@@ -406,6 +544,12 @@ export class ArenaSimulation {
 		this.#sequence += 1
 		return {
 			drones: this.#drones.map((drone) => this.#snapshotDrone(drone)),
+			dronePayloads: this.#dronePayloads.map((payload) =>
+				this.#snapshotDronePayload(payload),
+			),
+			droneWrecks: this.#droneWrecks.map((wreck) =>
+				this.#snapshotDroneWreck(wreck),
+			),
 			missiles: this.#missiles.map((missile) => this.#snapshotMissile(missile)),
 			sequence: this.#sequence,
 			serverTime: this.#elapsed * 1_000,
@@ -424,11 +568,17 @@ export class ArenaSimulation {
 		}
 		this.#updateProjectiles(delta, players)
 		this.#updateGrenades(delta, players)
+		this.#updateDronePayloads(delta)
+		this.#updateDroneWrecks()
 		this.#updateMissiles(delta, players)
 	}
 
 	#updateSpawning(delta: number, players: SimulationPlayer[]): void {
-		if (players.length === 0 || this.#drones.length >= DRONE_POPULATION_CAP) {
+		if (
+			players.length === 0 ||
+			this.#drones.filter((drone) => drone.ownerId === null).length >=
+				DRONE_POPULATION_CAP
+		) {
 			this.#spawnElapsed = 0
 			return
 		}
@@ -461,6 +611,7 @@ export class ArenaSimulation {
 			health: BODY_HEALTH[personality],
 			id: this.#nextDroneId,
 			mood: "idle",
+			ownerId: null,
 			personality,
 			position: new THREE.Vector3(x, arenaHeightAt(this.#seed, x, z) + 3.4, z),
 			stationary: false,
@@ -469,6 +620,7 @@ export class ArenaSimulation {
 			velocity: new THREE.Vector3(),
 			wanderAngle: Math.random() * Math.PI * 2,
 			yaw: Math.random() * Math.PI * 2,
+			expiresAt: Number.POSITIVE_INFINITY,
 		})
 		this.#nextDroneId += 1
 	}
@@ -477,13 +629,18 @@ export class ArenaSimulation {
 		const activeIds = new Set(players.map((player) => player.id))
 		for (const drone of this.#drones) {
 			for (const [playerId, threat] of drone.threat) {
-				if (!activeIds.has(playerId) || threat <= delta * 1.5) {
+				if (
+					playerId === drone.ownerId ||
+					!activeIds.has(playerId) ||
+					threat <= delta * 1.5
+				) {
 					drone.threat.delete(playerId)
 				} else {
 					drone.threat.set(playerId, threat - delta * 1.5)
 				}
 			}
 			for (const player of players) {
+				if (player.id === drone.ownerId) continue
 				const toPlayer = TMP_A.copy(new THREE.Vector3(...player.position)).sub(
 					drone.position,
 				)
@@ -539,6 +696,10 @@ export class ArenaSimulation {
 		delta: number,
 		players: readonly SimulationPlayer[],
 	): void {
+		if (drone.expiresAt <= this.#elapsed) {
+			this.#destroyDrone(drone, true, null)
+			return
+		}
 		drone.attackCooldown -= delta
 		const target =
 			drone.targetPlayerId === null
@@ -559,8 +720,48 @@ export class ArenaSimulation {
 			distance > 0.001 ? toTarget.normalize() : new THREE.Vector3()
 		let desired = new THREE.Vector3()
 		let speed = 2.2
+		const anchor = this.#droneAnchor(drone, players)
+		if (!drone.position.toArray().every(Number.isFinite) || anchor === null) {
+			if (!drone.position.toArray().every(Number.isFinite)) {
+				drone.position.set(0, arenaHeightAt(this.#seed, 0, 0) + 3.2, 0)
+				drone.velocity.set(0, 0, 0)
+			}
+			if (anchor === null) return
+		}
+		const horizontalPosition = new THREE.Vector3(
+			drone.position.x,
+			0,
+			drone.position.z,
+		)
+		const horizontalAnchor = new THREE.Vector3(anchor.x, 0, anchor.z)
+		const anchorDistance = horizontalPosition.distanceTo(horizontalAnchor)
+		const outsideArena =
+			Math.max(Math.abs(drone.position.x), Math.abs(drone.position.z)) >
+			DRONE_ARENA_BOUND
+		if (
+			anchorDistance > DRONE_HARD_RECOVERY_DISTANCE ||
+			(outsideArena && anchorDistance > DRONE_HARD_RECOVERY_DISTANCE * 0.75)
+		) {
+			const resetDirection = horizontalPosition
+				.sub(horizontalAnchor)
+				.normalize()
+			drone.position.copy(
+				horizontalAnchor.addScaledVector(
+					resetDirection,
+					DRONE_SOFT_LEASH_DISTANCE * 0.7,
+				),
+			)
+			drone.position.y =
+				arenaHeightAt(this.#seed, drone.position.x, drone.position.z) + 3.2
+			drone.velocity.set(0, 0, 0)
+		}
+		const returnToAnchor =
+			anchorDistance > DRONE_SOFT_LEASH_DISTANCE || outsideArena
 
-		if (targetPosition === null) {
+		if (returnToAnchor) {
+			speed = DRONE_RETURN_SPEED
+			desired.copy(anchor).sub(drone.position)
+		} else if (targetPosition === null) {
 			drone.wanderAngle += delta * (0.25 + (drone.id % 4) * 0.04)
 			desired.set(Math.cos(drone.wanderAngle), 0, Math.sin(drone.wanderAngle))
 		} else if (drone.mood === "scared") {
@@ -622,6 +823,29 @@ export class ArenaSimulation {
 		}
 	}
 
+	#droneAnchor(
+		drone: DroneState,
+		players: readonly SimulationPlayer[],
+	): THREE.Vector3 | null {
+		const owner =
+			drone.ownerId === null
+				? undefined
+				: players.find((player) => player.id === drone.ownerId)
+		if (owner !== undefined) return new THREE.Vector3(...owner.position)
+		let nearest: SimulationPlayer | undefined
+		let distance = Number.POSITIVE_INFINITY
+		for (const player of players) {
+			const candidateDistance = drone.position.distanceToSquared(
+				new THREE.Vector3(...player.position),
+			)
+			if (candidateDistance < distance) {
+				distance = candidateDistance
+				nearest = player
+			}
+		}
+		return nearest === undefined ? null : new THREE.Vector3(...nearest.position)
+	}
+
 	#rangeKeepingDirection(
 		direction: THREE.Vector3,
 		distance: number,
@@ -654,7 +878,7 @@ export class ArenaSimulation {
 			})
 		}
 		for (const drone of this.#drones) {
-			if (drone.health <= 0) continue
+			if (drone.health <= 0 || drone.ownerId === ownerId) continue
 			candidates.push({
 				position: drone.position.toArray(),
 				ref: { id: drone.id, kind: "drone" },
@@ -682,7 +906,10 @@ export class ArenaSimulation {
 					}
 		}
 		const drone = this.#drones.find(
-			(candidate) => candidate.id === targetRef.id && candidate.health > 0,
+			(candidate) =>
+				candidate.id === targetRef.id &&
+				candidate.health > 0 &&
+				candidate.ownerId !== ownerId,
 		)
 		return drone === undefined
 			? null
@@ -755,6 +982,7 @@ export class ArenaSimulation {
 				previousPosition,
 				missile.position,
 				1.2,
+				missile.ownerId,
 			)
 			const playerHit = this.#nearestPlayerAlongSegment(
 				previousPosition,
@@ -787,6 +1015,7 @@ export class ArenaSimulation {
 		) {
 			const drone = this.#drones[droneIndex]
 			if (drone === undefined) continue
+			if (drone.ownerId === missile.ownerId) continue
 			const damage = miniMissileDamageAtDistance(
 				missile.position.distanceTo(drone.position),
 			)
@@ -893,7 +1122,15 @@ export class ArenaSimulation {
 				),
 			)
 			.normalize()
-		this.#spawnProjectile(origin, direction, "bot", damage, color, null, null)
+		this.#spawnProjectile(
+			origin,
+			direction,
+			drone.ownerId === null ? "bot" : "player",
+			damage,
+			color,
+			drone.ownerId,
+			null,
+		)
 	}
 
 	#spawnProjectile(
@@ -953,6 +1190,62 @@ export class ArenaSimulation {
 		}
 	}
 
+	#updateDroneWrecks(): void {
+		for (let index = this.#droneWrecks.length - 1; index >= 0; index -= 1) {
+			if ((this.#droneWrecks[index]?.expiresAt ?? 0) <= this.#elapsed)
+				this.#droneWrecks.splice(index, 1)
+		}
+	}
+
+	#updateDronePayloads(delta: number): void {
+		for (let index = this.#dronePayloads.length - 1; index >= 0; index -= 1) {
+			const payload = this.#dronePayloads[index]
+			if (payload === undefined) continue
+			const previous = payload.position.clone()
+			payload.life -= delta
+			payload.position.addScaledVector(payload.velocity, delta)
+			payload.distanceTraveled += previous.distanceTo(payload.position)
+			payload.rotation += delta * 18
+			const finite = payload.position.toArray().every(Number.isFinite)
+			const inBounds =
+				Math.max(Math.abs(payload.position.x), Math.abs(payload.position.z)) <=
+				DRONE_ARENA_BOUND
+			const hitGround =
+				finite &&
+				payload.position.y <=
+					arenaHeightAt(this.#seed, payload.position.x, payload.position.z) +
+						0.15
+			if (!finite || !inBounds || hitGround || payload.life <= 0) {
+				this.#dronePayloads.splice(index, 1)
+				continue
+			}
+			if (payload.distanceTraveled < DRONE_PAYLOAD_ACTIVATION_DISTANCE) continue
+			this.#dronePayloads.splice(index, 1)
+			const position = payload.position.clone()
+			position.y = Math.max(
+				position.y,
+				arenaHeightAt(this.#seed, position.x, position.z) + 3.2,
+			)
+			this.#drones.push({
+				attackCooldown: 0.3,
+				burstRounds: 0,
+				expiresAt: this.#elapsed + DEPLOYED_DRONE_LIFETIME_SECONDS,
+				health: BODY_HEALTH[payload.personality],
+				id: this.#nextDroneId++,
+				mood: "idle",
+				ownerId: payload.ownerId,
+				personality: payload.personality,
+				position,
+				stationary: false,
+				targetPlayerId: null,
+				threat: new Map(),
+				velocity: payload.velocity.clone().multiplyScalar(0.2),
+				wanderAngle: payload.rotation,
+				yaw: payload.rotation,
+			})
+		}
+	}
+
 	#explodeGrenade(
 		grenade: GrenadeState,
 		players: readonly SimulationPlayer[],
@@ -960,6 +1253,7 @@ export class ArenaSimulation {
 		for (let index = this.#drones.length - 1; index >= 0; index -= 1) {
 			const drone = this.#drones[index]
 			if (drone === undefined) continue
+			if (drone.ownerId === grenade.ownerId) continue
 			const damage = grenadeDamageAtDistance(
 				grenade.position.distanceTo(drone.position),
 			)
@@ -1027,6 +1321,7 @@ export class ArenaSimulation {
 					previousPosition,
 					projectile.position,
 					1.35,
+					projectile.ownerId,
 				)
 				const playerHit = this.#nearestPlayerAlongSegment(
 					previousPosition,
@@ -1107,11 +1402,14 @@ export class ArenaSimulation {
 		start: THREE.Vector3,
 		end: THREE.Vector3,
 		radius: number,
+		excludedOwnerId: string | null,
 	): CollisionCandidate<DroneState> | undefined {
 		let nearest: CollisionCandidate<DroneState> | undefined
 		const travel = TMP_A.copy(end).sub(start)
 		const travelLengthSquared = travel.lengthSq()
 		for (const drone of this.#drones) {
+			if (drone.ownerId === excludedOwnerId && excludedOwnerId !== null)
+				continue
 			const travelFraction =
 				travelLengthSquared === 0
 					? 0
@@ -1328,6 +1626,14 @@ export class ArenaSimulation {
 			position: drone.position.toArray(),
 			selfDestructed,
 		})
+		if (!selfDestructed && killerId !== null && drone.ownerId === null) {
+			this.#droneWrecks.push({
+				expiresAt: this.#elapsed + DRONE_WRECK_LIFETIME_SECONDS,
+				id: drone.id,
+				personality: drone.personality,
+				position: drone.position.clone(),
+			})
+		}
 		if (!selfDestructed && killerId !== null) this.#onDroneKilled(killerId)
 	}
 
@@ -1337,11 +1643,30 @@ export class ArenaSimulation {
 			id: drone.id,
 			maxHealth: BODY_HEALTH[drone.personality],
 			mood: drone.mood,
+			ownerId: drone.ownerId,
 			personality: drone.personality,
 			position: drone.position.toArray(),
 			targetPlayerId: drone.targetPlayerId,
 			velocity: drone.velocity.toArray(),
 			yaw: drone.yaw,
+		}
+	}
+
+	#snapshotDroneWreck(wreck: DroneWreckState): DroneWreckSnapshot {
+		return {
+			id: wreck.id,
+			personality: wreck.personality,
+			position: wreck.position.toArray(),
+		}
+	}
+
+	#snapshotDronePayload(payload: DronePayloadState): DronePayloadSnapshot {
+		return {
+			id: payload.id,
+			ownerId: payload.ownerId,
+			position: payload.position.toArray(),
+			rotation: payload.rotation,
+			velocity: payload.velocity.toArray(),
 		}
 	}
 

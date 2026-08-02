@@ -452,9 +452,18 @@ test("grenades broadcast their flight and damage pilots when they explode", () =
 		simulation.throwGrenade("thrower", {
 			clientGrenadeId: 1,
 			direction: [0, 1, 0],
+			kind: "standard",
 			origin: [0, -0.88, 0],
 		}),
 	).toBe(true)
+	expect(
+		simulation.throwGrenade("thrower", {
+			clientGrenadeId: 1,
+			direction: [0, 1, 0],
+			kind: "standard",
+			origin: [0, -0.88, 0],
+		}),
+	).toBe(false)
 	for (let index = 0; index < 23; index += 1) simulation.update(0.1)
 
 	expect(grenadeSnapshots).toHaveLength(1)
@@ -1008,4 +1017,130 @@ test("contact explodes once, damages the victim once, and excludes owner splash"
 	assert.ok(harness.damage[0]?.amount !== undefined)
 	assert.ok((harness.damage[0]?.amount ?? 0) > 0)
 	assert.ok((harness.damage[0]?.amount ?? 0) <= MINI_MISSILE_DAMAGE)
+})
+
+function makeDroneFeatureSimulation(
+	players: SimulationPlayer[],
+	initialDrones: readonly SimulationDroneSeed[],
+): ArenaSimulation {
+	return new ArenaSimulation({
+		emitDroneDestroyed: () => undefined,
+		emitGrenade: () => undefined,
+		emitGrenadeExploded: () => undefined,
+		emitMiniMissile: () => undefined,
+		emitMiniMissileEnded: () => undefined,
+		emitMiniMissileExploded: () => undefined,
+		emitProjectile: () => undefined,
+		emitProjectileEnded: () => undefined,
+		getPlayers: () => players,
+		initialDrones,
+		onDirectHit: () => undefined,
+		onDroneKilled: () => undefined,
+		onLockChanged: () => undefined,
+		onPlayerDamage: () => undefined,
+		seed: 7_431_905,
+	})
+}
+
+test("drones outside the soft leash return and corrupt positions hard-recover", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "anchor",
+			position: [0, 1.72, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const simulation = makeDroneFeatureSimulation(players, [
+		{ id: 1, position: [45, 3, 0], stationary: false },
+		{ id: 2, position: [Number.POSITIVE_INFINITY, 3, 0], stationary: false },
+	])
+	simulation.update(0.1)
+	const snapshots = simulation.snapshot().drones
+	expect(snapshots.find((drone) => drone.id === 1)?.position[0]).toBeLessThan(
+		45,
+	)
+	for (const drone of snapshots)
+		expect(drone.position.every(Number.isFinite)).toBe(true)
+})
+
+test("a wreck can be recovered once and deploys exactly once after ten meters", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 1.72, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const simulation = makeDroneFeatureSimulation(players, [
+		{
+			health: 10,
+			id: 8,
+			position: [0, 1.72, -2.5],
+			stationary: true,
+		},
+	])
+	simulation.connectPlayer("owner")
+	expect(
+		simulation.fire("owner", {
+			clientShotId: 1,
+			direction: [0, 0, -1],
+			origin: [0, 1.72, 0],
+		}),
+	).toBe(true)
+	simulation.update(0.1)
+	expect(simulation.snapshot().droneWrecks).toHaveLength(1)
+	expect(simulation.recoverDrone("owner", 8)).toBe(true)
+	expect(simulation.recoverDrone("owner", 8)).toBe(false)
+	expect(simulation.droneInventory("owner")).toEqual({
+		count: 1,
+		selected: "drone",
+	})
+	expect(
+		simulation.throwGrenade("owner", {
+			clientGrenadeId: 1,
+			direction: [0, 0, -1],
+			kind: "drone",
+			origin: [0, 1.72, 0],
+		}),
+	).toBe(true)
+	simulation.update(0.44)
+	expect(simulation.snapshot().dronePayloads).toHaveLength(1)
+	simulation.update(0.02)
+	const activated = simulation.snapshot()
+	expect(activated.dronePayloads).toHaveLength(0)
+	expect(
+		activated.drones.filter((drone) => drone.ownerId === "owner"),
+	).toHaveLength(1)
+	expect(simulation.droneInventory("owner").count).toBe(0)
+})
+
+test("friendly drones are excluded from their owner's missile designation", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 20, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const simulation = makeDroneFeatureSimulation(players, [
+		{
+			id: 11,
+			ownerId: "owner",
+			position: [5, 20, -12],
+			stationary: true,
+		},
+	])
+	simulation.connectPlayer("owner")
+	expect(
+		simulation.fireMiniMissile("owner", {
+			clientMissileId: 1,
+			direction: [0, 0, -1],
+			origin: [0, 20, 0],
+			target: { id: 11, kind: "drone" },
+		}),
+	).toBe(true)
+	expect(simulation.snapshot().missiles[0]?.velocity).toEqual([0, 0, -14])
 })
