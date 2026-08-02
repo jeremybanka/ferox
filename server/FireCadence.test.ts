@@ -17,4 +17,12 @@ describe("server fire cadence", () => {
 		expect(isFireCadenceReady(0, Number.NaN, 150)).toBe(false)
 		expect(isFireCadenceReady(0, 100, -1)).toBe(false)
 	})
+
+	test("enforces shotgun volley cadence from one trigger event", () => {
+		const interval = gunDefinition("shotgun").fire.serverMinimumIntervalMs
+		expect(interval).toBe(720)
+		expect(isFireCadenceReady(undefined, 5_000, interval)).toBe(true)
+		expect(isFireCadenceReady(5_000, 5_719, interval)).toBe(false)
+		expect(isFireCadenceReady(5_000, 5_720, interval)).toBe(true)
+	})
 })

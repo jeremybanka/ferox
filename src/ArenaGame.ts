@@ -19,7 +19,6 @@ import type {
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
 	GrenadeSnapshot,
-	HitscanSnapshot,
 	IncomingLockSnapshot,
 	IncomingStandardLockSnapshot,
 	InventoryActionIntent,
@@ -35,6 +34,8 @@ import type {
 	ReloadSnapshot,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
+	ShotgunPelletSnapshot,
+	ShotgunVolleySnapshot,
 	StandardLockIntent,
 	WeaponSlotIndex,
 	PilotEmote,
@@ -67,6 +68,11 @@ import {
 	PLAYER_SLIDE_DUST_BUDGET,
 	PLAYER_SLIDE_DUST_LIFETIME_SECONDS,
 	RAIL_CHARGE_MAX_MS,
+	SHOTGUN_PELLET_COUNT,
+	SHOTGUN_PELLET_DAMAGE,
+	SHOTGUN_PELLET_HANG_SECONDS,
+	SHOTGUN_PELLET_MAX_DISTANCE,
+	SHOTGUN_PELLET_SPEED,
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
@@ -112,6 +118,7 @@ import {
 	spreadDirection,
 	type RecoilSpreadState,
 } from "./RecoilSpread.ts"
+import { ShotgunPelletField } from "./ShotgunPelletField.ts"
 import {
 	BoundedDamageEffects,
 	damageFlinchAnimationLayer,
@@ -397,6 +404,7 @@ export class ArenaGame {
 	readonly #missiles = new Map<number, MiniMissileVisual>()
 	readonly #missilePickup = new THREE.Group()
 	readonly #projectiles: Projectile[] = []
+	readonly #shotgunPellets = new ShotgunPelletField()
 	readonly #pendingShotIds = new Set<number>()
 	readonly #remotePlayers = new Map<string, RemotePilot>()
 	readonly #renderer: THREE.WebGLRenderer
@@ -581,7 +589,12 @@ export class ArenaGame {
 		this.#socket.off("arena:bubble-popped", this.#onBubblePopped)
 		this.#socket.off("arena:ballistic", this.#onBallistic)
 		this.#socket.off("arena:ballistic-ended", this.#onBallisticEnded)
-		this.#socket.off("arena:hitscan", this.#onHitscan)
+		this.#socket.off("arena:shotgun-pellets", this.#onShotgunPellets)
+		this.#socket.off(
+			"arena:shotgun-pellet-suspended",
+			this.#onShotgunPelletSuspended,
+		)
+		this.#socket.off("arena:shotgun-volley", this.#onShotgunVolley)
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
 		this.#damageEffects.clear()
@@ -614,6 +627,8 @@ export class ArenaGame {
 		this.#arenaPickupVisuals.clear()
 		this.#scene.remove(this.#bubbleField.mesh)
 		this.#bubbleField.dispose()
+		this.#scene.remove(this.#shotgunPellets.mesh)
+		this.#shotgunPellets.dispose()
 		for (const visual of this.#ballistics.values()) {
 			this.#scene.remove(visual.mesh)
 			visual.mesh.geometry.dispose()
@@ -1240,10 +1255,18 @@ export class ArenaGame {
 		const origin = new THREE.Vector3(...projectile.origin)
 		const direction = new THREE.Vector3(...projectile.direction)
 		this.#spawnMuzzleFlash(origin, direction, projectile.color)
-		this.#spawnProjectile(projectile.id, origin, direction, projectile.color)
+		this.#spawnProjectile(
+			projectile.id,
+			origin,
+			direction,
+			projectile.color,
+			projectile.speed,
+			projectile.lifetimeSeconds,
+		)
 	}
 
 	readonly #onProjectileEnded = (ended: ProjectileEndedSnapshot): void => {
+		if (this.#shotgunPellets.remove(ended.id)) return
 		const index = this.#projectiles.findIndex(
 			(projectile) => projectile.id === ended.id,
 		)
@@ -1300,11 +1323,52 @@ export class ArenaGame {
 		)
 	}
 
-	readonly #onHitscan = (snapshot: HitscanSnapshot): void => {
-		const origin = new THREE.Vector3(...snapshot.origin)
-		const direction = new THREE.Vector3(...snapshot.direction)
+	readonly #onShotgunPellets = (snapshots: ShotgunPelletSnapshot[]): void => {
+		if (!Array.isArray(snapshots)) return
+		this.#shotgunPellets.reconcile(
+			snapshots.filter((snapshot) => this.#validShotgunPellet(snapshot)),
+		)
+	}
+
+	readonly #onShotgunPelletSuspended = (
+		snapshot: ShotgunPelletSnapshot,
+	): void => {
+		if (!this.#validShotgunPellet(snapshot)) return
+		this.#shotgunPellets.upsert(snapshot)
+	}
+
+	readonly #onShotgunVolley = (volley: ShotgunVolleySnapshot): void => {
+		if (
+			volley.damage !== SHOTGUN_PELLET_DAMAGE ||
+			volley.hangSeconds !== SHOTGUN_PELLET_HANG_SECONDS ||
+			volley.maxDistance !== SHOTGUN_PELLET_MAX_DISTANCE ||
+			volley.speed !== SHOTGUN_PELLET_SPEED ||
+			!Array.isArray(volley.pellets) ||
+			volley.pellets.length !== SHOTGUN_PELLET_COUNT ||
+			!volley.pellets.every((pellet) => this.#validShotgunPellet(pellet))
+		)
+			return
+		this.#shotgunPellets.addVolley(volley)
+		const origin = new THREE.Vector3(...volley.origin)
+		const direction = new THREE.Vector3(...volley.pellets[0]!.direction)
 		this.#spawnMuzzleFlash(origin, direction, "#ffd49a")
-		this.#spawnProjectile(1_000_000 + snapshot.id, origin, direction, "#ffd49a")
+		if (volley.ownerId !== this.#socket.id) this.#audio.playWeapon("shotgun")
+	}
+
+	#validShotgunPellet(snapshot: ShotgunPelletSnapshot): boolean {
+		return (
+			Number.isSafeInteger(snapshot.id) &&
+			(snapshot.phase === "flying" || snapshot.phase === "suspended") &&
+			Array.isArray(snapshot.direction) &&
+			snapshot.direction.length === 3 &&
+			snapshot.direction.every(Number.isFinite) &&
+			Array.isArray(snapshot.origin) &&
+			snapshot.origin.length === 3 &&
+			snapshot.origin.every(Number.isFinite) &&
+			Array.isArray(snapshot.position) &&
+			snapshot.position.length === 3 &&
+			snapshot.position.every(Number.isFinite)
+		)
 	}
 
 	readonly #onSnapshot = (snapshot: ArenaSnapshot): void => {
@@ -1377,7 +1441,12 @@ export class ArenaGame {
 		this.#socket.on("arena:bubble-popped", this.#onBubblePopped)
 		this.#socket.on("arena:ballistic", this.#onBallistic)
 		this.#socket.on("arena:ballistic-ended", this.#onBallisticEnded)
-		this.#socket.on("arena:hitscan", this.#onHitscan)
+		this.#socket.on("arena:shotgun-pellets", this.#onShotgunPellets)
+		this.#socket.on(
+			"arena:shotgun-pellet-suspended",
+			this.#onShotgunPelletSuspended,
+		)
+		this.#socket.on("arena:shotgun-volley", this.#onShotgunVolley)
 		this.#socket.on("arena:snapshot", this.#onSnapshot)
 		this.#resize()
 	}
@@ -1392,7 +1461,7 @@ export class ArenaGame {
 	}
 
 	#buildWorld(): void {
-		this.#scene.add(this.#bubbleField.mesh)
+		this.#scene.add(this.#bubbleField.mesh, this.#shotgunPellets.mesh)
 		const hemisphere = new THREE.HemisphereLight("#86d9d1", "#251522", 2.3)
 		this.#scene.add(hemisphere)
 		const sun = new THREE.DirectionalLight("#ffb06a", 5.4)
@@ -2397,6 +2466,8 @@ export class ArenaGame {
 		origin: THREE.Vector3,
 		direction: THREE.Vector3,
 		color: THREE.ColorRepresentation = "#b8fff1",
+		speed = 55,
+		lifetimeSeconds = 2.4,
 	): void {
 		const mesh = new THREE.Mesh(
 			new THREE.SphereGeometry(0.09, 8, 8),
@@ -2408,9 +2479,9 @@ export class ArenaGame {
 		this.#scene.add(mesh)
 		this.#projectiles.push({
 			id,
-			life: 2.4,
+			life: lifetimeSeconds,
 			mesh,
-			velocity: direction.multiplyScalar(55),
+			velocity: direction.multiplyScalar(speed),
 		})
 	}
 
@@ -2533,6 +2604,7 @@ export class ArenaGame {
 
 	#updateSyncedWeaponVisuals(delta: number): void {
 		this.#bubbleField.update(delta)
+		this.#shotgunPellets.update(delta)
 		for (const visual of this.#ballistics.values()) {
 			visual.target.addScaledVector(visual.velocity, delta)
 			visual.mesh.position.lerp(visual.target, Math.min(1, delta * 14))
