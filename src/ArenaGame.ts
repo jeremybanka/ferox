@@ -42,10 +42,16 @@ import {
 } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
 import {
+	ARENA_GRID_DIVISIONS,
 	ARENA_RENDER_SIZE,
+	ARENA_TERRAIN_SEGMENTS,
 	arenaPillars,
+	arenaWalls,
 	pillarAxis,
 	resolveArenaMotion,
+	wallCenterAtY,
+	wallNormal,
+	wallTangent,
 } from "./ArenaWorld.ts"
 import { GameAudio } from "./audio/GameAudio.ts"
 import type { GameAudioDefinition } from "./audio/GameAudioDefinitions.ts"
@@ -354,7 +360,7 @@ const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
 export class ArenaGame {
 	readonly #audio: GameAudio
 	readonly #canvas: HTMLCanvasElement
-	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 380)
+	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 620)
 	readonly #drones: DroneBotSystem
 	readonly #damageEffects = new BoundedDamageEffects<DamageParticleBurst>()
 	readonly #fistContactEffects =
@@ -383,7 +389,7 @@ export class ArenaGame {
 	readonly #missilePickup = new THREE.Group()
 	readonly #projectiles: Projectile[] = []
 	readonly #pendingShotIds = new Set<number>()
-	readonly #pillarMeshes: THREE.Mesh[] = []
+	readonly #structureMeshes: THREE.Mesh[] = []
 	readonly #remotePlayers = new Map<string, RemotePilot>()
 	readonly #renderer: THREE.WebGLRenderer
 	readonly #scene = new THREE.Scene()
@@ -568,15 +574,15 @@ export class ArenaGame {
 		this.#drones.dispose()
 		this.#damageEffects.clear()
 		this.#fistContactEffects.clear()
-		for (const pillar of this.#pillarMeshes) {
-			this.#scene.remove(pillar)
-			pillar.geometry.dispose()
-			const materials = Array.isArray(pillar.material)
-				? pillar.material
-				: [pillar.material]
+		for (const structure of this.#structureMeshes) {
+			this.#scene.remove(structure)
+			structure.geometry.dispose()
+			const materials = Array.isArray(structure.material)
+				? structure.material
+				: [structure.material]
 			for (const material of materials) material.dispose()
 		}
-		this.#pillarMeshes.length = 0
+		this.#structureMeshes.length = 0
 		for (const flash of this.#muzzleFlashes) {
 			this.#scene.remove(flash.mesh)
 			flash.mesh.geometry.dispose()
@@ -1263,8 +1269,8 @@ export class ArenaGame {
 		const geometry = new THREE.PlaneGeometry(
 			ARENA_RENDER_SIZE,
 			ARENA_RENDER_SIZE,
-			144,
-			144,
+			ARENA_TERRAIN_SEGMENTS,
+			ARENA_TERRAIN_SEGMENTS,
 		)
 		geometry.rotateX(-Math.PI / 2)
 		const positions = geometry.attributes.position
@@ -1300,7 +1306,7 @@ export class ArenaGame {
 
 		const grid = new THREE.GridHelper(
 			ARENA_RENDER_SIZE,
-			46,
+			ARENA_GRID_DIVISIONS,
 			"#79e7d4",
 			"#4d6b6e",
 		)
@@ -1336,9 +1342,68 @@ export class ArenaGame {
 			pillarMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis)
 			pillarMesh.castShadow = true
 			pillarMesh.receiveShadow = true
-			this.#pillarMeshes.push(pillarMesh)
+			this.#structureMeshes.push(pillarMesh)
 			this.#scene.add(pillarMesh)
 		}
+
+		const walls = arenaWalls(this.#seed)
+		const wallGeometry = new THREE.BoxGeometry(1, 1, 1)
+		const wallMaterial = new THREE.MeshStandardMaterial({
+			color: "#ffffff",
+			emissive: "#172936",
+			emissiveIntensity: 0.34,
+			metalness: 0.34,
+			roughness: 0.76,
+		})
+		const wallMesh = new THREE.InstancedMesh(
+			wallGeometry,
+			wallMaterial,
+			walls.length,
+		)
+		wallMesh.name = "arena wall-running superstructure"
+		wallMesh.castShadow = true
+		wallMesh.receiveShadow = true
+		const basis = new THREE.Matrix4()
+		const instance = new THREE.Matrix4()
+		const position = new THREE.Vector3()
+		const quaternion = new THREE.Quaternion()
+		const scale = new THREE.Vector3()
+		const tangent = new THREE.Vector3()
+		const up = new THREE.Vector3()
+		const depth = new THREE.Vector3()
+		const wallColors = {
+			channel: new THREE.Color("#476f7c"),
+			connector: new THREE.Color("#8a7652"),
+			outer: new THREE.Color("#405a76"),
+			staggered: new THREE.Color("#76536f"),
+		} as const
+		for (const [index, wall] of walls.entries()) {
+			const [tangentX, tangentZ] = wallTangent(wall)
+			const [normalX, normalZ] = wallNormal(wall)
+			const centerY =
+				wall.baseY + Math.cos(wall.leanRadians) * wall.height * 0.5
+			const center = wallCenterAtY(wall, centerY)
+			if (center === null) continue
+			tangent.set(tangentX, 0, tangentZ)
+			up.set(
+				normalX * Math.sin(wall.leanRadians),
+				Math.cos(wall.leanRadians),
+				normalZ * Math.sin(wall.leanRadians),
+			)
+			depth.crossVectors(tangent, up).normalize()
+			basis.makeBasis(tangent, up, depth)
+			quaternion.setFromRotationMatrix(basis)
+			position.set(center[0], centerY, center[1])
+			scale.set(wall.length, wall.height, wall.thickness)
+			instance.compose(position, quaternion, scale)
+			wallMesh.setMatrixAt(index, instance)
+			wallMesh.setColorAt(index, wallColors[wall.role])
+		}
+		wallMesh.instanceMatrix.needsUpdate = true
+		if (wallMesh.instanceColor !== null)
+			wallMesh.instanceColor.needsUpdate = true
+		this.#structureMeshes.push(wallMesh)
+		this.#scene.add(wallMesh)
 
 		const crystalGeometry = new THREE.OctahedronGeometry(0.62, 0)
 		const crystalMaterial = new THREE.MeshStandardMaterial({
@@ -1348,9 +1413,9 @@ export class ArenaGame {
 			metalness: 0.25,
 			roughness: 0.22,
 		})
-		for (let index = 0; index < 18; index += 1) {
+		for (let index = 0; index < 48; index += 1) {
 			const angle = arenaSeededValue(this.#seed, index, 2) * Math.PI * 2
-			const radius = 13 + arenaSeededValue(this.#seed, index, 7) * 38
+			const radius = 22 + arenaSeededValue(this.#seed, index, 7) * 128
 			const x = Math.cos(angle) * radius
 			const z = Math.sin(angle) * radius
 			const crystal = new THREE.Mesh(crystalGeometry, crystalMaterial)
@@ -1403,7 +1468,7 @@ export class ArenaGame {
 			new THREE.SphereGeometry(7, 24, 16),
 			new THREE.MeshBasicMaterial({ color: "#ffc99f" }),
 		)
-		moon.position.set(-76, 54, -118)
+		moon.position.set(-230, 118, -340)
 		this.#scene.add(moon)
 	}
 
