@@ -33,6 +33,30 @@ export const RAIL_SPEED_MIN = 24
 export const RAIL_SPEED_MAX = 76
 export const RAIL_SERVER_MINIMUM_INTERVAL_MS = 1_050
 
+// Mid-arena armory pads are shared by the three standard weapon pickups. Their
+// initial pad indices are distinct and every return advances to the next pad
+// not reserved by another gun. Staggering and proportional return delays make
+// shotgun contests frequent, Bubble Gun contests medium, and Rail contests rare.
+export const ARENA_WEAPON_PICKUP_PADS: readonly (readonly [number, number])[] =
+	[
+		[-18, -7],
+		[-9, 16],
+		[8, -17],
+		[18, 7],
+		[0, 20],
+	]
+export const ARENA_WEAPON_PICKUP_RADIUS = 2.4
+export const ARENA_WEAPON_INITIAL_DELAY_MS = {
+	"bubble-gun": 4_000,
+	"rail-gun": 9_000,
+	shotgun: 0,
+} as const
+export const ARENA_WEAPON_RESPAWN_MS = {
+	"bubble-gun": 11_000,
+	"rail-gun": 16_000,
+	shotgun: 7_000,
+} as const
+
 /** 150 at 1m, quadratic falloff, and exactly zero at 13m. */
 export function shotgunDamageAtDistance(distance: number): number {
 	if (!Number.isFinite(distance) || distance >= SHOTGUN_MAX_RANGE) return 0

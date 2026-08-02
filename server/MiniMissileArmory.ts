@@ -1,6 +1,7 @@
 import type {
 	EquipmentSnapshot,
 	EquipmentSlotSnapshot,
+	ArenaWeaponPickupSnapshot,
 	IncomingLockSnapshot,
 	MiniMissilePickupSnapshot,
 	ReloadSnapshot,
@@ -9,6 +10,9 @@ import type {
 import {
 	MINI_MISSILE_PICKUP_RADIUS,
 	MINI_MISSILE_PICKUP_RESPAWN_SECONDS,
+	ARENA_WEAPON_INITIAL_DELAY_MS,
+	ARENA_WEAPON_PICKUP_RADIUS,
+	ARENA_WEAPON_RESPAWN_MS,
 } from "../src/game-constants.ts"
 import {
 	DEFAULT_GUN_ID,
@@ -32,19 +36,24 @@ function assertUnhandledReloadRule(rule: never): never {
 type PlayerInventory = {
 	activeSlot: 0 | 1
 	revision: number
-	secondaryAmmo: Partial<Record<SecondaryGunId, number>>
-	selectedSecondary: SecondaryGunId | null
 	slots: [EquipmentSlotSnapshot, EquipmentSlotSnapshot | null]
 }
 
 type SecondaryGunId = Exclude<GunId, "arc-blaster" | "mini-missile">
 
+type ArenaWeaponPickupState = {
+	ammo: number
+	available: boolean
+	availableAt: number | null
+	ownerId: string | null
+	padIndex: number
+	weapon: SecondaryGunId
+}
+
 function defaultInventory(): PlayerInventory {
 	return {
 		activeSlot: 0,
 		revision: 0,
-		secondaryAmmo: {},
-		selectedSecondary: null,
 		slots: [
 			{
 				ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
@@ -56,6 +65,8 @@ function defaultInventory(): PlayerInventory {
 }
 
 export class MiniMissileArmory {
+	readonly #arenaPickups = new Map<SecondaryGunId, ArenaWeaponPickupState>()
+	readonly #arenaPickupPads: readonly (readonly [number, number, number])[]
 	readonly #incomingLocks = new Map<string, Set<string>>()
 	readonly #inventories = new Map<string, PlayerInventory>()
 	readonly #pickupPosition: Vector3Tuple
@@ -63,8 +74,32 @@ export class MiniMissileArmory {
 	#ownerId: string | null = null
 	#respawnAt: number | null = null
 
-	constructor(pickupPosition: Vector3Tuple) {
+	constructor(
+		pickupPosition: Vector3Tuple,
+		arenaPickupPads: readonly (readonly [number, number, number])[] = [],
+		startedAt = 0,
+	) {
 		this.#pickupPosition = pickupPosition
+		this.#arenaPickupPads = arenaPickupPads
+		const guns = ["shotgun", "bubble-gun", "rail-gun"] as const
+		const preferredPads = [0, 2, 4]
+		const occupied = new Set<number>()
+		for (const [index, weapon] of guns.entries()) {
+			if (arenaPickupPads.length === 0) continue
+			let padIndex = (preferredPads[index] ?? index) % arenaPickupPads.length
+			while (occupied.has(padIndex))
+				padIndex = (padIndex + 1) % arenaPickupPads.length
+			occupied.add(padIndex)
+			const delay = ARENA_WEAPON_INITIAL_DELAY_MS[weapon]
+			this.#arenaPickups.set(weapon, {
+				ammo: gunDefinition(weapon).magazineSize,
+				available: delay === 0,
+				availableAt: delay === 0 ? null : startedAt + delay,
+				ownerId: null,
+				padIndex,
+				weapon,
+			})
+		}
 	}
 
 	connect(playerId: string): EquipmentSnapshot {
@@ -87,7 +122,7 @@ export class MiniMissileArmory {
 		return this.clearLocksForPlayer(playerId)
 	}
 
-	collect(playerId: string, position: Vector3Tuple): boolean {
+	collect(playerId: string, position: Vector3Tuple, now = Date.now()): boolean {
 		const inventory = this.#inventories.get(playerId)
 		if (inventory === undefined) return false
 		if (!this.#available || this.#ownerId !== null) return false
@@ -97,7 +132,7 @@ export class MiniMissileArmory {
 			position[2] - this.#pickupPosition[2],
 		)
 		if (distance > MINI_MISSILE_PICKUP_RADIUS) return false
-		this.#saveSecondarySlot(inventory)
+		this.release(playerId, now)
 		this.#available = false
 		this.#ownerId = playerId
 		this.#respawnAt = null
@@ -110,27 +145,39 @@ export class MiniMissileArmory {
 		return true
 	}
 
-	selectSecondary(playerId: string, weapon: SecondaryGunId): boolean {
+	collectArenaWeapon(
+		playerId: string,
+		weapon: SecondaryGunId,
+		position: Vector3Tuple,
+		now: number,
+	): boolean {
 		const inventory = this.#inventories.get(playerId)
-		if (inventory === undefined || this.#ownerId === playerId) return false
-		if (inventory.slots[1]?.weapon === weapon) {
-			if (inventory.activeSlot === 1) return false
-			inventory.activeSlot = 1
-			inventory.revision += 1
-			return true
-		}
-		this.#saveSecondarySlot(inventory)
-		const gun = gunDefinition(weapon)
-		const ammo = inventory.secondaryAmmo[weapon] ?? gun.magazineSize
-		if (ammo < 0 || ammo > gun.magazineSize) return false
+		const pickup = this.#arenaPickups.get(weapon)
+		if (
+			inventory === undefined ||
+			pickup === undefined ||
+			!pickup.available ||
+			pickup.ownerId !== null
+		)
+			return false
+		const pickupPosition = this.#arenaPickupPads[pickup.padIndex]
+		if (pickupPosition === undefined) return false
+		const distance = Math.hypot(
+			position[0] - pickupPosition[0],
+			position[1] - pickupPosition[1],
+			position[2] - pickupPosition[2],
+		)
+		if (distance > ARENA_WEAPON_PICKUP_RADIUS) return false
+		this.release(playerId, now)
+		pickup.available = false
+		pickup.availableAt = null
+		pickup.ownerId = playerId
 		inventory.slots[1] = {
-			ammo,
+			ammo: pickup.ammo,
 			weapon,
 		}
-		inventory.selectedSecondary = weapon
 		inventory.activeSlot = 1
 		inventory.revision += 1
-		this.#saveSecondarySlot(inventory)
 		return true
 	}
 
@@ -164,7 +211,7 @@ export class MiniMissileArmory {
 				return assertUnhandledReloadRule(gun.reload.ammoRule)
 		}
 		inventory.revision += 1
-		this.#saveSecondarySlot(inventory)
+		this.#saveOwnedAmmo(playerId, inventory)
 		return true
 	}
 
@@ -188,7 +235,7 @@ export class MiniMissileArmory {
 			return false
 		slot.ammo -= 1
 		inventory.revision += 1
-		this.#saveSecondarySlot(inventory)
+		this.#saveOwnedAmmo(playerId, inventory)
 		return true
 	}
 
@@ -208,7 +255,7 @@ export class MiniMissileArmory {
 		if (slot === null) return
 		slot.ammo = Math.min(gunDefinition(slot.weapon).magazineSize, slot.ammo + 1)
 		inventory.revision += 1
-		this.#saveSecondarySlot(inventory)
+		this.#saveOwnedAmmo(playerId, inventory)
 	}
 
 	restoreMiniMissile(playerId: string): void {
@@ -224,47 +271,88 @@ export class MiniMissileArmory {
 	}
 
 	release(playerId: string, now: number): boolean {
-		if (this.#ownerId !== playerId) return false
-		// Only explicit drop, death, or disconnect reaches this path. Return the
-		// launcher to the world and reveal the preserved selectable secondary.
 		const inventory = this.#inventories.get(playerId)
-		this.#ownerId = null
-		this.#available = false
-		this.#respawnAt = now + MINI_MISSILE_PICKUP_RESPAWN_SECONDS * 1_000
-		if (inventory !== undefined) {
-			const secondary = inventory.selectedSecondary
-			inventory.slots[1] =
-				secondary === null
-					? null
-					: {
-							ammo:
-								inventory.secondaryAmmo[secondary] ??
-								gunDefinition(secondary).magazineSize,
-							weapon: secondary,
-						}
+		let released = false
+		if (this.#ownerId === playerId) {
+			this.#ownerId = null
+			this.#available = false
+			this.#respawnAt = now + MINI_MISSILE_PICKUP_RESPAWN_SECONDS * 1_000
+			released = true
+		} else {
+			const pickup = [...this.#arenaPickups.values()].find(
+				(candidate) => candidate.ownerId === playerId,
+			)
+			if (pickup !== undefined) {
+				this.#saveOwnedAmmo(playerId, inventory)
+				pickup.ownerId = null
+				pickup.available = false
+				pickup.availableAt = now + ARENA_WEAPON_RESPAWN_MS[pickup.weapon]
+				pickup.padIndex = this.#nextPadIndex(pickup)
+				released = true
+			}
+		}
+		if (released && inventory !== undefined) {
+			inventory.slots[1] = null
 			inventory.activeSlot = 0
 			inventory.revision += 1
 		}
-		return true
-	}
-
-	#saveSecondarySlot(inventory: PlayerInventory): void {
-		const secondary = inventory.slots[1]
-		if (
-			secondary === null ||
-			secondary.weapon === "arc-blaster" ||
-			secondary.weapon === "mini-missile"
-		)
-			return
-		inventory.secondaryAmmo[secondary.weapon] = secondary.ammo
-		inventory.selectedSecondary = secondary.weapon
+		return released
 	}
 
 	update(now: number): boolean {
-		if (this.#respawnAt === null || now < this.#respawnAt) return false
-		this.#available = true
-		this.#respawnAt = null
-		return true
+		let changed = false
+		if (this.#respawnAt !== null && now >= this.#respawnAt) {
+			this.#available = true
+			this.#respawnAt = null
+			changed = true
+		}
+		for (const pickup of this.#arenaPickups.values()) {
+			if (pickup.availableAt === null || now < pickup.availableAt) continue
+			pickup.available = true
+			pickup.availableAt = null
+			changed = true
+		}
+		return changed
+	}
+
+	arenaPickups(): ArenaWeaponPickupSnapshot[] {
+		return [...this.#arenaPickups.values()].map((pickup) => ({
+			available: pickup.available,
+			availableAt: pickup.availableAt,
+			ownerId: pickup.ownerId,
+			position: [...(this.#arenaPickupPads[pickup.padIndex] ?? [0, 0, 0])],
+			weapon: pickup.weapon,
+		}))
+	}
+
+	#saveOwnedAmmo(
+		playerId: string,
+		inventory: PlayerInventory | undefined,
+	): void {
+		const slot = inventory?.slots[1]
+		if (
+			slot === null ||
+			slot === undefined ||
+			slot.weapon === "arc-blaster" ||
+			slot.weapon === "mini-missile"
+		)
+			return
+		const pickup = this.#arenaPickups.get(slot.weapon)
+		if (pickup?.ownerId === playerId) pickup.ammo = slot.ammo
+	}
+
+	#nextPadIndex(pickup: ArenaWeaponPickupState): number {
+		const occupied = new Set(
+			[...this.#arenaPickups.values()]
+				.filter((candidate) => candidate !== pickup)
+				.map((candidate) => candidate.padIndex),
+		)
+		for (let offset = 1; offset < this.#arenaPickupPads.length; offset += 1) {
+			const candidate =
+				(pickup.padIndex + offset) % this.#arenaPickupPads.length
+			if (!occupied.has(candidate)) return candidate
+		}
+		return pickup.padIndex
 	}
 
 	equipment(playerId: string): EquipmentSnapshot {

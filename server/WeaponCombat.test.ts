@@ -182,12 +182,20 @@ test("rail release shares the monotonic shot replay domain with other weapons", 
 })
 
 test("armory generalizes secondary selection and inserts one shotgun shell", () => {
-	const armory = new MiniMissileArmory([0, 0, 0])
+	const pads = [
+		[-8, 0, 0],
+		[0, 0, -8],
+		[8, 0, 0],
+	] as const
+	const armory = new MiniMissileArmory([20, 0, 20], pads, 0)
 	armory.connect("pilot")
-	expect(armory.selectSecondary("pilot", "shotgun")).toBe(true)
+	const shotgun = armory
+		.arenaPickups()
+		.find((pickup) => pickup.weapon === "shotgun")!
+	expect(
+		armory.collectArenaWeapon("pilot", "shotgun", shotgun.position, 0),
+	).toBe(true)
 	expect(armory.consumeActive("pilot", "hitscan")).toBe(true)
 	expect(armory.refillReload("pilot", { gunId: "shotgun", slot: 1 })).toBe(true)
 	expect(armory.equipment("pilot").slots[1]?.ammo).toBe(6)
-	expect(armory.selectSecondary("pilot", "bubble-gun")).toBe(true)
-	expect(armory.selectSecondary("pilot", "rail-gun")).toBe(true)
 })

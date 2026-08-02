@@ -178,14 +178,13 @@ export function isMiniMissileTargetRef(
 }
 
 export type InventoryActionIntent =
-	| { clientActionId: number; type: "collect" }
-	| { clientActionId: number; direction: -1 | 1; type: "switch" }
 	| {
 			clientActionId: number
-			type: "select-secondary"
-			weapon: "bubble-gun" | "rail-gun" | "shotgun"
+			type: "collect"
+			weapon: Exclude<GunId, "arc-blaster">
 	  }
-	| { clientActionId: number; type: "drop-mini-missile" | "reload" }
+	| { clientActionId: number; direction: -1 | 1; type: "switch" }
+	| { clientActionId: number; type: "drop-secondary" | "reload" }
 
 export function isInventoryActionIntent(
 	value: unknown,
@@ -198,21 +197,19 @@ export function isInventoryActionIntent(
 	)
 		return false
 	switch (record["type"]) {
-		case "collect":
-		case "drop-mini-missile":
+		case "drop-secondary":
 		case "reload":
 			return Object.keys(record).length === 2
+		case "collect":
+			return (
+				Object.keys(record).length === 3 &&
+				isGunId(record["weapon"]) &&
+				record["weapon"] !== "arc-blaster"
+			)
 		case "switch":
 			return (
 				Object.keys(record).length === 3 &&
 				(record["direction"] === -1 || record["direction"] === 1)
-			)
-		case "select-secondary":
-			return (
-				Object.keys(record).length === 3 &&
-				(record["weapon"] === "bubble-gun" ||
-					record["weapon"] === "rail-gun" ||
-					record["weapon"] === "shotgun")
 			)
 		default:
 			return false
@@ -250,6 +247,14 @@ export type MiniMissilePickupSnapshot = {
 	ownerId: string | null
 	position: Vector3Tuple
 	respawnAt: number | null
+}
+
+export type ArenaWeaponPickupSnapshot = {
+	available: boolean
+	availableAt: number | null
+	ownerId: string | null
+	position: Vector3Tuple
+	weapon: "bubble-gun" | "rail-gun" | "shotgun"
 }
 
 export type WeaponSlotIndex = 0 | 1

@@ -26,6 +26,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 	const setHud = useI(gameHudStateAtom)
 	const incomingThreats = hud.incomingMissileLocks + hud.incomingStandardLocks
 	const gun = gunDefinition(hud.weapon)
+	const nearbyGun =
+		hud.nearbyPickup === null ? null : gunDefinition(hud.nearbyPickup)
 	const incomingThreatKind =
 		hud.incomingMissileLocks > 0 && hud.incomingStandardLocks > 0
 			? "combined"
@@ -142,7 +144,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					aria-hidden={hud.pickup !== "nearby"}
 					style={{ "--pickup-progress": hud.pickupProgress }}
 				>
-					<strong>MINI-MISSILE READY</strong>
+					<strong>{nearbyGun?.name ?? "WEAPON"} READY</strong>
 					<span>
 						<kbd>E</kbd>
 						<kbd>RB</kbd>
@@ -152,6 +154,19 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<i />
 					</pickup-progress>
 				</pickup-prompt>
+
+				<pickup-status-board aria-label="Arena weapon pickup status">
+					{hud.pickupStatuses.map((pickup) => (
+						<pickup-status key={pickup.weapon} data-status={pickup.status}>
+							<strong>{gunDefinition(pickup.weapon).name}</strong>
+							<span>
+								{pickup.status === "returning"
+									? `RETURN ${pickup.remaining}s`
+									: pickup.status.toUpperCase()}
+							</span>
+						</pickup-status>
+					))}
+				</pickup-status-board>
 
 				<smart-target-zone data-state={hud.targeting} aria-hidden="true">
 					<free-aim-label>
@@ -267,7 +282,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 												? "MINI-MISSILE AVAILABLE"
 												: hud.pickup === "carried"
 													? "MINI-MISSILE CARRIED"
-													: "2 SHOTGUN • 3 BUBBLES • 4 RAIL"}
+													: "ROTATE TO ARMORY PADS"}
 					</em>
 				</weapon-status>
 
@@ -298,8 +313,6 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>FREE AIM</span>
 						<kbd>1 / Y / WHEEL</kbd>
 						<span>SWITCH</span>
-						<kbd>2–4</kbd>
-						<span>ARMORY</span>
 						<kbd>RMB / LT</kbd>
 						<span>GRENADE</span>
 						<kbd>HOLD E / RB</kbd>
