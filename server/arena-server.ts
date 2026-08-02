@@ -35,6 +35,7 @@ import {
 	type ReloadState,
 } from "../src/ReloadState.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
+import { reconcileAuthoritativeMovement } from "./AuthoritativeMovement.ts"
 import { MeleeCombat } from "./MeleeCombat.ts"
 import { isFireCadenceReady } from "./FireCadence.ts"
 import { MiniMissileArmory, type LockUpdate } from "./MiniMissileArmory.ts"
@@ -417,10 +418,21 @@ realtime(
 				[payload.position[0], payload.position[2]],
 				payload.position[1] - 0.86,
 			)
+			const authoritativeMovement = reconcileAuthoritativeMovement({
+				contact: resolvedMotion.contact,
+				crouching: payload.crouching,
+				jump: payload.jump,
+				sliding: payload.sliding,
+				velocity: payload.velocity,
+				wallTraversal: payload.wallTraversal,
+			})
 			players.set(socketId, {
 				...current,
 				...payload,
+				jump: authoritativeMovement.jump,
 				position: [resolvedMotion.x, payload.position[1], resolvedMotion.z],
+				sliding: authoritativeMovement.sliding,
+				wallTraversal: authoritativeMovement.wallTraversal,
 				equippedWeapon: armory.activeWeapon(socketId),
 				dead: false,
 				deathStartedAt: null,

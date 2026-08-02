@@ -154,6 +154,7 @@ import {
 } from "./SlidePhysics.ts"
 import {
 	INITIAL_WALL_TRAVERSAL_STATE,
+	jumpCountAfterWallContact,
 	stepWallTraversal,
 	type WallTraversalState,
 } from "./WallTraversal.ts"
@@ -1709,6 +1710,7 @@ export class ArenaGame {
 			},
 			ground,
 		)
+		const wallCrouchDetach = crouch && this.#wallTraversal.mode !== "none"
 		const wasPhysicsSliding = this.#slide
 		const slideStep = stepSlidePhysics(
 			{
@@ -1717,7 +1719,7 @@ export class ArenaGame {
 				z: this.#player.velocity.z,
 			},
 			{
-				crouching: crouch,
+				crouching: crouch && !wallCrouchDetach,
 				delta,
 				grounded,
 				terrainGradient: sampleTerrainGradient(
@@ -1730,6 +1732,7 @@ export class ArenaGame {
 		this.#player.velocity.x = slideStep.x
 		this.#player.velocity.z = slideStep.z
 		this.#slide = slideStep.sliding
+		if (wallCrouchDetach) this.#slide = false
 		if (this.#slide && !wasPhysicsSliding) {
 			const localSlideVelocity = this.#player.velocity
 				.clone()
@@ -1825,8 +1828,9 @@ export class ArenaGame {
 		const nextX = motion.x
 		const nextZ = motion.z
 		const wallStep = stepWallTraversal(this.#wallTraversal, {
-			blocked: crouch || this.#slide || this.#dead,
+			blocked: this.#slide || this.#dead,
 			contact: motion.contact,
+			crouching: crouch,
 			delta,
 			grounded,
 			jumpRequested: this.#jumpQueued,
@@ -1834,9 +1838,13 @@ export class ArenaGame {
 		})
 		this.#wallTraversal = wallStep.state
 		this.#player.velocity.set(...wallStep.velocity)
+		this.#player.jumps = jumpCountAfterWallContact(
+			wallStep.resetJumpAvailability,
+			this.#player.jumps,
+		)
+		if (wallStep.detachedByCrouch) this.#slide = false
 		if (wallStep.consumedJump) {
 			this.#jumpQueued = false
-			this.#player.jumps = Math.max(1, this.#player.jumps) as 1 | 2
 		}
 		const midpointGround =
 			this.#heightAt(
