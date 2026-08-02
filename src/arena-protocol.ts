@@ -22,7 +22,7 @@ export function isVisorExpression(value: unknown): value is VisorExpression {
 	return VISOR_EXPRESSIONS.some((expression) => expression === value)
 }
 
-export const PILOT_EMOTES = ["wave"] as const
+export const PILOT_EMOTES = ["wave", "salute", "fistbump"] as const
 
 export type PilotEmote = (typeof PILOT_EMOTES)[number]
 
@@ -43,6 +43,8 @@ export type PlayerSnapshot = {
 	jump: 0 | 1 | 2
 	lifeSequence: number
 	position: Vector3Tuple
+	punchSequence: number
+	punchStartedAt: number
 	recoilSequence: number
 	recoilStartedAt: number
 	reload: ReloadSnapshot | null
@@ -61,13 +63,55 @@ export type PlayerMoveSnapshot = Omit<
 	| "dead"
 	| "deathStartedAt"
 	| "equippedWeapon"
+	| "emote"
+	| "emoteStartedAt"
 	| "id"
 	| "lifeSequence"
 	| "recoilSequence"
 	| "recoilStartedAt"
 	| "reload"
 	| "respawnAt"
+	| "punchSequence"
+	| "punchStartedAt"
 >
+
+export const GESTURE_ACTIONS = ["wave", "salute", "fistbump", "punch"] as const
+export type GestureAction = (typeof GESTURE_ACTIONS)[number]
+
+export type GestureIntent = {
+	clientActionId: number
+	type: GestureAction
+}
+
+export function isGestureIntent(value: unknown): value is GestureIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 2 &&
+		Number.isSafeInteger(record["clientActionId"]) &&
+		(record["clientActionId"] as number) >= 0 &&
+		GESTURE_ACTIONS.some((action) => action === record["type"])
+	)
+}
+
+export type MeleeHitResult = {
+	actionId: number
+	attackerId: string
+	classification: "assassination" | "punch"
+	damage: number
+	position: Vector3Tuple
+	serverTime: number
+	targetId: string
+}
+
+export type FistContactResult = {
+	actionIds: readonly [number, number]
+	id: number
+	kind: "fistbump" | "punch-bump"
+	participantIds: readonly [string, string]
+	position: Vector3Tuple
+	serverTime: number
+}
 
 export function nextAcceptedRecoilSignal(
 	current: Pick<PlayerSnapshot, "recoilSequence" | "recoilStartedAt">,
@@ -355,7 +399,7 @@ export type DirectHitResult = {
 export type PlayerDamageImpact = {
 	direction: Vector3Tuple
 	position: Vector3Tuple
-	source: "grenade" | "kamikaze" | "mini-missile" | "projectile"
+	source: "grenade" | "kamikaze" | "melee" | "mini-missile" | "projectile"
 }
 
 export type PlayerDamageSnapshot = PlayerDamageImpact & {

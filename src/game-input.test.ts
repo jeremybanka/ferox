@@ -5,6 +5,8 @@ import {
 	debounceWheelInput,
 	IDLE_HOLD_INPUT_STATE,
 	inputEdge,
+	gamepadGestureInputs,
+	keyboardGestureInput,
 	isPickupGamepadInput,
 	isPickupKeyboardInput,
 	isWeaponSwitchGamepadInput,
@@ -40,6 +42,32 @@ describe("pickup input", () => {
 		expect(inputEdge(true, true)).toEqual({ held: true, triggered: false })
 		expect(inputEdge(false, true)).toEqual({ held: false, triggered: false })
 		expect(inputEdge(true, false)).toEqual({ held: true, triggered: true })
+	})
+})
+
+describe("gesture input", () => {
+	test("maps keyboard fallbacks without accepting repeat", () => {
+		expect(keyboardGestureInput("KeyH", false)).toBe("punch")
+		expect(keyboardGestureInput("KeyV", false)).toBe("wave")
+		expect(keyboardGestureInput("KeyB", false)).toBe("fistbump")
+		expect(keyboardGestureInput("KeyG", false)).toBe("salute")
+		expect(keyboardGestureInput("KeyH", true)).toBeNull()
+		expect(keyboardGestureInput("KeyR", false)).toBeNull()
+	})
+
+	test("keeps RS and each d-pad direction independent", () => {
+		const buttons = Array.from({ length: 16 }, () => ({
+			pressed: false,
+			value: 0,
+		}))
+		buttons[11] = { pressed: true, value: 1 }
+		buttons[15] = { pressed: true, value: 1 }
+		expect(gamepadGestureInputs(buttons)).toEqual({
+			fistbump: false,
+			punch: true,
+			salute: true,
+			wave: false,
+		})
 	})
 })
 

@@ -302,8 +302,14 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>PICK UP</span>
 						<kbd>R / RB</kbd>
 						<span>RELOAD</span>
-						<kbd>D-PAD ↑</kbd>
+						<kbd>V / D-PAD ↑</kbd>
 						<span>WAVE</span>
+						<kbd>G / D-PAD →</kbd>
+						<span>SALUTE</span>
+						<kbd>B / D-PAD ←</kbd>
+						<span>FISTBUMP</span>
+						<kbd>H / RS</kbd>
+						<span>PUNCH</span>
 						<kbd>◉</kbd>
 						<span>GAMEPAD READY</span>
 					</control-hint>

@@ -8,6 +8,9 @@ import type {
 	DroneDestroyedSnapshot,
 	EquipmentSlots,
 	FireIntent,
+	FistContactResult,
+	GestureAction,
+	GestureIntent,
 	GrenadeExplodedSnapshot,
 	GrenadeIntent,
 	GrenadeSnapshot,
@@ -19,6 +22,7 @@ import type {
 	MiniMissileIntent,
 	MiniMissilePickupSnapshot,
 	MiniMissileSnapshot,
+	MeleeHitResult,
 	PlayerMoveSnapshot,
 	PlayerDamageSnapshot,
 	PlayerSnapshot,
@@ -40,6 +44,7 @@ import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
 import { GameAudio } from "./audio/GameAudio.ts"
 import type { GameAudioDefinition } from "./audio/GameAudioDefinitions.ts"
 import { DamageParticleBurst } from "./DamageParticles.ts"
+import { FistContactParticleBurst } from "./FistContactParticles.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
 import {
 	FREE_AIM_TAP_THRESHOLD_MS,
@@ -62,9 +67,11 @@ import {
 	debounceWheelInput,
 	IDLE_HOLD_INPUT_STATE,
 	inputEdge,
+	gamepadGestureInputs,
 	isPickupGamepadInput,
 	isWeaponSwitchGamepadInput,
 	isWeaponSwitchKeyboardInput,
+	keyboardGestureInput,
 	updateHoldInput,
 	type HoldInputState,
 } from "./game-input.ts"
@@ -193,6 +200,18 @@ import {
 	WAVE_DURATION_SECONDS,
 	waveAnimationLayer,
 } from "./pilot/WaveAnimation.ts"
+import {
+	FISTBUMP_DURATION_SECONDS,
+	fistbumpAnimationLayer,
+} from "./pilot/FistbumpAnimation.ts"
+import {
+	PUNCH_DURATION_SECONDS,
+	punchAnimationLayer,
+} from "./pilot/PunchAnimation.ts"
+import {
+	SALUTE_DURATION_SECONDS,
+	saluteAnimationLayer,
+} from "./pilot/SaluteAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
 import {
 	pilotSmartTargetCandidateFromRoot,
@@ -286,6 +305,8 @@ type RemotePilot = {
 	landingStartedAt: number
 	lifeSequence: number
 	pitch: number
+	punchSequence: number
+	punchStartedAt: number
 	position: THREE.Vector3
 	recoilSequence: number
 	recoilState: RemoteRecoilState
@@ -319,6 +340,8 @@ export class ArenaGame {
 	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 280)
 	readonly #drones: DroneBotSystem
 	readonly #damageEffects = new BoundedDamageEffects<DamageParticleBurst>()
+	readonly #fistContactEffects =
+		new BoundedDamageEffects<FistContactParticleBurst>()
 	readonly #dustGeometry = new THREE.SphereGeometry(0.18, 5, 4)
 	readonly #dustMaterial = new THREE.MeshBasicMaterial({
 		color: "#bfa987",
@@ -361,7 +384,17 @@ export class ArenaGame {
 	#crouching = false
 	#dead = false
 	#deathStartedAt: number | null = null
-	#dPadUpHeld = false
+	#gestureHeld: Record<GestureAction, boolean> = {
+		fistbump: false,
+		punch: false,
+		salute: false,
+		wave: false,
+	}
+	#gestureSequence = 0
+	#activeEmoteUntil = 0
+	#punchStartedAt = -Infinity
+	#punchUntil = 0
+	#lastFistContactId = 0
 	#disposed = false
 	#fireCooldown = 0
 	#freeAim = false
@@ -420,8 +453,6 @@ export class ArenaGame {
 	#visorExpression: VisorExpression = "boot"
 	#visorHurtUntil = 0
 	#visorStartedAt = Date.now() / 1_000
-	#waveStartedAt = 0
-	#waveUntil = 0
 	#weaponsFreeUntil = 0
 	#weaponKind: WeaponKind = DEFAULT_GUN_ID
 	#activeSlot: WeaponSlotIndex = 0
@@ -492,6 +523,8 @@ export class ArenaGame {
 		this.#socket.off("arena:combat", this.#onCombat)
 		this.#socket.off("arena:direct-hit", this.#onDirectHit)
 		this.#socket.off("arena:player-damaged", this.#onPlayerDamaged)
+		this.#socket.off("arena:melee-hit", this.#onMeleeHit)
+		this.#socket.off("arena:fist-contact", this.#onFistContact)
 		this.#socket.off("arena:drone-destroyed", this.#onDroneDestroyed)
 		this.#socket.off("arena:grenade", this.#onGrenade)
 		this.#socket.off("arena:grenade-exploded", this.#onGrenadeExploded)
@@ -510,6 +543,7 @@ export class ArenaGame {
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
 		this.#damageEffects.clear()
+		this.#fistContactEffects.clear()
 		for (const flash of this.#muzzleFlashes) {
 			this.#scene.remove(flash.mesh)
 			flash.mesh.geometry.dispose()
@@ -545,6 +579,8 @@ export class ArenaGame {
 		if (isWeaponSwitchKeyboardInput(event.code, event.repeat))
 			this.#requestSwitch(1)
 		if (event.code === "KeyX" && !event.repeat) this.#requestDrop()
+		const gesture = keyboardGestureInput(event.code, event.repeat)
+		if (gesture !== null) this.#requestGesture(gesture)
 	}
 
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
@@ -620,6 +656,7 @@ export class ArenaGame {
 		}
 		this.#grenadeExplosions.length = 0
 		this.#damageEffects.clear()
+		this.#fistContactEffects.clear()
 		for (const model of this.#remotePlayers.values()) {
 			model.ragdoll?.dispose()
 			this.#scene.remove(model.rig.root)
@@ -666,8 +703,6 @@ export class ArenaGame {
 				.applyQuaternion(this.#camera.quaternion)
 				.toArray(),
 			crouching: false,
-			emote: null,
-			emoteStartedAt: 0,
 			freeAim: false,
 			jump: 0,
 			position: this.#player.position.toArray(),
@@ -724,6 +759,10 @@ export class ArenaGame {
 						? snapshot.lifeSequence
 						: 0,
 					pitch: 0,
+					punchSequence: Number.isSafeInteger(snapshot.punchSequence)
+						? snapshot.punchSequence
+						: 0,
+					punchStartedAt: -Infinity,
 					position: new THREE.Vector3(),
 					recoilSequence: initialRemoteRecoilTracker(snapshot.recoilSequence)
 						.sequence,
@@ -788,10 +827,21 @@ export class ArenaGame {
 				(model.emote !== snapshot.emote ||
 					model.emoteSignalAt !== snapshot.emoteStartedAt)
 			) {
-				model.emoteStartedAt = performance.now() / 1_000
+				model.emoteStartedAt =
+					performance.now() / 1_000 -
+					Math.max(0, Date.now() / 1_000 - snapshot.emoteStartedAt)
 			}
 			model.emote = snapshot.emote
 			model.emoteSignalAt = snapshot.emoteStartedAt
+			if (
+				Number.isSafeInteger(snapshot.punchSequence) &&
+				snapshot.punchSequence > model.punchSequence
+			) {
+				model.punchSequence = snapshot.punchSequence
+				model.punchStartedAt =
+					performance.now() / 1_000 -
+					Math.max(0, Date.now() / 1_000 - snapshot.punchStartedAt)
+			}
 			model.freeAim = snapshot.freeAim
 			if (
 				Number.isSafeInteger(snapshot.lifeSequence) &&
@@ -877,6 +927,7 @@ export class ArenaGame {
 		if (combat.dead && !this.#dead) {
 			this.#dead = true
 			this.#cancelReloadPresentation()
+			this.#fistContactEffects.clear()
 			this.#resetTransientState()
 		}
 		if (!combat.dead) {
@@ -946,6 +997,46 @@ export class ArenaGame {
 		if (!observed.accepted) return
 		model.damageDirection.set(...observed.direction).normalize()
 		this.#damageEffects.add(new DamageParticleBurst(this.#scene, event))
+	}
+
+	readonly #onMeleeHit = (result: MeleeHitResult): void => {
+		if (
+			!Number.isSafeInteger(result.actionId) ||
+			(result.classification !== "punch" &&
+				result.classification !== "assassination") ||
+			result.attackerId !== this.#socket.id
+		)
+			return
+		this.#hitMarkerClassification =
+			result.classification === "assassination" ? "headshot" : "normal"
+		this.#hitMarkerSequence += 1
+		this.#hitMarkerUntil =
+			performance.now() / 1_000 + HIT_MARKER_DURATION_SECONDS
+		this.#audio.playEffect("hit-confirm", {
+			gain: result.classification === "assassination" ? 1.3 : 0.92,
+		})
+	}
+
+	readonly #onFistContact = (event: FistContactResult): void => {
+		if (
+			!Number.isSafeInteger(event.id) ||
+			event.id <= this.#lastFistContactId ||
+			!Array.isArray(event.position) ||
+			event.position.length !== 3 ||
+			event.position.some((value) => !Number.isFinite(value))
+		)
+			return
+		this.#lastFistContactId = event.id
+		this.#fistContactEffects.add(
+			new FistContactParticleBurst(this.#scene, event),
+		)
+		const cameraSpace = this.#camera.worldToLocal(
+			new THREE.Vector3(...event.position),
+		)
+		this.#audio.playEffect("fist-contact", {
+			gain: event.participantIds.includes(this.#socket.id ?? "") ? 1 : 0.72,
+			pan: THREE.MathUtils.clamp(cameraSpace.x / 8, -0.7, 0.7),
+		})
 	}
 
 	readonly #onDroneDestroyed = (destroyed: DroneDestroyedSnapshot): void => {
@@ -1092,6 +1183,8 @@ export class ArenaGame {
 		this.#socket.on("arena:combat", this.#onCombat)
 		this.#socket.on("arena:direct-hit", this.#onDirectHit)
 		this.#socket.on("arena:player-damaged", this.#onPlayerDamaged)
+		this.#socket.on("arena:melee-hit", this.#onMeleeHit)
+		this.#socket.on("arena:fist-contact", this.#onFistContact)
 		this.#socket.on("arena:drone-destroyed", this.#onDroneDestroyed)
 		this.#socket.on("arena:grenade", this.#onGrenade)
 		this.#socket.on("arena:grenade-exploded", this.#onGrenadeExploded)
@@ -1272,7 +1365,15 @@ export class ArenaGame {
 		this.#grenadeHeld = false
 		this.#jumpQueued = false
 		this.#weaponsFreeUntil = 0
-		this.#waveUntil = 0
+		this.#activeEmoteUntil = 0
+		this.#punchUntil = 0
+		this.#punchStartedAt = -Infinity
+		this.#gestureHeld = {
+			fistbump: false,
+			punch: false,
+			salute: false,
+			wave: false,
+		}
 		this.#acquiredTargetId = null
 		this.#lockedTargetId = null
 		this.#targetingState = "idle"
@@ -1283,11 +1384,14 @@ export class ArenaGame {
 	#pollGamepad(): {
 		crouch: boolean
 		fire: boolean
+		fistbump: boolean
 		grenade: boolean
 		jump: boolean
 		lock: boolean
+		punch: boolean
 		pickup: boolean
 		reload: boolean
+		salute: boolean
 		sprint: boolean
 		switchWeapon: boolean
 		wave: boolean
@@ -1300,11 +1404,14 @@ export class ArenaGame {
 			return {
 				crouch: false,
 				fire: false,
+				fistbump: false,
 				grenade: false,
 				jump: false,
 				lock: false,
+				punch: false,
 				pickup: false,
 				reload: false,
+				salute: false,
 				sprint: false,
 				switchWeapon: false,
 				wave: false,
@@ -1327,18 +1434,21 @@ export class ArenaGame {
 		const reload = gamepad.buttons[5]?.pressed ?? false
 		const sprint = gamepad.buttons[10]?.pressed ?? false
 		const switchWeapon = isWeaponSwitchGamepadInput(gamepad.buttons)
-		const wave = gamepad.buttons[12]?.pressed ?? false
+		const gestures = gamepadGestureInputs(gamepad.buttons)
 		return {
 			crouch,
 			fire,
+			fistbump: gestures.fistbump,
 			grenade,
 			jump,
 			lock,
+			punch: gestures.punch,
 			pickup,
 			reload,
+			salute: gestures.salute,
 			sprint,
 			switchWeapon,
-			wave,
+			wave: gestures.wave,
 			x: deadzone(gamepad.axes[0] ?? 0),
 			y: deadzone(gamepad.axes[1] ?? 0),
 		}
@@ -1378,11 +1488,11 @@ export class ArenaGame {
 		this.#pickupHoldState = pickupHold.state
 		this.#pickupProgress = pickupHold.progress
 		if (pickupHold.event === "completed") this.#requestPickup()
-		if (gamepad.wave && !this.#dPadUpHeld) {
-			this.#waveStartedAt = Date.now() / 1_000
-			this.#waveUntil = performance.now() / 1_000 + WAVE_DURATION_SECONDS
+		for (const gesture of ["punch", "wave", "fistbump", "salute"] as const) {
+			const edge = inputEdge(gamepad[gesture], this.#gestureHeld[gesture])
+			this.#gestureHeld[gesture] = edge.held
+			if (edge.triggered) this.#requestGesture(gesture)
 		}
-		this.#dPadUpHeld = gamepad.wave
 		const freeAimPressed = gamepad.lock || this.#keys.has("KeyQ")
 		if (freeAimPressed) {
 			if (!this.#leftBumperHeld) {
@@ -1662,6 +1772,32 @@ export class ArenaGame {
 			clientActionId: this.#nextInventoryActionId(),
 			type: "reload",
 		} satisfies InventoryActionIntent)
+	}
+
+	#requestGesture(type: GestureAction): void {
+		if (!this.#connected || this.#dead) return
+		const now = performance.now() / 1_000
+		if (type === "punch" && now < this.#punchUntil) return
+		this.#gestureSequence += 1
+		this.#socket.emit("arena:gesture", {
+			clientActionId: this.#gestureSequence,
+			type,
+		} satisfies GestureIntent)
+		if (type === "punch") {
+			this.#activeEmoteUntil = 0
+			this.#punchStartedAt = now
+			this.#punchUntil = now + PUNCH_DURATION_SECONDS
+			this.#cancelReloadPresentation()
+			return
+		}
+		this.#punchUntil = 0
+		const duration =
+			type === "wave"
+				? WAVE_DURATION_SECONDS
+				: type === "salute"
+					? SALUTE_DURATION_SECONDS
+					: FISTBUMP_DURATION_SECONDS
+		this.#activeEmoteUntil = now + duration
 	}
 
 	#fire(): void {
@@ -2197,6 +2333,16 @@ export class ArenaGame {
 		const bob =
 			Math.sin(performance.now() * 0.012) * Math.min(speed * 0.002, 0.025)
 		const presentation = gunPresentation(this.#weaponKind, "firstPerson")
+		const punchElapsed = performance.now() / 1_000 - this.#punchStartedAt
+		const punchProgress = THREE.MathUtils.clamp(
+			punchElapsed / PUNCH_DURATION_SECONDS,
+			0,
+			1,
+		)
+		const punchWeight =
+			punchElapsed >= 0 && punchElapsed < PUNCH_DURATION_SECONDS
+				? Math.sin(punchProgress * Math.PI)
+				: 0
 		const reloadPose =
 			this.#reload === null
 				? { positionOffset: [0, 0, 0] as const }
@@ -2210,6 +2356,7 @@ export class ArenaGame {
 			presentation.position[1] +
 				bob +
 				reloadPose.positionOffset[1] +
+				punchWeight * -0.32 +
 				deathProgress * 0.38,
 			delta * 8,
 		)
@@ -2217,6 +2364,7 @@ export class ArenaGame {
 			this.#weapon.position.z,
 			presentation.position[2] +
 				reloadPose.positionOffset[2] +
+				punchWeight * 0.28 +
 				deathProgress * 0.5,
 			delta * 18,
 		)
@@ -2224,6 +2372,7 @@ export class ArenaGame {
 			this.#weapon.position.x,
 			presentation.position[0] +
 				reloadPose.positionOffset[0] +
+				punchWeight * 0.38 +
 				this.#slidePoseWeight * 0.09,
 			delta * 9,
 		)
@@ -2440,6 +2589,10 @@ export class ArenaGame {
 			desired.multiply(
 				new THREE.Quaternion().setFromEuler(new THREE.Euler(0.8, 0, 0.5)),
 			)
+		} else if (performance.now() / 1_000 < this.#punchUntil) {
+			desired.multiply(
+				new THREE.Quaternion().setFromEuler(new THREE.Euler(0.45, 0.2, 0.55)),
+			)
 		} else if (this.#slide) {
 			desired.multiply(
 				new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.08, 0, 0.13)),
@@ -2590,14 +2743,34 @@ export class ArenaGame {
 				)
 			}
 			const lookDirection = { pitch: model.pitch, yaw: 0 }
-			const waveElapsed = animationTime - model.emoteStartedAt
-			const waving =
-				model.emote === "wave" &&
-				waveElapsed >= 0 &&
-				waveElapsed < WAVE_DURATION_SECONDS
-			if (waving && !model.dead) {
-				layers.push(waveAnimationLayer(waveElapsed / WAVE_DURATION_SECONDS))
+			const emoteElapsed = animationTime - model.emoteStartedAt
+			const emoteDuration =
+				model.emote === "wave"
+					? WAVE_DURATION_SECONDS
+					: model.emote === "salute"
+						? SALUTE_DURATION_SECONDS
+						: model.emote === "fistbump"
+							? FISTBUMP_DURATION_SECONDS
+							: 0
+			const emoteActive =
+				model.emote !== null &&
+				emoteElapsed >= 0 &&
+				emoteElapsed < emoteDuration
+			if (emoteActive && !model.dead) {
+				const progress = emoteElapsed / emoteDuration
+				if (model.emote === "wave") layers.push(waveAnimationLayer(progress))
+				if (model.emote === "salute")
+					layers.push(saluteAnimationLayer(progress))
+				if (model.emote === "fistbump")
+					layers.push(fistbumpAnimationLayer(progress))
 			}
+			const punchElapsed = animationTime - model.punchStartedAt
+			const punching =
+				!emoteActive &&
+				punchElapsed >= 0 &&
+				punchElapsed < PUNCH_DURATION_SECONDS
+			if (punching && !model.dead)
+				layers.push(punchAnimationLayer(punchElapsed / PUNCH_DURATION_SECONDS))
 			if (model.reload !== null && !model.dead) {
 				const progress = reloadProgress(model.reload, Date.now() / 1_000)
 				const reload = gunDefinition(model.reload.gunId).reload
@@ -2653,7 +2826,7 @@ export class ArenaGame {
 			const constraints = model.dead
 				? []
 				: [lookTowardConstraint(lookDirection, 0.92)]
-			if (waving) {
+			if (model.emote === "wave" && emoteActive) {
 				constraints.push(waveTowardConstraint(lookDirection, 0.9))
 			}
 			if (
@@ -2726,7 +2899,7 @@ export class ArenaGame {
 		if (!this.#connected || this.#dead || this.#snapshotElapsed < 0.05) return
 		this.#snapshotElapsed = 0
 		const now = performance.now() / 1_000
-		const waving = now < this.#waveUntil
+		const emoteActive = now < this.#activeEmoteUntil
 		const horizontalSpeed = Math.hypot(
 			this.#player.velocity.x,
 			this.#player.velocity.z,
@@ -2734,7 +2907,7 @@ export class ArenaGame {
 		const visorExpression: VisorExpression =
 			now < this.#visorHurtUntil
 				? "hurt"
-				: waving
+				: emoteActive
 					? "happy"
 					: this.#freeAim
 						? "focus"
@@ -2750,8 +2923,6 @@ export class ArenaGame {
 		this.#socket.emit("arena:move", {
 			aimDirection: this.#getAimDirection().toArray(),
 			crouching: this.#crouching,
-			emote: waving ? "wave" : null,
-			emoteStartedAt: this.#waveStartedAt,
 			freeAim: this.#freeAim,
 			jump: this.#player.jumps,
 			position: this.#player.position.toArray(),
@@ -2882,6 +3053,7 @@ export class ArenaGame {
 		this.#drones.update(delta)
 		this.#updateMuzzleFlashes(delta)
 		this.#damageEffects.update(delta)
+		this.#fistContactEffects.update(delta)
 		this.#updateProjectiles(delta)
 		this.#updateGrenades(delta)
 		this.#updateMiniMissiles(delta)

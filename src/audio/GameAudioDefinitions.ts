@@ -10,6 +10,7 @@ export const GAME_SOUND_IDS = [
 	"double-jump",
 	"explosion",
 	"grenade-throw",
+	"fist-contact",
 	"hit-confirm",
 	"jump",
 	"land",
@@ -592,6 +593,27 @@ const effects = {
 			},
 		],
 		pitchJitterCents: 45,
+	}),
+	"fist-contact": defineSynthPatch({
+		baseFrequencyHz: 440,
+		id: "fist-contact",
+		layers: [
+			{
+				durationSeconds: 0.16,
+				envelope: pluckEnvelope,
+				frequencyEndRatio: 1.5,
+				gain: 0.32,
+				source: { kind: "oscillator", waveform: "triangle" },
+			},
+			{
+				durationSeconds: 0.09,
+				envelope: impactEnvelope,
+				filter: { frequencyRatio: 10, kind: "bandpass", q: 1.4 },
+				gain: 0.2,
+				source: { kind: "noise", texture: "crackle" },
+			},
+		],
+		pitchJitterCents: 24,
 	}),
 	"grenade-throw": defineSynthPatch({
 		baseFrequencyHz: 135,
