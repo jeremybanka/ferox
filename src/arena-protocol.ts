@@ -510,7 +510,6 @@ export type PlayerDamageImpact = {
 		| "ballistic"
 		| "bubble"
 		| "grenade"
-		| "hitscan"
 		| "kamikaze"
 		| "melee"
 		| "mini-missile"
@@ -550,8 +549,10 @@ export type ProjectileSnapshot = {
 	damage: number
 	direction: Vector3Tuple
 	id: number
+	lifetimeSeconds: number
 	origin: Vector3Tuple
 	ownerId: string | null
+	speed: number
 	team: "bot" | "player"
 }
 
@@ -580,12 +581,24 @@ export type BallisticSnapshot = {
 
 export type BallisticEndedSnapshot = { id: number; position: Vector3Tuple }
 
-export type HitscanSnapshot = {
+export type ShotgunPelletSnapshot = {
 	direction: Vector3Tuple
-	distance: number
 	id: number
 	origin: Vector3Tuple
 	ownerId: string
+	phase: "flying" | "suspended"
+	position: Vector3Tuple
+}
+
+export type ShotgunVolleySnapshot = {
+	clientShotId: number
+	damage: number
+	hangSeconds: number
+	maxDistance: number
+	origin: Vector3Tuple
+	ownerId: string
+	pellets: ShotgunPelletSnapshot[]
+	speed: number
 }
 
 export type DroneDestroyedSnapshot = {

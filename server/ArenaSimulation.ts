@@ -27,7 +27,8 @@ import type {
 	PlayerDamageImpact,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
-	HitscanSnapshot,
+	ShotgunPelletSnapshot,
+	ShotgunVolleySnapshot,
 	Vector3Tuple,
 } from "../src/arena-protocol.ts"
 import { isMiniMissileTargetRef } from "../src/arena-protocol.ts"
@@ -73,8 +74,12 @@ import {
 	RAIL_GRAVITY_MIN,
 	RAIL_SPEED_MAX,
 	RAIL_SPEED_MIN,
-	SHOTGUN_MAX_RANGE,
-	shotgunDamageAtDistance,
+	SHOTGUN_MAX_ACTIVE_PELLETS,
+	SHOTGUN_PELLET_COUNT,
+	SHOTGUN_PELLET_DAMAGE,
+	SHOTGUN_PELLET_HANG_SECONDS,
+	SHOTGUN_PELLET_MAX_DISTANCE,
+	SHOTGUN_PELLET_SPEED,
 	RECOVERED_DRONE_INVENTORY_CAP,
 	grenadeDamageAtDistance,
 	MINI_MISSILE_BLAST_RADIUS,
@@ -100,6 +105,7 @@ import {
 	validateMiniMissileDesignation,
 	type MiniMissileSeekerCandidate,
 } from "./MiniMissileSeeker.ts"
+import { shotgunPelletDirections, shotgunVolleySeed } from "./ShotgunPellets.ts"
 
 export type SimulationPlayer = {
 	crouching: boolean
@@ -161,12 +167,27 @@ type DronePayloadState = {
 type ProjectileState = {
 	clientShotId: number | null
 	damage: number
+	distanceRemaining: number | null
+	headshotMultiplier: number
 	id: number
+	kind: "projectile" | "shotgun-pellet"
 	life: number
+	lifetimeSeconds: number
 	ownerId: string | null
+	origin: THREE.Vector3
+	phase: "flying" | "suspended"
 	position: THREE.Vector3
+	speed: number
 	team: "bot" | "player"
 	velocity: THREE.Vector3
+}
+
+type ProjectileSpawnOptions = {
+	headshotMultiplier?: number
+	kind?: ProjectileState["kind"]
+	lifetimeSeconds?: number
+	maxDistance?: number | null
+	speed?: number
 }
 
 type GrenadeState = {
@@ -223,7 +244,8 @@ type ArenaSimulationOptions = {
 	emitMiniMissileExploded: (snapshot: MiniMissileExplodedSnapshot) => void
 	emitProjectile: (snapshot: ProjectileSnapshot) => void
 	emitProjectileEnded: (snapshot: ProjectileEndedSnapshot) => void
-	emitHitscan?: (snapshot: HitscanSnapshot) => void
+	emitShotgunPelletSuspended?: (snapshot: ShotgunPelletSnapshot) => void
+	emitShotgunVolley?: (snapshot: ShotgunVolleySnapshot) => void
 	getPlayers: () => SimulationPlayer[]
 	initialDrones?: readonly SimulationDroneSeed[]
 	onDirectHit: (playerId: string, result: DirectHitResult) => void
@@ -266,7 +288,6 @@ export class ArenaSimulation {
 	readonly #emitBallisticEnded: (snapshot: BallisticEndedSnapshot) => void
 	readonly #emitBubble: (snapshot: BubbleSnapshot) => void
 	readonly #emitBubblePopped: (snapshot: BubblePoppedSnapshot) => void
-	readonly #emitHitscan: (snapshot: HitscanSnapshot) => void
 	readonly #emitGrenade: ArenaSimulationOptions["emitGrenade"]
 	readonly #emitGrenadeExploded: ArenaSimulationOptions["emitGrenadeExploded"]
 	readonly #emitMiniMissile: ArenaSimulationOptions["emitMiniMissile"]
@@ -274,6 +295,10 @@ export class ArenaSimulation {
 	readonly #emitMiniMissileExploded: ArenaSimulationOptions["emitMiniMissileExploded"]
 	readonly #emitProjectile: ArenaSimulationOptions["emitProjectile"]
 	readonly #emitProjectileEnded: ArenaSimulationOptions["emitProjectileEnded"]
+	readonly #emitShotgunPelletSuspended: (
+		snapshot: ShotgunPelletSnapshot,
+	) => void
+	readonly #emitShotgunVolley: (snapshot: ShotgunVolleySnapshot) => void
 	readonly #getPlayers: ArenaSimulationOptions["getPlayers"]
 	readonly #grenades: GrenadeState[] = []
 	readonly #lastGrenadeIntent = new Map<string, number>()
@@ -291,7 +316,6 @@ export class ArenaSimulation {
 	#nextDroneId = 1
 	#nextBallisticId = 1
 	#nextBubbleId = 1
-	#nextHitscanId = 1
 	#nextPayloadId = 1
 	#nextGrenadeId = 1
 	#nextMissileId = 1
@@ -305,7 +329,6 @@ export class ArenaSimulation {
 		this.#emitBallisticEnded = options.emitBallisticEnded ?? (() => undefined)
 		this.#emitBubble = options.emitBubble ?? (() => undefined)
 		this.#emitBubblePopped = options.emitBubblePopped ?? (() => undefined)
-		this.#emitHitscan = options.emitHitscan ?? (() => undefined)
 		this.#emitDroneDestroyed = options.emitDroneDestroyed
 		this.#emitGrenade = options.emitGrenade
 		this.#emitGrenadeExploded = options.emitGrenadeExploded
@@ -314,6 +337,9 @@ export class ArenaSimulation {
 		this.#emitMiniMissileExploded = options.emitMiniMissileExploded
 		this.#emitProjectile = options.emitProjectile
 		this.#emitProjectileEnded = options.emitProjectileEnded
+		this.#emitShotgunPelletSuspended =
+			options.emitShotgunPelletSuspended ?? (() => undefined)
+		this.#emitShotgunVolley = options.emitShotgunVolley ?? (() => undefined)
 		this.#getPlayers = options.getPlayers
 		this.#onDroneKilled = options.onDroneKilled
 		this.#onDirectHit = options.onDirectHit
@@ -483,68 +509,38 @@ export class ArenaSimulation {
 	fireShotgun(playerId: string, intent: FireIntent): boolean {
 		const validated = this.#validateFireIntent(playerId, intent)
 		if (validated === null) return false
-		const { direction, origin, players } = validated
-		const end = origin.clone().addScaledVector(direction, SHOTGUN_MAX_RANGE)
-		const bubbleHit = this.#nearestBubbleAlongSegment(origin, end, playerId)
-		const droneHit = this.#nearestDroneAlongSegment(origin, end, 1.35)
-		const playerHit = this.#nearestPlayerAlongSegment(
-			origin,
-			end,
-			players,
-			playerId,
+		const { direction, origin } = validated
+		this.#makeRoomForShotgunPellets(SHOTGUN_PELLET_COUNT)
+		const seed = shotgunVolleySeed(playerId, intent.clientShotId, this.#seed)
+		const pellets = shotgunPelletDirections(direction.toArray(), seed).map(
+			(pelletDirection) =>
+				this.#spawnProjectile(
+					origin,
+					new THREE.Vector3(...pelletDirection),
+					"player",
+					SHOTGUN_PELLET_DAMAGE,
+					"#ffb276",
+					playerId,
+					intent.clientShotId,
+					{
+						headshotMultiplier: 1,
+						kind: "shotgun-pellet",
+						lifetimeSeconds: SHOTGUN_PELLET_HANG_SECONDS,
+						maxDistance: SHOTGUN_PELLET_MAX_DISTANCE,
+						speed: SHOTGUN_PELLET_SPEED,
+					},
+				),
 		)
-		let distance = SHOTGUN_MAX_RANGE
-		let nearest = 1
-		if (bubbleHit !== undefined) nearest = bubbleHit.travelFraction
-		if (droneHit !== undefined)
-			nearest = Math.min(nearest, droneHit.travelFraction)
-		if (playerHit !== undefined)
-			nearest = Math.min(nearest, playerHit.travelFraction)
-		distance = nearest * SHOTGUN_MAX_RANGE
-		const damage = shotgunDamageAtDistance(distance)
-		if (
-			bubbleHit !== undefined &&
-			bubbleHit.travelFraction <= nearest + Number.EPSILON
-		) {
-			this.#damageBubble(bubbleHit.target, damage)
-		} else if (
-			droneHit !== undefined &&
-			droneHit.travelFraction <= nearest + Number.EPSILON
-		) {
-			this.#damageDrone(droneHit.target, damage, playerId)
-			this.#directHit(
-				playerId,
-				intent.clientShotId,
-				this.#nextHitscanId,
-				damage,
-				droneHit.target.id,
-				"drone",
-				"normal",
-			)
-		} else if (playerHit !== undefined) {
-			this.#onPlayerDamage(playerHit.target.id, damage, {
-				direction: direction.toArray(),
-				position: origin.clone().lerp(end, playerHit.travelFraction).toArray(),
-				source: "hitscan",
-			})
-			this.#directHit(
-				playerId,
-				intent.clientShotId,
-				this.#nextHitscanId,
-				damage,
-				playerHit.target.id,
-				"player",
-				playerHit.classification,
-			)
-		}
-		this.#emitHitscan({
-			direction: direction.toArray(),
-			distance,
-			id: this.#nextHitscanId,
+		this.#emitShotgunVolley({
+			clientShotId: intent.clientShotId,
+			damage: SHOTGUN_PELLET_DAMAGE,
+			hangSeconds: SHOTGUN_PELLET_HANG_SECONDS,
+			maxDistance: SHOTGUN_PELLET_MAX_DISTANCE,
 			origin: origin.toArray(),
 			ownerId: playerId,
+			pellets: pellets.map((pellet) => this.#snapshotShotgunPellet(pellet)),
+			speed: SHOTGUN_PELLET_SPEED,
 		})
-		this.#nextHitscanId += 1
 		return true
 	}
 
@@ -606,6 +602,12 @@ export class ArenaSimulation {
 		this.#ballistics.push(ballistic)
 		this.#emitBallistic(this.#snapshotBallistic(ballistic))
 		return true
+	}
+
+	shotgunPellets(): ShotgunPelletSnapshot[] {
+		return this.#projectiles
+			.filter((projectile) => projectile.kind === "shotgun-pellet")
+			.map((projectile) => this.#snapshotShotgunPellet(projectile))
 	}
 
 	throwGrenade(playerId: string, intent: GrenadeIntent): boolean {
@@ -1432,6 +1434,34 @@ export class ArenaSimulation {
 		)
 	}
 
+	#makeRoomForShotgunPellets(incoming: number): void {
+		let active = this.#projectiles.filter(
+			(projectile) => projectile.kind === "shotgun-pellet",
+		).length
+		while (active + incoming > SHOTGUN_MAX_ACTIVE_PELLETS) {
+			const index = this.#projectiles.findIndex(
+				(projectile) => projectile.kind === "shotgun-pellet",
+			)
+			if (index < 0) return
+			const [removed] = this.#projectiles.splice(index, 1)
+			if (removed !== undefined) this.#emitProjectileEnded({ id: removed.id })
+			active -= 1
+		}
+	}
+
+	#snapshotShotgunPellet(projectile: ProjectileState): ShotgunPelletSnapshot {
+		if (projectile.ownerId === null)
+			throw new Error("Shotgun pellets require an owner.")
+		return {
+			direction: projectile.velocity.clone().normalize().toArray(),
+			id: projectile.id,
+			origin: projectile.origin.toArray(),
+			ownerId: projectile.ownerId,
+			phase: projectile.phase,
+			position: projectile.position.toArray(),
+		}
+	}
+
 	#spawnProjectile(
 		origin: THREE.Vector3,
 		direction: THREE.Vector3,
@@ -1440,28 +1470,45 @@ export class ArenaSimulation {
 		color: string,
 		ownerId: string | null,
 		clientShotId: number | null,
-	): void {
+		options: ProjectileSpawnOptions = {},
+	): ProjectileState {
 		const id = this.#nextProjectileId
 		this.#nextProjectileId += 1
-		this.#projectiles.push({
+		const speed = options.speed ?? 55
+		const lifetimeSeconds = options.lifetimeSeconds ?? 2.4
+		const projectile: ProjectileState = {
 			clientShotId,
 			damage,
+			distanceRemaining: options.maxDistance ?? null,
+			headshotMultiplier:
+				options.headshotMultiplier ?? PLAYER_HEADSHOT_MULTIPLIER,
 			id,
-			life: 2.4,
+			kind: options.kind ?? "projectile",
+			life: lifetimeSeconds,
+			lifetimeSeconds,
 			ownerId,
+			origin: origin.clone(),
+			phase: "flying",
 			position: origin.clone(),
+			speed,
 			team,
-			velocity: direction.clone().multiplyScalar(55),
-		})
-		this.#emitProjectile({
-			color,
-			damage,
-			direction: direction.toArray(),
-			id,
-			origin: origin.toArray(),
-			ownerId,
-			team,
-		})
+			velocity: direction.clone().multiplyScalar(speed),
+		}
+		this.#projectiles.push(projectile)
+		if (projectile.kind === "projectile") {
+			this.#emitProjectile({
+				color,
+				damage,
+				direction: direction.toArray(),
+				id,
+				lifetimeSeconds,
+				origin: origin.toArray(),
+				ownerId,
+				speed,
+				team,
+			})
+		}
+		return projectile
 	}
 
 	#updateGrenades(delta: number, players: readonly SimulationPlayer[]): void {
@@ -1633,9 +1680,26 @@ export class ArenaSimulation {
 		for (let index = this.#projectiles.length - 1; index >= 0; index -= 1) {
 			const projectile = this.#projectiles[index]
 			if (projectile === undefined) continue
-			projectile.life -= delta
 			const previousPosition = projectile.position.clone()
-			projectile.position.addScaledVector(projectile.velocity, delta)
+			if (projectile.kind === "shotgun-pellet") {
+				if (projectile.phase === "flying") {
+					const distance = Math.min(
+						projectile.distanceRemaining ?? 0,
+						projectile.speed * delta,
+					)
+					projectile.position.addScaledVector(
+						projectile.velocity,
+						distance / projectile.speed,
+					)
+					projectile.distanceRemaining = Math.max(
+						0,
+						(projectile.distanceRemaining ?? 0) - distance,
+					)
+				} else projectile.life -= delta
+			} else {
+				projectile.life -= delta
+				projectile.position.addScaledVector(projectile.velocity, delta)
+			}
 			let hit = false
 			if (projectile.team === "player") {
 				const bubbleHit = this.#nearestBubbleAlongSegment(
@@ -1677,7 +1741,7 @@ export class ArenaSimulation {
 				} else if (!hit && playerHit !== undefined) {
 					const damage =
 						playerHit.classification === "headshot"
-							? projectile.damage * PLAYER_HEADSHOT_MULTIPLIER
+							? projectile.damage * projectile.headshotMultiplier
 							: projectile.damage
 					this.#onPlayerDamage(playerHit.target.id, damage, {
 						direction: projectile.velocity.clone().normalize().toArray(),
@@ -1730,9 +1794,29 @@ export class ArenaSimulation {
 					(previousPosition.y + projectile.position.y) * 0.5,
 					0.12,
 				).contact !== null
-			if (projectile.life <= 0 || hit || hitGround || hitObstacle) {
+			const expired =
+				projectile.kind === "projectile"
+					? projectile.life <= 0
+					: projectile.phase === "suspended" && projectile.life <= 0
+			if (expired || hit || hitGround || hitObstacle) {
 				this.#projectiles.splice(index, 1)
 				this.#emitProjectileEnded({ id: projectile.id })
+			} else if (
+				projectile.kind === "shotgun-pellet" &&
+				projectile.phase === "flying" &&
+				projectile.distanceRemaining === 0
+			) {
+				projectile.position
+					.copy(projectile.origin)
+					.addScaledVector(
+						projectile.velocity,
+						SHOTGUN_PELLET_MAX_DISTANCE / projectile.speed,
+					)
+				projectile.phase = "suspended"
+				projectile.life = SHOTGUN_PELLET_HANG_SECONDS
+				this.#emitShotgunPelletSuspended(
+					this.#snapshotShotgunPellet(projectile),
+				)
 			}
 		}
 	}

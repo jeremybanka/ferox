@@ -51,7 +51,7 @@ export type GunDefinition = {
 	fire: {
 		clientCooldownSeconds: number
 		serverMinimumIntervalMs: number
-		type: "ballistic" | "bubbles" | "guided-missile" | "hitscan" | "projectile"
+		type: "ballistic" | "bubbles" | "guided-missile" | "projectile" | "shotgun"
 	}
 	id: GunId
 	magazineSize: number
@@ -70,7 +70,7 @@ export type GunDefinition = {
 				seekerRange: number
 				speed: number
 		  }
-		| { kind: "hitscan" }
+		| { kind: "shotgun" }
 		| { kind: "bubbles" }
 		| { kind: "ballistic" }
 }
@@ -151,7 +151,7 @@ export const GUN_DEFINITIONS = {
 		fire: {
 			clientCooldownSeconds: 0.74,
 			serverMinimumIntervalMs: SHOTGUN_SERVER_MINIMUM_INTERVAL_MS,
-			type: "hitscan",
+			type: "shotgun",
 		},
 		id: "shotgun",
 		magazineSize: SHOTGUN_MAGAZINE_SIZE,
@@ -175,7 +175,7 @@ export const GUN_DEFINITIONS = {
 			durationSeconds: SHOTGUN_RELOAD_SHELL_SECONDS,
 			refillProgress: 0.82,
 		},
-		tuning: { kind: "hitscan" },
+		tuning: { kind: "shotgun" },
 	},
 	"bubble-gun": {
 		capabilities: { fire: true, pickup: true, reload: true },

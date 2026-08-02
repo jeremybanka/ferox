@@ -4,12 +4,21 @@ import type {
 	BallisticSnapshot,
 	DirectHitResult,
 	PlayerDamageImpact,
+	ProjectileEndedSnapshot,
+	ShotgunPelletSnapshot,
+	ShotgunVolleySnapshot,
 } from "../src/arena-protocol.ts"
 import {
 	BUBBLE_HEALTH,
 	RAIL_DAMAGE_MAX,
 	RAIL_DAMAGE_MIN,
-	shotgunDamageAtDistance,
+	SHOTGUN_CONE_HALF_ANGLE_RADIANS,
+	SHOTGUN_MAX_ACTIVE_PELLETS,
+	SHOTGUN_PELLET_COUNT,
+	SHOTGUN_PELLET_DAMAGE,
+	SHOTGUN_PELLET_HANG_SECONDS,
+	SHOTGUN_PELLET_MAX_DISTANCE,
+	SHOTGUN_PELLET_SPEED,
 } from "../src/game-constants.ts"
 import { ArenaSimulation, type SimulationPlayer } from "./ArenaSimulation.ts"
 import { MiniMissileArmory } from "./MiniMissileArmory.ts"
@@ -22,6 +31,9 @@ function simulationHarness(players: SimulationPlayer[]) {
 	}> = []
 	const hits: Array<{ playerId: string; result: DirectHitResult }> = []
 	const ballistics: BallisticSnapshot[] = []
+	const ended: ProjectileEndedSnapshot[] = []
+	const suspended: ShotgunPelletSnapshot[] = []
+	const volleys: ShotgunVolleySnapshot[] = []
 	const simulation = new ArenaSimulation({
 		emitBallistic: (snapshot) => ballistics.push(snapshot),
 		emitDroneDestroyed: () => undefined,
@@ -31,7 +43,9 @@ function simulationHarness(players: SimulationPlayer[]) {
 		emitMiniMissileEnded: () => undefined,
 		emitMiniMissileExploded: () => undefined,
 		emitProjectile: () => undefined,
-		emitProjectileEnded: () => undefined,
+		emitProjectileEnded: (snapshot) => ended.push(snapshot),
+		emitShotgunPelletSuspended: (snapshot) => suspended.push(snapshot),
+		emitShotgunVolley: (snapshot) => volleys.push(snapshot),
 		getPlayers: () => players,
 		onDirectHit: (playerId, result) => hits.push({ playerId, result }),
 		onDroneKilled: () => undefined,
@@ -40,17 +54,49 @@ function simulationHarness(players: SimulationPlayer[]) {
 			damage.push({ amount, impact, playerId }),
 		seed: 7_431_905,
 	})
-	return { ballistics, damage, hits, simulation }
+	return { ballistics, damage, ended, hits, simulation, suspended, volleys }
 }
 
-test("shotgun falloff is 150 through one meter and reaches zero at maximum range", () => {
-	expect(shotgunDamageAtDistance(0)).toBe(150)
-	expect(shotgunDamageAtDistance(1)).toBe(150)
-	expect(shotgunDamageAtDistance(6)).toBeLessThan(150)
-	expect(shotgunDamageAtDistance(13)).toBe(0)
+test("shotgun emits one deterministic 20-pellet, six-damage high-speed cone", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 50, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const first = simulationHarness(players)
+	const second = simulationHarness(players)
+	const intent = {
+		clientShotId: 1,
+		direction: [0, 0, -1] as [number, number, number],
+		origin: [0, 50, 0] as [number, number, number],
+	}
+	expect(first.simulation.fireShotgun("shooter", intent)).toBe(true)
+	expect(second.simulation.fireShotgun("shooter", intent)).toBe(true)
+	expect(first.volleys).toHaveLength(1)
+	const volley = first.volleys[0]!
+	expect(volley.pellets).toHaveLength(SHOTGUN_PELLET_COUNT)
+	expect(volley.damage).toBe(SHOTGUN_PELLET_DAMAGE)
+	expect(volley.speed).toBe(SHOTGUN_PELLET_SPEED)
+	expect(volley.maxDistance).toBe(SHOTGUN_PELLET_MAX_DISTANCE)
+	expect(volley.hangSeconds).toBe(SHOTGUN_PELLET_HANG_SECONDS)
+	for (const pellet of volley.pellets) {
+		const [x, y, z] = pellet.direction
+		const angle = Math.acos(Math.max(-1, Math.min(1, -z)))
+		expect(angle).toBeLessThanOrEqual(
+			SHOTGUN_CONE_HALF_ANGLE_RADIANS + Number.EPSILON * 8,
+		)
+		expect(Math.hypot(x, y, z)).toBeCloseTo(1, 12)
+	}
+	expect(
+		new Set(volley.pellets.map((pellet) => pellet.direction.join(","))).size,
+	).toBe(SHOTGUN_PELLET_COUNT)
+	expect(second.volleys[0]?.pellets).toEqual(volley.pellets)
 })
 
-test("shotgun resolves one authoritative point-blank trace", () => {
+test("shotgun close hit aggregates 20 authoritative six-damage contacts without replay", () => {
 	const players: SimulationPlayer[] = [
 		{
 			crouching: false,
@@ -73,10 +119,16 @@ test("shotgun resolves one authoritative point-blank trace", () => {
 			origin: [0, 1, 0],
 		}),
 	).toBe(true)
-	expect(harness.damage).toHaveLength(1)
-	expect(harness.damage[0]?.amount).toBe(150)
-	expect(harness.damage[0]?.impact.source).toBe("hitscan")
-	expect(harness.hits).toHaveLength(1)
+	harness.simulation.update(0.01)
+	expect(harness.damage).toHaveLength(SHOTGUN_PELLET_COUNT)
+	expect(
+		harness.damage.every(({ amount }) => amount === SHOTGUN_PELLET_DAMAGE),
+	).toBe(true)
+	expect(harness.damage.reduce((total, hit) => total + hit.amount, 0)).toBe(120)
+	expect(
+		harness.damage.every(({ impact }) => impact.source === "projectile"),
+	).toBe(true)
+	expect(harness.hits).toHaveLength(SHOTGUN_PELLET_COUNT)
 	expect(
 		harness.simulation.fireShotgun("shooter", {
 			clientShotId: 1,
@@ -84,6 +136,111 @@ test("shotgun resolves one authoritative point-blank trace", () => {
 			origin: [0, 1, 0],
 		}),
 	).toBe(false)
+	harness.simulation.update(0.02)
+	expect(harness.damage).toHaveLength(SHOTGUN_PELLET_COUNT)
+})
+
+test("missed pellets stop exactly at 20m, remain stationary, then expire after 10s", () => {
+	const harness = simulationHarness([
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 50, 0],
+			velocity: [0, 0, 0],
+		},
+	])
+	harness.simulation.fireShotgun("shooter", {
+		clientShotId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 50, 0],
+	})
+	harness.simulation.update(SHOTGUN_PELLET_MAX_DISTANCE / SHOTGUN_PELLET_SPEED)
+	expect(harness.suspended).toHaveLength(SHOTGUN_PELLET_COUNT)
+	for (const pellet of harness.suspended) {
+		expect(
+			Math.hypot(
+				pellet.position[0] - pellet.origin[0],
+				pellet.position[1] - pellet.origin[1],
+				pellet.position[2] - pellet.origin[2],
+			),
+		).toBeCloseTo(SHOTGUN_PELLET_MAX_DISTANCE, 12)
+		expect(pellet.phase).toBe("suspended")
+	}
+	const fixedPositions = harness.simulation
+		.shotgunPellets()
+		.map(({ position }) => position)
+	harness.simulation.update(SHOTGUN_PELLET_HANG_SECONDS - 0.001)
+	expect(
+		harness.simulation.shotgunPellets().map(({ position }) => position),
+	).toEqual(fixedPositions)
+	expect(harness.simulation.shotgunPellets()).toHaveLength(SHOTGUN_PELLET_COUNT)
+	harness.simulation.update(0.002)
+	expect(harness.simulation.shotgunPellets()).toHaveLength(0)
+	expect(harness.ended).toHaveLength(SHOTGUN_PELLET_COUNT)
+})
+
+test("a suspended pellet remains live for one contact and cannot deal duplicate damage", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 50, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = simulationHarness(players)
+	harness.simulation.fireShotgun("shooter", {
+		clientShotId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 50, 0],
+	})
+	harness.simulation.update(SHOTGUN_PELLET_MAX_DISTANCE / SHOTGUN_PELLET_SPEED)
+	const center = harness.suspended[0]!
+	players.push({
+		crouching: false,
+		id: "target",
+		position: [
+			center.position[0],
+			center.position[1] + 0.8,
+			center.position[2],
+		],
+		velocity: [0, 0, 0],
+	})
+	harness.simulation.update(0.001)
+	expect(harness.damage).toHaveLength(1)
+	expect(harness.damage[0]?.amount).toBe(SHOTGUN_PELLET_DAMAGE)
+	expect(harness.simulation.shotgunPellets()).toHaveLength(
+		SHOTGUN_PELLET_COUNT - 1,
+	)
+	harness.simulation.update(0.001)
+	expect(harness.damage).toHaveLength(1)
+})
+
+test("sustained shotgun fire is capped while every newest volley stays complete", () => {
+	const harness = simulationHarness([
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 50, 0],
+			velocity: [0, 0, 0],
+		},
+	])
+	for (let clientShotId = 1; clientShotId <= 60; clientShotId += 1) {
+		expect(
+			harness.simulation.fireShotgun("shooter", {
+				clientShotId,
+				direction: [0, 0, -1],
+				origin: [0, 50, 0],
+			}),
+		).toBe(true)
+		expect(harness.volleys.at(-1)?.pellets).toHaveLength(SHOTGUN_PELLET_COUNT)
+	}
+	expect(harness.simulation.shotgunPellets()).toHaveLength(
+		SHOTGUN_MAX_ACTIVE_PELLETS,
+	)
+	expect(harness.ended).toHaveLength(
+		60 * SHOTGUN_PELLET_COUNT - SHOTGUN_MAX_ACTIVE_PELLETS,
+	)
 })
 
 test("bubble entities are bounded, damageable shields", () => {
@@ -195,7 +352,7 @@ test("armory generalizes secondary selection and inserts one shotgun shell", () 
 	expect(
 		armory.collectArenaWeapon("pilot", "shotgun", shotgun.position, 0),
 	).toBe(true)
-	expect(armory.consumeActive("pilot", "hitscan")).toBe(true)
+	expect(armory.consumeActive("pilot", "shotgun")).toBe(true)
 	expect(armory.refillReload("pilot", { gunId: "shotgun", slot: 1 })).toBe(true)
 	expect(armory.equipment("pilot").slots[1]?.ammo).toBe(6)
 })

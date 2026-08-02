@@ -221,8 +221,8 @@ export class MiniMissileArmory {
 			| "ballistic"
 			| "bubbles"
 			| "guided-missile"
-			| "hitscan"
-			| "projectile",
+			| "projectile"
+			| "shotgun",
 	): boolean {
 		const inventory = this.#inventories.get(playerId)
 		if (inventory === undefined) return false

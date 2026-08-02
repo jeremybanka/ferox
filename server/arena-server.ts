@@ -228,7 +228,9 @@ const simulation = new ArenaSimulation({
 	emitBallisticEnded: (snapshot) => io.emit("arena:ballistic-ended", snapshot),
 	emitBubble: (snapshot) => io.emit("arena:bubble", snapshot),
 	emitBubblePopped: (snapshot) => io.emit("arena:bubble-popped", snapshot),
-	emitHitscan: (snapshot) => io.emit("arena:hitscan", snapshot),
+	emitShotgunPelletSuspended: (snapshot) =>
+		io.emit("arena:shotgun-pellet-suspended", snapshot),
+	emitShotgunVolley: (snapshot) => io.emit("arena:shotgun-volley", snapshot),
 	emitDroneDestroyed: (snapshot) => {
 		io.emit("arena:drone-destroyed", snapshot)
 	},
@@ -412,6 +414,7 @@ realtime(
 			}
 			gameSocket.emit("arena:combat", combatSnapshot(socketId))
 			gameSocket.emit("arena:snapshot", simulation.snapshot())
+			gameSocket.emit("arena:shotgun-pellets", simulation.shotgunPellets())
 			gameSocket.emit("arena:equipment", armory.equipment(socketId))
 			gameSocket.emit("arena:mini-missile-pickup", armory.pickup())
 			gameSocket.emit("arena:weapon-pickups", armory.arenaPickups())
@@ -524,12 +527,12 @@ realtime(
 			const equipped = gunDefinition(armory.activeWeapon(socketId))
 			if (
 				equipped.fire.type !== "projectile" &&
-				equipped.fire.type !== "hitscan" &&
+				equipped.fire.type !== "shotgun" &&
 				equipped.fire.type !== "bubbles"
 			)
 				return
 			if (players.get(socketId)?.reload !== null) {
-				if (equipped.fire.type !== "hitscan") return
+				if (equipped.fire.type !== "shotgun") return
 				cancelPlayerReload(socketId)
 			}
 			const now = performance.now()
@@ -546,7 +549,7 @@ realtime(
 			const accepted =
 				equipped.fire.type === "projectile"
 					? simulation.fire(socketId, payload)
-					: equipped.fire.type === "hitscan"
+					: equipped.fire.type === "shotgun"
 						? simulation.fireShotgun(socketId, payload)
 						: simulation.fireBubbles(socketId, payload)
 			if (!accepted) {

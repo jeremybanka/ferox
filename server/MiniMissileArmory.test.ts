@@ -117,8 +117,8 @@ test("arena pickup collection is proximity validated, contended, rotating, and a
 		armory.collectArenaWeapon("second", "shotgun", firstPad.position, 9_100),
 		false,
 	)
-	assert.equal(armory.consumeActive("first", "hitscan"), true)
-	assert.equal(armory.consumeActive("first", "hitscan"), true)
+	assert.equal(armory.consumeActive("first", "shotgun"), true)
+	assert.equal(armory.consumeActive("first", "shotgun"), true)
 	assert.equal(armory.release("first", 10_000), true)
 	const returning = armory
 		.arenaPickups()

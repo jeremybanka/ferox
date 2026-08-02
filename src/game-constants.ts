@@ -27,8 +27,13 @@ export const PLAYER_HEADSHOT_MULTIPLIER = 2
 // Additional weapon balance lives beside the existing combat constants. The
 // server owns every value; clients use these only for presentation/input.
 export const SHOTGUN_MAGAZINE_SIZE = 6
-export const SHOTGUN_MAX_RANGE = 13
-export const SHOTGUN_DAMAGE_AT_ONE_METER = 150
+export const SHOTGUN_CONE_HALF_ANGLE_RADIANS = (Math.PI * 8) / 180
+export const SHOTGUN_MAX_ACTIVE_PELLETS = 1_024
+export const SHOTGUN_PELLET_COUNT = 20
+export const SHOTGUN_PELLET_DAMAGE = 6
+export const SHOTGUN_PELLET_HANG_SECONDS = 10
+export const SHOTGUN_PELLET_MAX_DISTANCE = 20
+export const SHOTGUN_PELLET_SPEED = 150
 export const SHOTGUN_RELOAD_SHELL_SECONDS = 0.72
 export const SHOTGUN_SERVER_MINIMUM_INTERVAL_MS = 720
 export const BUBBLE_GUN_MAGAZINE_SIZE = 4
@@ -72,14 +77,6 @@ export const ARENA_WEAPON_RESPAWN_MS = {
 	"rail-gun": 16_000,
 	shotgun: 7_000,
 } as const
-
-/** 150 at 1m, quadratic falloff, and exactly zero at 13m. */
-export function shotgunDamageAtDistance(distance: number): number {
-	if (!Number.isFinite(distance) || distance >= SHOTGUN_MAX_RANGE) return 0
-	const clamped = Math.max(1, distance)
-	const normalized = (clamped - 1) / (SHOTGUN_MAX_RANGE - 1)
-	return SHOTGUN_DAMAGE_AT_ONE_METER * (1 - normalized) ** 2
-}
 
 export function railChargeFraction(durationMs: number): number {
 	return Math.max(0, Math.min(1, durationMs / RAIL_CHARGE_MAX_MS))
