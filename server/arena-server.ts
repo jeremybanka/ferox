@@ -27,6 +27,7 @@ import { arenaHeightAt } from "../src/arena-terrain.ts"
 import { resolveArenaMotion } from "../src/ArenaWorld.ts"
 import {
 	ARENA_SEED,
+	ARENA_WEAPON_PICKUP_PADS,
 	MINI_MISSILE_PICKUP_POSITION,
 	PLAYER_SPAWN_ORDER,
 	PLAYER_SPAWN_POINTS,
@@ -94,11 +95,15 @@ const lastInventoryAction = new Map<string, number>()
 const lastDroneAction = new Map<string, number>()
 const playerReloads = new Map<string, Exclude<ReloadState, null>>()
 const [pickupX, pickupZ] = MINI_MISSILE_PICKUP_POSITION
-const armory = new MiniMissileArmory([
-	pickupX,
-	arenaHeightAt(ARENA_SEED, pickupX, pickupZ) + 0.72,
-	pickupZ,
-])
+const arenaPickupPads = ARENA_WEAPON_PICKUP_PADS.map(
+	([x, z]) =>
+		[x, arenaHeightAt(ARENA_SEED, x, z) + 0.72, z] as [number, number, number],
+)
+const armory = new MiniMissileArmory(
+	[pickupX, arenaHeightAt(ARENA_SEED, pickupX, pickupZ) + 0.72, pickupZ],
+	arenaPickupPads,
+	Date.now(),
+)
 const standardLocks = new StandardLockTracker()
 
 const applyPlayerDamage = (
@@ -154,7 +159,7 @@ const applyPlayerDamage = (
 		melee.cancel(playerId)
 		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
 		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
-		if (armory.release(playerId, nowMs)) emitPickup()
+		if (armory.release(playerId, nowMs)) emitPickups()
 		emitEquipment(playerId)
 		lastPlayerFire.delete(playerId)
 		lastPlayerGrenade.delete(playerId)
@@ -196,8 +201,9 @@ const emitEquipment = (playerId: string): void => {
 		player.equippedWeapon = activeEquipmentSlot(equipment).weapon
 }
 
-const emitPickup = (): void => {
+const emitPickups = (): void => {
 	io.emit("arena:mini-missile-pickup", armory.pickup())
+	io.emit("arena:weapon-pickups", armory.arenaPickups())
 }
 
 const cancelPlayerReload = (playerId: string): boolean => {
@@ -408,6 +414,7 @@ realtime(
 			gameSocket.emit("arena:snapshot", simulation.snapshot())
 			gameSocket.emit("arena:equipment", armory.equipment(socketId))
 			gameSocket.emit("arena:mini-missile-pickup", armory.pickup())
+			gameSocket.emit("arena:weapon-pickups", armory.arenaPickups())
 			gameSocket.emit("arena:incoming-lock", armory.incoming(socketId))
 			gameSocket.emit(
 				"arena:drone-inventory",
@@ -658,17 +665,22 @@ realtime(
 				case "collect": {
 					const player = players.get(socketId)
 					changed =
-						player !== undefined && armory.collect(socketId, player.position)
+						player !== undefined &&
+						(payload.weapon === "mini-missile"
+							? armory.collect(socketId, player.position, Date.now())
+							: armory.collectArenaWeapon(
+									socketId,
+									payload.weapon,
+									player.position,
+									Date.now(),
+								))
 					pickupChanged = changed
 					break
 				}
 				case "switch":
 					changed = armory.switchActive(socketId, payload.direction)
 					break
-				case "select-secondary":
-					changed = armory.selectSecondary(socketId, payload.weapon)
-					break
-				case "drop-mini-missile":
+				case "drop-secondary":
 					changed = armory.release(socketId, Date.now())
 					pickupChanged = changed
 					break
@@ -696,11 +708,11 @@ realtime(
 			if (payload.type !== "reload") cancelPlayerReload(socketId)
 			if (payload.type !== "reload") railCharges.delete(socketId)
 			const after = armory.activeWeapon(socketId)
-			if (payload.type === "drop-mini-missile")
+			if (payload.type === "drop-secondary")
 				simulation.cancelLocksByOwner(socketId)
 			if (payload.type !== "reload") emitEquipment(socketId)
 			if (before !== after) reconcileStandardLocks()
-			if (pickupChanged) emitPickup()
+			if (pickupChanged) emitPickups()
 			io.emit("arena:players", [...players.values()])
 		}
 		const onThrowGrenade = (payload: GrenadeIntent): void => {
@@ -779,7 +791,7 @@ realtime(
 			lastInventoryAction.delete(socketId)
 			melee.removePlayer(socketId)
 			lastDroneAction.delete(socketId)
-			emitPickup()
+			emitPickups()
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)
 			gameSocket.off("arena:move", onMove)
@@ -843,7 +855,7 @@ setInterval(() => {
 		)
 		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
 		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
-		if (armory.release(playerId, nowMs)) emitPickup()
+		if (armory.release(playerId, nowMs)) emitPickups()
 		armory.resetLoadout(playerId)
 		playerReloads.delete(playerId)
 		emitEquipment(playerId)
@@ -897,7 +909,7 @@ setInterval(() => {
 	if (playersChanged) io.emit("arena:players", [...players.values()])
 	simulation.update(delta)
 	melee.update(nowMs)
-	if (armory.update(nowMs)) emitPickup()
+	if (armory.update(nowMs)) emitPickups()
 }, 1_000 / 30)
 
 setInterval(() => {
