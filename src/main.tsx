@@ -15,7 +15,10 @@ if (appRoot === null) {
 }
 
 const storedPilotId = globalThis.localStorage.getItem("ferox-pilot-id")
-const pilotId = storedPilotId ?? crypto.randomUUID()
+const pilotId =
+	storedPilotId ??
+	crypto.randomUUID?.() ??
+	crypto.getRandomValues(new Uint32Array(4)).join("-")
 globalThis.localStorage.setItem("ferox-pilot-id", pilotId)
 
 const socket = io({
