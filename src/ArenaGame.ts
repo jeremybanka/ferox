@@ -49,6 +49,7 @@ import {
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
 import { GameAudio } from "./audio/GameAudio.ts"
 import type { GameAudioDefinition } from "./audio/GameAudioDefinitions.ts"
+import { BubbleVisualField } from "./BubbleVisualField.ts"
 import { DamageParticleBurst } from "./DamageParticles.ts"
 import { FistContactParticleBurst } from "./FistContactParticles.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
@@ -361,7 +362,7 @@ const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
 
 export class ArenaGame {
 	readonly #ballistics = new Map<number, SyncedOrb>()
-	readonly #bubbles = new Map<number, SyncedOrb>()
+	readonly #bubbleField = new BubbleVisualField()
 	readonly #arenaPickupVisuals = new Map<
 		ArenaPickupVisual["weapon"],
 		ArenaPickupVisual
@@ -611,15 +612,13 @@ export class ArenaGame {
 			})
 		}
 		this.#arenaPickupVisuals.clear()
-		for (const visual of [
-			...this.#bubbles.values(),
-			...this.#ballistics.values(),
-		]) {
+		this.#scene.remove(this.#bubbleField.mesh)
+		this.#bubbleField.dispose()
+		for (const visual of this.#ballistics.values()) {
 			this.#scene.remove(visual.mesh)
 			visual.mesh.geometry.dispose()
 			;(visual.mesh.material as THREE.Material).dispose()
 		}
-		this.#bubbles.clear()
 		this.#ballistics.clear()
 		for (const model of this.#remotePlayers.values()) {
 			model.ragdoll?.dispose()
@@ -1255,42 +1254,11 @@ export class ArenaGame {
 	}
 
 	readonly #onBubble = (snapshot: BubbleSnapshot): void => {
-		let visual = this.#bubbles.get(snapshot.id)
-		if (visual === undefined) {
-			const material = new THREE.MeshPhysicalMaterial({
-				color: "#f58bdf",
-				emissive: "#7f255f",
-				emissiveIntensity: 0.35,
-				opacity: 0.24,
-				roughness: 0.08,
-				transparent: true,
-				transmission: 0.55,
-				depthWrite: false,
-			})
-			const mesh = new THREE.Mesh(
-				new THREE.SphereGeometry(snapshot.radius, 18, 12),
-				material,
-			)
-			mesh.position.set(...snapshot.position)
-			this.#scene.add(mesh)
-			visual = {
-				mesh,
-				target: new THREE.Vector3(...snapshot.position),
-				velocity: new THREE.Vector3(...snapshot.velocity),
-			}
-			this.#bubbles.set(snapshot.id, visual)
-		}
-		visual.target.set(...snapshot.position)
-		visual.velocity.set(...snapshot.velocity)
+		this.#bubbleField.upsert(snapshot)
 	}
 
 	readonly #onBubblePopped = (snapshot: BubblePoppedSnapshot): void => {
-		const visual = this.#bubbles.get(snapshot.id)
-		if (visual === undefined) return
-		this.#scene.remove(visual.mesh)
-		visual.mesh.geometry.dispose()
-		;(visual.mesh.material as THREE.Material).dispose()
-		this.#bubbles.delete(snapshot.id)
+		if (!this.#bubbleField.remove(snapshot.id)) return
 		this.#spawnMuzzleFlash(
 			new THREE.Vector3(...snapshot.position),
 			new THREE.Vector3(0, 1, 0),
@@ -1355,9 +1323,10 @@ export class ArenaGame {
 			activeBubbles.add(bubble.id)
 			this.#onBubble(bubble)
 		}
-		for (const [id, visual] of this.#bubbles) {
-			if (!activeBubbles.has(id))
-				this.#onBubblePopped({ id, position: visual.mesh.position.toArray() })
+		for (const id of this.#bubbleField.ids()) {
+			const position = this.#bubbleField.position(id)
+			if (!activeBubbles.has(id) && position !== null)
+				this.#onBubblePopped({ id, position: position.toArray() })
 		}
 		const activeBallistics = new Set<number>()
 		for (const ballistic of snapshot.ballistics ?? []) {
@@ -1423,6 +1392,7 @@ export class ArenaGame {
 	}
 
 	#buildWorld(): void {
+		this.#scene.add(this.#bubbleField.mesh)
 		const hemisphere = new THREE.HemisphereLight("#86d9d1", "#251522", 2.3)
 		this.#scene.add(hemisphere)
 		const sun = new THREE.DirectionalLight("#ffb06a", 5.4)
@@ -2562,10 +2532,8 @@ export class ArenaGame {
 	}
 
 	#updateSyncedWeaponVisuals(delta: number): void {
-		for (const visual of [
-			...this.#bubbles.values(),
-			...this.#ballistics.values(),
-		]) {
+		this.#bubbleField.update(delta)
+		for (const visual of this.#ballistics.values()) {
 			visual.target.addScaledVector(visual.velocity, delta)
 			visual.mesh.position.lerp(visual.target, Math.min(1, delta * 14))
 			visual.mesh.rotation.y += delta * 2.2
