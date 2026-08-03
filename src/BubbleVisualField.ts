@@ -1,10 +1,13 @@
 import * as THREE from "three"
 
 import type { BubbleSnapshot } from "./arena-protocol.ts"
+import { BUBBLE_HEALTH } from "./game-constants.ts"
 
 export const BUBBLE_VISUAL_CAPACITY = 1_024
 
 type BubbleVisual = {
+	damagePulse: number
+	health: number
 	position: THREE.Vector3
 	radius: number
 	target: THREE.Vector3
@@ -20,6 +23,10 @@ export class BubbleVisualField {
 	readonly mesh: THREE.InstancedMesh
 	readonly #capacity: number
 	readonly #matrixWriter = new THREE.Object3D()
+	readonly #colorWriter = new THREE.Color()
+	readonly #damagedColor = new THREE.Color("#fff3fb")
+	readonly #healthyColor = new THREE.Color("#f58bdf")
+	readonly #hitColor = new THREE.Color("#ffffff")
 	readonly #visuals = new Map<number, BubbleVisual>()
 
 	constructor(capacity = BUBBLE_VISUAL_CAPACITY) {
@@ -52,6 +59,10 @@ export class BubbleVisualField {
 		return this.#visuals.keys()
 	}
 
+	health(id: number): number | null {
+		return this.#visuals.get(id)?.health ?? null
+	}
+
 	position(id: number): THREE.Vector3 | null {
 		return this.#visuals.get(id)?.position ?? null
 	}
@@ -65,6 +76,8 @@ export class BubbleVisualField {
 		if (visual === undefined) {
 			if (this.#visuals.size >= this.#capacity) return false
 			visual = {
+				damagePulse: 0,
+				health: snapshot.health,
 				position: new THREE.Vector3(...snapshot.position),
 				radius: snapshot.radius,
 				target: new THREE.Vector3(...snapshot.position),
@@ -72,6 +85,8 @@ export class BubbleVisualField {
 			}
 			this.#visuals.set(snapshot.id, visual)
 		}
+		if (snapshot.health < visual.health) visual.damagePulse = 1
+		visual.health = snapshot.health
 		visual.radius = snapshot.radius
 		visual.target.set(...snapshot.position)
 		visual.velocity.set(...snapshot.velocity)
@@ -81,16 +96,29 @@ export class BubbleVisualField {
 	update(delta: number): void {
 		let index = 0
 		for (const visual of this.#visuals.values()) {
+			visual.damagePulse = Math.max(0, visual.damagePulse - delta * 5)
 			visual.target.addScaledVector(visual.velocity, delta)
 			visual.position.lerp(visual.target, Math.min(1, delta * 14))
 			this.#matrixWriter.position.copy(visual.position)
 			this.#matrixWriter.scale.setScalar(visual.radius)
 			this.#matrixWriter.updateMatrix()
 			this.mesh.setMatrixAt(index, this.#matrixWriter.matrix)
+			const healthFraction = THREE.MathUtils.clamp(
+				visual.health / BUBBLE_HEALTH,
+				0,
+				1,
+			)
+			this.#colorWriter
+				.copy(this.#damagedColor)
+				.lerp(this.#healthyColor, healthFraction)
+				.lerp(this.#hitColor, visual.damagePulse * 0.72)
+			this.mesh.setColorAt(index, this.#colorWriter)
 			index += 1
 		}
 		this.mesh.count = index
 		this.mesh.instanceMatrix.needsUpdate = true
+		if (this.mesh.instanceColor !== null)
+			this.mesh.instanceColor.needsUpdate = true
 	}
 
 	dispose(): void {

@@ -1,15 +1,27 @@
 import { expect, test } from "vitest"
+import * as THREE from "three"
 
 import type {
+	BallisticEndedSnapshot,
 	BallisticSnapshot,
+	BubblePoppedSnapshot,
+	BubbleSnapshot,
 	DirectHitResult,
+	MiniMissileEndedSnapshot,
+	MiniMissileExplodedSnapshot,
+	MiniMissileSnapshot,
 	PlayerDamageImpact,
 	ProjectileEndedSnapshot,
+	ProjectileSnapshot,
 	ShotgunPelletSnapshot,
 	ShotgunVolleySnapshot,
 } from "../src/arena-protocol.ts"
 import {
 	BUBBLE_HEALTH,
+	BUBBLE_SPEED,
+	BUBBLES_PER_SHOT,
+	MINI_MISSILE_DAMAGE,
+	PLAYER_PROJECTILE_DAMAGE,
 	RAIL_DAMAGE_MAX,
 	RAIL_DAMAGE_MIN,
 	SHOTGUN_CONE_HALF_ANGLE_RADIANS,
@@ -20,10 +32,17 @@ import {
 	SHOTGUN_PELLET_MAX_DISTANCE,
 	SHOTGUN_PELLET_SPEED,
 } from "../src/game-constants.ts"
-import { ArenaSimulation, type SimulationPlayer } from "./ArenaSimulation.ts"
+import {
+	ArenaSimulation,
+	type SimulationDroneSeed,
+	type SimulationPlayer,
+} from "./ArenaSimulation.ts"
 import { MiniMissileArmory } from "./MiniMissileArmory.ts"
 
-function simulationHarness(players: SimulationPlayer[]) {
+function simulationHarness(
+	players: SimulationPlayer[],
+	initialDrones: readonly SimulationDroneSeed[] = [],
+) {
 	const damage: Array<{
 		amount: number
 		impact: PlayerDamageImpact
@@ -31,22 +50,33 @@ function simulationHarness(players: SimulationPlayer[]) {
 	}> = []
 	const hits: Array<{ playerId: string; result: DirectHitResult }> = []
 	const ballistics: BallisticSnapshot[] = []
+	const ballisticsEnded: BallisticEndedSnapshot[] = []
+	const bubbles: BubbleSnapshot[] = []
+	const bubblesPopped: BubblePoppedSnapshot[] = []
 	const ended: ProjectileEndedSnapshot[] = []
+	const missiles: MiniMissileSnapshot[] = []
+	const missilesEnded: MiniMissileEndedSnapshot[] = []
+	const missileExplosions: MiniMissileExplodedSnapshot[] = []
+	const projectiles: ProjectileSnapshot[] = []
 	const suspended: ShotgunPelletSnapshot[] = []
 	const volleys: ShotgunVolleySnapshot[] = []
 	const simulation = new ArenaSimulation({
 		emitBallistic: (snapshot) => ballistics.push(snapshot),
+		emitBallisticEnded: (snapshot) => ballisticsEnded.push(snapshot),
+		emitBubble: (snapshot) => bubbles.push(snapshot),
+		emitBubblePopped: (snapshot) => bubblesPopped.push(snapshot),
 		emitDroneDestroyed: () => undefined,
 		emitGrenade: () => undefined,
 		emitGrenadeExploded: () => undefined,
-		emitMiniMissile: () => undefined,
-		emitMiniMissileEnded: () => undefined,
-		emitMiniMissileExploded: () => undefined,
-		emitProjectile: () => undefined,
+		emitMiniMissile: (snapshot) => missiles.push(snapshot),
+		emitMiniMissileEnded: (snapshot) => missilesEnded.push(snapshot),
+		emitMiniMissileExploded: (snapshot) => missileExplosions.push(snapshot),
+		emitProjectile: (snapshot) => projectiles.push(snapshot),
 		emitProjectileEnded: (snapshot) => ended.push(snapshot),
 		emitShotgunPelletSuspended: (snapshot) => suspended.push(snapshot),
 		emitShotgunVolley: (snapshot) => volleys.push(snapshot),
 		getPlayers: () => players,
+		initialDrones,
 		onDirectHit: (playerId, result) => hits.push({ playerId, result }),
 		onDroneKilled: () => undefined,
 		onLockChanged: () => undefined,
@@ -54,7 +84,43 @@ function simulationHarness(players: SimulationPlayer[]) {
 			damage.push({ amount, impact, playerId }),
 		seed: 7_431_905,
 	})
-	return { ballistics, damage, ended, hits, simulation, suspended, volleys }
+	return {
+		ballistics,
+		ballisticsEnded,
+		bubbles,
+		bubblesPopped,
+		damage,
+		ended,
+		hits,
+		missileExplosions,
+		missiles,
+		missilesEnded,
+		projectiles,
+		simulation,
+		suspended,
+		volleys,
+	}
+}
+
+function bubbleHealth(simulation: ArenaSimulation): number {
+	return simulation
+		.snapshot()
+		.bubbles.reduce((total, bubble) => total + bubble.health, 0)
+}
+
+function fireBubbleScreen(
+	harness: ReturnType<typeof simulationHarness>,
+	ownerId: string,
+	origin: [number, number, number],
+	clientShotId = 1,
+): void {
+	expect(
+		harness.simulation.fireBubbles(ownerId, {
+			clientShotId,
+			direction: [1, 0, 0],
+			origin,
+		}),
+	).toBe(true)
 }
 
 test("shotgun emits one deterministic 20-pellet, six-damage high-speed cone", () => {
@@ -269,6 +335,12 @@ test("bubble entities are bounded, damageable shields", () => {
 	expect(harness.simulation.snapshot().bubbles).toHaveLength(7)
 	expect(harness.simulation.snapshot().bubbles[0]?.health).toBe(BUBBLE_HEALTH)
 	expect(
+		Math.hypot(...harness.simulation.snapshot().bubbles[0]!.velocity),
+	).toBeCloseTo(BUBBLE_SPEED * 0.9)
+	expect(
+		Math.hypot(...harness.simulation.snapshot().bubbles.at(-1)!.velocity),
+	).toBeCloseTo(BUBBLE_SPEED * 1.05)
+	expect(
 		harness.simulation.fireRail(
 			"rail-owner",
 			{ clientShotId: 2, direction: [0, 0, 1], origin: [0, 8, -3.8] },
@@ -278,6 +350,258 @@ test("bubble entities are bounded, damageable shields", () => {
 	harness.simulation.update(0.05)
 	expect(harness.simulation.snapshot().ballistics).toHaveLength(0)
 	expect(harness.damage).toHaveLength(0)
+})
+
+test("player bullets damage the nearest bubble, end once, and do not pass through", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 50.72, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "bubble-owner",
+			position: [0, 50.72, -4],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "behind",
+			position: [0, 50.72, -6],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = simulationHarness(players)
+	fireBubbleScreen(harness, "bubble-owner", [0, 50, -4])
+	const before = bubbleHealth(harness.simulation)
+	expect(
+		harness.simulation.fire("shooter", {
+			clientShotId: 1,
+			direction: [0, 0, -1],
+			origin: [0, 50, 0],
+		}),
+	).toBe(true)
+	harness.simulation.update(0.1)
+
+	expect(before - bubbleHealth(harness.simulation)).toBe(
+		PLAYER_PROJECTILE_DAMAGE,
+	)
+	expect(harness.ended).toEqual([{ id: 1 }])
+	expect(harness.damage).toHaveLength(0)
+	harness.simulation.update(0.1)
+	expect(before - bubbleHealth(harness.simulation)).toBe(
+		PLAYER_PROJECTILE_DAMAGE,
+	)
+})
+
+test("a nearer pilot wins collision ordering over a farther bubble", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 50.72, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 50.72, -3],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "bubble-owner",
+			position: [0, 50.72, -5],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = simulationHarness(players)
+	fireBubbleScreen(harness, "bubble-owner", [0, 50, -5])
+	const before = bubbleHealth(harness.simulation)
+	harness.simulation.fire("shooter", {
+		clientShotId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 50, 0],
+	})
+	harness.simulation.update(0.1)
+
+	expect(
+		harness.damage.map(({ amount, playerId }) => ({ amount, playerId })),
+	).toEqual([{ amount: PLAYER_PROJECTILE_DAMAGE, playerId: "target" }])
+	expect(bubbleHealth(harness.simulation)).toBe(before)
+	expect(harness.ended).toEqual([{ id: 1 }])
+})
+
+test("bot bullets damage bubbles and are consumed before reaching their pilot target", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "bubble-owner",
+			position: [0, 50.72, -4],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = simulationHarness(players, [
+		{
+			attackCooldown: 0,
+			id: 1,
+			personality: "bully",
+			position: [0, 50, 0],
+			stationary: false,
+		},
+	])
+	fireBubbleScreen(harness, "bubble-owner", [0, 50.72, -4])
+	const before = bubbleHealth(harness.simulation)
+	harness.simulation.update(0.1)
+
+	expect(harness.projectiles).toHaveLength(1)
+	expect(harness.projectiles[0]?.damage).toBe(2.8)
+	expect(before - bubbleHealth(harness.simulation)).toBeCloseTo(2.8)
+	expect(harness.ended).toEqual([{ id: 1 }])
+	expect(harness.damage).toHaveLength(0)
+})
+
+test("shotgun pellets retain exactly six damage against bubbles and end on contact", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 50.72, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "bubble-owner",
+			position: [0, 50.72, -4],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = simulationHarness(players)
+	fireBubbleScreen(harness, "bubble-owner", [0, 50, -4])
+	const before = bubbleHealth(harness.simulation)
+	harness.simulation.fireShotgun("shooter", {
+		clientShotId: 1,
+		direction: [0, 0, -1],
+		origin: [0, 50, 0],
+	})
+	harness.simulation.update(0.04)
+
+	const absorbedPellets = harness.ended.length
+	expect(absorbedPellets).toBeGreaterThan(0)
+	const healthById = new Map(
+		harness.bubbles
+			.slice(0, BUBBLES_PER_SHOT)
+			.map((bubble) => [bubble.id, bubble.health]),
+	)
+	let damageEvents = 0
+	for (const bubble of harness.bubbles.slice(BUBBLES_PER_SHOT)) {
+		const previous = healthById.get(bubble.id)!
+		expect(previous - bubble.health).toBe(SHOTGUN_PELLET_DAMAGE)
+		healthById.set(bubble.id, bubble.health)
+		damageEvents += 1
+	}
+	for (const popped of harness.bubblesPopped) {
+		expect(healthById.get(popped.id)).toBeLessThanOrEqual(SHOTGUN_PELLET_DAMAGE)
+		damageEvents += 1
+	}
+	expect(damageEvents).toBe(absorbedPellets)
+	expect(before - bubbleHealth(harness.simulation)).toBeGreaterThan(0)
+	expect(SHOTGUN_PELLET_DAMAGE).toBe(6)
+	expect(harness.simulation.shotgunPellets()).toHaveLength(
+		SHOTGUN_PELLET_COUNT - absorbedPellets,
+	)
+})
+
+test("rail projectiles pop a bubble and emit one authoritative end event", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "rail",
+			position: [0, 50.72, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "bubble-owner",
+			position: [0, 50.72, -4],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "behind",
+			position: [0, 50.72, -6],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = simulationHarness(players)
+	fireBubbleScreen(harness, "bubble-owner", [0, 50, -4])
+	const firstBubble = harness.simulation.snapshot().bubbles[0]!
+	const delta = 0.06
+	const predicted = new THREE.Vector3(...firstBubble.position).addScaledVector(
+		new THREE.Vector3(...firstBubble.velocity),
+		delta,
+	)
+	const direction = predicted.sub(new THREE.Vector3(0, 50, 0)).normalize()
+	harness.simulation.fireRail(
+		"rail",
+		{ clientShotId: 1, direction: direction.toArray(), origin: [0, 50, 0] },
+		1,
+	)
+	harness.simulation.update(delta)
+
+	expect(harness.bubblesPopped).toHaveLength(1)
+	expect(harness.ballisticsEnded).toHaveLength(1)
+	expect(harness.simulation.snapshot().ballistics).toHaveLength(0)
+	expect(harness.simulation.snapshot().bubbles).toHaveLength(
+		BUBBLES_PER_SHOT - 1,
+	)
+	harness.simulation.update(0.1)
+	expect(harness.damage).toHaveLength(0)
+})
+
+test("mini-missiles deal direct bubble damage, explode, and end exactly once", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "missile",
+			position: [0, 50.72, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "bubble-owner",
+			position: [0, 50.72, -1.4],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = simulationHarness(players)
+	fireBubbleScreen(harness, "bubble-owner", [0, 50, -1.4])
+	const before = bubbleHealth(harness.simulation)
+	const firstBubble = harness.simulation.snapshot().bubbles[0]!
+	const delta = 0.11
+	const predicted = new THREE.Vector3(...firstBubble.position).addScaledVector(
+		new THREE.Vector3(...firstBubble.velocity),
+		delta,
+	)
+	const direction = predicted.sub(new THREE.Vector3(0, 50, 0)).normalize()
+	expect(
+		harness.simulation.fireMiniMissile("missile", {
+			clientMissileId: 1,
+			direction: direction.toArray(),
+			origin: [0, 50, 0],
+		}),
+	).toBe(true)
+	harness.simulation.update(delta)
+
+	expect(before - bubbleHealth(harness.simulation)).toBe(MINI_MISSILE_DAMAGE)
+	expect(harness.missilesEnded).toEqual([{ id: 1 }])
+	expect(harness.missileExplosions).toHaveLength(1)
+	expect(harness.simulation.snapshot().missiles).toHaveLength(0)
+	harness.simulation.update(delta)
+	expect(harness.missilesEnded).toEqual([{ id: 1 }])
+	expect(before - bubbleHealth(harness.simulation)).toBe(MINI_MISSILE_DAMAGE)
 })
 
 test("rail charge monotonically increases speed and damage while flattening gravity", () => {

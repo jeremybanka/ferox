@@ -191,6 +191,27 @@ test("replacement, mini collection, death release, and disconnect never orphan p
 	)
 })
 
+test("Bubble Gun carries eight rounds and refills its full magazine", () => {
+	const armory = new MiniMissileArmory([40, 0, 40], ARENA_TEST_PADS, 0)
+	armory.connect("pilot")
+	armory.update(ARENA_WEAPON_INITIAL_DELAY_MS["bubble-gun"])
+	const bubble = armory
+		.arenaPickups()
+		.find((pickup) => pickup.weapon === "bubble-gun")!
+	assert.equal(
+		armory.collectArenaWeapon("pilot", "bubble-gun", bubble.position, 5_000),
+		true,
+	)
+	assert.equal(activeEquipmentSlot(armory.equipment("pilot")).ammo, 8)
+	assert.equal(armory.consumeActive("pilot", "bubbles"), true)
+	assert.equal(activeEquipmentSlot(armory.equipment("pilot")).ammo, 7)
+	assert.equal(
+		armory.refillReload("pilot", { gunId: "bubble-gun", slot: 1 }),
+		true,
+	)
+	assert.equal(activeEquipmentSlot(armory.equipment("pilot")).ammo, 8)
+})
+
 test("captured reload refills ARC and Mini only while slot and gun stay active", () => {
 	const armory = new MiniMissileArmory([0, 0, 0])
 	armory.connect("pilot")

@@ -45,4 +45,23 @@ describe("BubbleVisualField", () => {
 		expect(field.mesh.count).toBe(2)
 		field.dispose()
 	})
+
+	it("tracks authoritative health and brightens damaged instances", () => {
+		const field = new BubbleVisualField(2)
+		expect(field.upsert(bubble(1))).toBe(true)
+		expect(field.health(1)).toBe(80)
+		expect(field.upsert({ ...bubble(1), health: 60 })).toBe(true)
+		expect(field.upsert({ ...bubble(1), health: 40 })).toBe(true)
+		field.update(0)
+
+		const color = new THREE.Color()
+		field.mesh.getColorAt(0, color)
+		expect(field.health(1)).toBe(40)
+		expect(field.count).toBe(1)
+		expect(field.mesh.count).toBe(1)
+		expect(color.getHexString()).not.toBe(
+			new THREE.Color("#f58bdf").getHexString(),
+		)
+		field.dispose()
+	})
 })
