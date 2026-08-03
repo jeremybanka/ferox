@@ -125,6 +125,69 @@ function buildMiniMissileLauncher(
 	muzzle.position.set(0, 0.02, -1.22).sub(triggerPoint)
 }
 
+function buildLongGun(
+	root: THREE.Group,
+	muzzle: THREE.Group,
+	materials: ReturnType<typeof materialPalette>,
+	id: "rail-gun" | "shotgun",
+): void {
+	const triggerPoint = new THREE.Vector3(0, -0.1, 0.08)
+	const body = box(id === "rail-gun" ? 0.3 : 0.34, 0.25, 1.12, materials.body)
+	body.position.z = -0.3
+	const barrel = new THREE.Mesh(
+		new THREE.CylinderGeometry(
+			id === "rail-gun" ? 0.055 : 0.085,
+			0.1,
+			0.92,
+			10,
+		),
+		materials.accent,
+	)
+	barrel.rotation.x = Math.PI / 2
+	barrel.position.z = -0.92
+	const stock = box(0.24, 0.3, 0.46, materials.body)
+	stock.position.set(0, -0.02, 0.34)
+	const grip = box(0.16, 0.4, 0.2, materials.body)
+	grip.position.set(0, -0.28, 0.06)
+	grip.rotation.x = -0.2
+	const rail = box(
+		id === "rail-gun" ? 0.42 : 0.12,
+		0.08,
+		0.82,
+		materials.accent,
+	)
+	rail.position.set(0, 0.18, -0.4)
+	root.add(body, barrel, stock, grip, rail)
+	for (const part of root.children) part.position.sub(triggerPoint)
+	muzzle.position.set(0, 0.1, -1.45).sub(triggerPoint)
+}
+
+function buildBubbleGun(
+	root: THREE.Group,
+	muzzle: THREE.Group,
+	materials: ReturnType<typeof materialPalette>,
+): void {
+	const triggerPoint = new THREE.Vector3(0, -0.08, 0.08)
+	const tank = new THREE.Mesh(
+		new THREE.SphereGeometry(0.3, 12, 8),
+		materials.accent,
+	)
+	tank.scale.z = 1.35
+	tank.position.z = -0.18
+	const body = box(0.28, 0.25, 0.74, materials.body)
+	body.position.z = -0.42
+	const ring = new THREE.Mesh(
+		new THREE.TorusGeometry(0.25, 0.06, 8, 18),
+		materials.accent,
+	)
+	ring.position.z = -0.9
+	const grip = box(0.16, 0.38, 0.2, materials.body)
+	grip.position.set(0, -0.27, 0.06)
+	root.add(tank, body, ring, grip)
+	for (const part of root.children) part.position.sub(triggerPoint)
+	muzzle.position.set(0, 0.08, -1.02).sub(triggerPoint)
+}
+
 function assertUnhandledGun(id: never): never {
 	throw new Error(`No model builder registered for gun: ${String(id)}`)
 }
@@ -153,6 +216,15 @@ export function createGunModel(
 			break
 		case "mini-missile":
 			buildMiniMissileLauncher(root, muzzle, materials)
+			break
+		case "shotgun":
+			buildLongGun(root, muzzle, materials, "shotgun")
+			break
+		case "bubble-gun":
+			buildBubbleGun(root, muzzle, materials)
+			break
+		case "rail-gun":
+			buildLongGun(root, muzzle, materials, "rail-gun")
 			break
 		default:
 			assertUnhandledGun(id)

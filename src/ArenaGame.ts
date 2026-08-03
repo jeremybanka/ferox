@@ -3,6 +3,11 @@ import * as THREE from "three"
 
 import type {
 	ArenaSnapshot,
+	ArenaWeaponPickupSnapshot,
+	BallisticEndedSnapshot,
+	BallisticSnapshot,
+	BubblePoppedSnapshot,
+	BubbleSnapshot,
 	CombatSnapshot,
 	DirectHitResult,
 	DroneDestroyedSnapshot,
@@ -29,6 +34,8 @@ import type {
 	ReloadSnapshot,
 	ProjectileEndedSnapshot,
 	ProjectileSnapshot,
+	ShotgunPelletSnapshot,
+	ShotgunVolleySnapshot,
 	StandardLockIntent,
 	WeaponSlotIndex,
 	PilotEmote,
@@ -43,11 +50,13 @@ import {
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
 import { GameAudio } from "./audio/GameAudio.ts"
 import type { GameAudioDefinition } from "./audio/GameAudioDefinitions.ts"
+import { BubbleVisualField } from "./BubbleVisualField.ts"
 import { DamageParticleBurst } from "./DamageParticles.ts"
 import { FistContactParticleBurst } from "./FistContactParticles.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
 import {
 	FREE_AIM_TAP_THRESHOLD_MS,
+	ARENA_WEAPON_PICKUP_RADIUS,
 	GRENADE_BOUNCE_DAMPING,
 	GRENADE_FUSE_SECONDS,
 	GRENADE_GRAVITY,
@@ -58,6 +67,12 @@ import {
 	MINI_MISSILE_PICKUP_RADIUS,
 	PLAYER_SLIDE_DUST_BUDGET,
 	PLAYER_SLIDE_DUST_LIFETIME_SECONDS,
+	RAIL_CHARGE_MAX_MS,
+	SHOTGUN_PELLET_COUNT,
+	SHOTGUN_PELLET_DAMAGE,
+	SHOTGUN_PELLET_HANG_SECONDS,
+	SHOTGUN_PELLET_MAX_DISTANCE,
+	SHOTGUN_PELLET_SPEED,
 	SMART_TARGET_RADIUS_SCREEN,
 	TARGET_ESCAPE_DURATION_MS,
 	TARGET_LOST_FLASH_MS,
@@ -84,6 +99,7 @@ import {
 } from "./guns/GunDefinitions.ts"
 import {
 	applyGunPresentation,
+	createGunModel,
 	reconcileMountedGun,
 	type GunModel,
 } from "./guns/GunModel.ts"
@@ -102,6 +118,7 @@ import {
 	spreadDirection,
 	type RecoilSpreadState,
 } from "./RecoilSpread.ts"
+import { ShotgunPelletField } from "./ShotgunPelletField.ts"
 import {
 	BoundedDamageEffects,
 	damageFlinchAnimationLayer,
@@ -241,6 +258,22 @@ type Projectile = {
 	velocity: THREE.Vector3
 }
 
+type SyncedOrb = {
+	mesh: THREE.Mesh
+	target: THREE.Vector3
+	velocity: THREE.Vector3
+}
+
+type ArenaPickupVisual = {
+	available: boolean
+	availableAt: number | null
+	group: THREE.Group
+	model: GunModel
+	ownerId: string | null
+	position: THREE.Vector3
+	weapon: "bubble-gun" | "rail-gun" | "shotgun"
+}
+
 type MiniMissileVisual = {
 	id: number
 	mesh: THREE.Group
@@ -335,6 +368,12 @@ const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
 })
 
 export class ArenaGame {
+	readonly #ballistics = new Map<number, SyncedOrb>()
+	readonly #bubbleField = new BubbleVisualField()
+	readonly #arenaPickupVisuals = new Map<
+		ArenaPickupVisual["weapon"],
+		ArenaPickupVisual
+	>()
 	readonly #audio: GameAudio
 	readonly #canvas: HTMLCanvasElement
 	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 280)
@@ -365,6 +404,7 @@ export class ArenaGame {
 	readonly #missiles = new Map<number, MiniMissileVisual>()
 	readonly #missilePickup = new THREE.Group()
 	readonly #projectiles: Projectile[] = []
+	readonly #shotgunPellets = new ShotgunPelletField()
 	readonly #pendingShotIds = new Set<number>()
 	readonly #remotePlayers = new Map<string, RemotePilot>()
 	readonly #renderer: THREE.WebGLRenderer
@@ -397,6 +437,9 @@ export class ArenaGame {
 	#lastFistContactId = 0
 	#disposed = false
 	#fireCooldown = 0
+	#railCharging = false
+	#railChargeStartedAt = 0
+	#triggerHeld = false
 	#freeAim = false
 	#grenadeCooldown = 0
 	#grenadeHeld = false
@@ -513,6 +556,7 @@ export class ArenaGame {
 		window.removeEventListener("keyup", this.#onKeyUp)
 		window.removeEventListener("mousemove", this.#onMouseMove)
 		window.removeEventListener("mousedown", this.#onMouseDown)
+		window.removeEventListener("mouseup", this.#onMouseUp)
 		window.removeEventListener("wheel", this.#onWheel)
 		window.removeEventListener("contextmenu", this.#onContextMenu)
 		window.removeEventListener("resize", this.#resize)
@@ -538,8 +582,19 @@ export class ArenaGame {
 		this.#socket.off("arena:mini-missile-ended", this.#onMiniMissileEnded)
 		this.#socket.off("arena:mini-missile-exploded", this.#onMiniMissileExploded)
 		this.#socket.off("arena:mini-missile-pickup", this.#onMiniMissilePickup)
+		this.#socket.off("arena:weapon-pickups", this.#onArenaWeaponPickups)
 		this.#socket.off("arena:projectile", this.#onProjectile)
 		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
+		this.#socket.off("arena:bubble", this.#onBubble)
+		this.#socket.off("arena:bubble-popped", this.#onBubblePopped)
+		this.#socket.off("arena:ballistic", this.#onBallistic)
+		this.#socket.off("arena:ballistic-ended", this.#onBallisticEnded)
+		this.#socket.off("arena:shotgun-pellets", this.#onShotgunPellets)
+		this.#socket.off(
+			"arena:shotgun-pellet-suspended",
+			this.#onShotgunPelletSuspended,
+		)
+		this.#socket.off("arena:shotgun-volley", this.#onShotgunVolley)
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
 		this.#damageEffects.clear()
@@ -556,6 +611,30 @@ export class ArenaGame {
 			this.#gunModel = null
 		}
 		for (const id of this.#missiles.keys()) this.#removeMiniMissileVisual(id)
+		for (const pickup of this.#arenaPickupVisuals.values()) {
+			this.#scene.remove(pickup.group)
+			pickup.group.remove(pickup.model.root)
+			pickup.model.dispose()
+			pickup.group.traverse((child) => {
+				if (child instanceof THREE.Mesh) {
+					child.geometry.dispose()
+					if (Array.isArray(child.material))
+						child.material.forEach((material) => material.dispose())
+					else child.material.dispose()
+				}
+			})
+		}
+		this.#arenaPickupVisuals.clear()
+		this.#scene.remove(this.#bubbleField.mesh)
+		this.#bubbleField.dispose()
+		this.#scene.remove(this.#shotgunPellets.mesh)
+		this.#shotgunPellets.dispose()
+		for (const visual of this.#ballistics.values()) {
+			this.#scene.remove(visual.mesh)
+			visual.mesh.geometry.dispose()
+			;(visual.mesh.material as THREE.Material).dispose()
+		}
+		this.#ballistics.clear()
 		for (const model of this.#remotePlayers.values()) {
 			model.ragdoll?.dispose()
 			this.#scene.remove(model.rig.root)
@@ -585,6 +664,7 @@ export class ArenaGame {
 
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
 		this.#keys.delete(event.code)
+		if (event.code === "KeyF") this.#releaseRailCharge()
 	}
 
 	readonly #onMouseMove = (event: MouseEvent): void => {
@@ -615,8 +695,15 @@ export class ArenaGame {
 			if (event.target !== this.#canvas) return
 			this.start()
 		}
-		if (event.button === 0) this.#fire()
+		if (event.button === 0) {
+			if (this.#weaponKind === "rail-gun") this.#beginRailCharge()
+			else this.#fire()
+		}
 		if (event.button === 2) this.#throwGrenade()
+	}
+
+	readonly #onMouseUp = (event: MouseEvent): void => {
+		if (event.button === 0) this.#releaseRailCharge()
 	}
 
 	readonly #onContextMenu = (event: MouseEvent): void => {
@@ -1063,7 +1150,7 @@ export class ArenaGame {
 		if (!isNewEquipmentSnapshot(equipment, this.#equipmentRevision)) return
 		const previousRevision = this.#equipmentRevision
 		const previousActiveSlot = this.#activeSlot
-		const previouslyCarriedMissile = this.#equipmentSlots[1] !== null
+		const previousSecondaryWeapon = this.#equipmentSlots[1]?.weapon ?? null
 		const active = activeEquipmentSlot(equipment)
 		if (this.#reload !== null) {
 			const matchesRequestedSlot =
@@ -1080,10 +1167,14 @@ export class ArenaGame {
 			equipment.slots[1] === null ? null : { ...equipment.slots[1] },
 		]
 		this.#weaponKind = active.weapon
+		if (active.weapon !== "rail-gun") this.#railCharging = false
 		this.#ammo = active.ammo
 		this.#setLocalGunModel(active.weapon)
 		if (previousRevision >= 0) {
-			if (!previouslyCarriedMissile && equipment.slots[1] !== null) {
+			if (
+				equipment.slots[1] !== null &&
+				equipment.slots[1].weapon !== previousSecondaryWeapon
+			) {
 				this.#audio.playEffect("pickup")
 			} else if (previousActiveSlot !== equipment.activeSlot) {
 				this.#audio.playEffect("weapon-switch")
@@ -1123,6 +1214,28 @@ export class ArenaGame {
 		this.#pickupOwnerId = pickup.ownerId
 	}
 
+	readonly #onArenaWeaponPickups = (
+		pickups: ArenaWeaponPickupSnapshot[],
+	): void => {
+		if (!Array.isArray(pickups)) return
+		for (const pickup of pickups) {
+			const visual = this.#arenaPickupVisuals.get(pickup.weapon)
+			if (
+				visual === undefined ||
+				!Array.isArray(pickup.position) ||
+				pickup.position.length !== 3 ||
+				pickup.position.some((component) => !Number.isFinite(component))
+			)
+				continue
+			visual.available = pickup.available
+			visual.availableAt = pickup.availableAt
+			visual.ownerId = pickup.ownerId
+			visual.position.set(...pickup.position)
+			visual.group.position.copy(visual.position)
+			visual.group.visible = pickup.available
+		}
+	}
+
 	readonly #onMiniMissile = (missile: MiniMissileSnapshot): void => {
 		this.#applyMissileSnapshot(missile)
 	}
@@ -1142,10 +1255,18 @@ export class ArenaGame {
 		const origin = new THREE.Vector3(...projectile.origin)
 		const direction = new THREE.Vector3(...projectile.direction)
 		this.#spawnMuzzleFlash(origin, direction, projectile.color)
-		this.#spawnProjectile(projectile.id, origin, direction, projectile.color)
+		this.#spawnProjectile(
+			projectile.id,
+			origin,
+			direction,
+			projectile.color,
+			projectile.speed,
+			projectile.lifetimeSeconds,
+		)
 	}
 
 	readonly #onProjectileEnded = (ended: ProjectileEndedSnapshot): void => {
+		if (this.#shotgunPellets.remove(ended.id)) return
 		const index = this.#projectiles.findIndex(
 			(projectile) => projectile.id === ended.id,
 		)
@@ -1153,6 +1274,101 @@ export class ArenaGame {
 		const projectile = this.#projectiles[index]
 		if (projectile !== undefined) this.#scene.remove(projectile.mesh)
 		this.#projectiles.splice(index, 1)
+	}
+
+	readonly #onBubble = (snapshot: BubbleSnapshot): void => {
+		this.#bubbleField.upsert(snapshot)
+	}
+
+	readonly #onBubblePopped = (snapshot: BubblePoppedSnapshot): void => {
+		if (!this.#bubbleField.remove(snapshot.id)) return
+		this.#spawnMuzzleFlash(
+			new THREE.Vector3(...snapshot.position),
+			new THREE.Vector3(0, 1, 0),
+			"#ff8de6",
+		)
+	}
+
+	readonly #onBallistic = (snapshot: BallisticSnapshot): void => {
+		let visual = this.#ballistics.get(snapshot.id)
+		if (visual === undefined) {
+			const mesh = new THREE.Mesh(
+				new THREE.SphereGeometry(0.1 + snapshot.charge * 0.07, 10, 8),
+				new THREE.MeshBasicMaterial({ color: "#ffcf66" }),
+			)
+			mesh.position.set(...snapshot.position)
+			this.#scene.add(mesh)
+			visual = {
+				mesh,
+				target: new THREE.Vector3(...snapshot.position),
+				velocity: new THREE.Vector3(...snapshot.velocity),
+			}
+			this.#ballistics.set(snapshot.id, visual)
+		}
+		visual.target.set(...snapshot.position)
+		visual.velocity.set(...snapshot.velocity)
+	}
+
+	readonly #onBallisticEnded = (snapshot: BallisticEndedSnapshot): void => {
+		const visual = this.#ballistics.get(snapshot.id)
+		if (visual === undefined) return
+		this.#scene.remove(visual.mesh)
+		visual.mesh.geometry.dispose()
+		;(visual.mesh.material as THREE.Material).dispose()
+		this.#ballistics.delete(snapshot.id)
+		this.#spawnMuzzleFlash(
+			new THREE.Vector3(...snapshot.position),
+			new THREE.Vector3(0, 1, 0),
+			"#ffb63e",
+		)
+	}
+
+	readonly #onShotgunPellets = (snapshots: ShotgunPelletSnapshot[]): void => {
+		if (!Array.isArray(snapshots)) return
+		this.#shotgunPellets.reconcile(
+			snapshots.filter((snapshot) => this.#validShotgunPellet(snapshot)),
+		)
+	}
+
+	readonly #onShotgunPelletSuspended = (
+		snapshot: ShotgunPelletSnapshot,
+	): void => {
+		if (!this.#validShotgunPellet(snapshot)) return
+		this.#shotgunPellets.upsert(snapshot)
+	}
+
+	readonly #onShotgunVolley = (volley: ShotgunVolleySnapshot): void => {
+		if (
+			volley.damage !== SHOTGUN_PELLET_DAMAGE ||
+			volley.hangSeconds !== SHOTGUN_PELLET_HANG_SECONDS ||
+			volley.maxDistance !== SHOTGUN_PELLET_MAX_DISTANCE ||
+			volley.speed !== SHOTGUN_PELLET_SPEED ||
+			!Array.isArray(volley.pellets) ||
+			volley.pellets.length !== SHOTGUN_PELLET_COUNT ||
+			!volley.pellets.every((pellet) => this.#validShotgunPellet(pellet))
+		)
+			return
+		this.#shotgunPellets.addVolley(volley)
+		const origin = new THREE.Vector3(...volley.origin)
+		const direction = new THREE.Vector3(...volley.pellets[0]!.direction)
+		this.#spawnMuzzleFlash(origin, direction, "#ffd49a")
+		if (volley.ownerId !== this.#socket.id) this.#audio.playWeapon("shotgun")
+	}
+
+	#validShotgunPellet(snapshot: ShotgunPelletSnapshot): boolean {
+		return (
+			Number.isSafeInteger(snapshot.id) &&
+			(snapshot.phase === "flying" || snapshot.phase === "suspended") &&
+			Array.isArray(snapshot.direction) &&
+			snapshot.direction.length === 3 &&
+			snapshot.direction.every(Number.isFinite) &&
+			Array.isArray(snapshot.origin) &&
+			snapshot.origin.length === 3 &&
+			snapshot.origin.every(Number.isFinite) &&
+			Array.isArray(snapshot.position) &&
+			snapshot.position.length === 3 &&
+			snapshot.position.every(Number.isFinite)
+		)
 	}
 
 	readonly #onSnapshot = (snapshot: ArenaSnapshot): void => {
@@ -1166,6 +1382,25 @@ export class ArenaGame {
 			if (activeMissiles.has(id)) continue
 			this.#removeMiniMissileVisual(id)
 		}
+		const activeBubbles = new Set<number>()
+		for (const bubble of snapshot.bubbles ?? []) {
+			activeBubbles.add(bubble.id)
+			this.#onBubble(bubble)
+		}
+		for (const id of this.#bubbleField.ids()) {
+			const position = this.#bubbleField.position(id)
+			if (!activeBubbles.has(id) && position !== null)
+				this.#onBubblePopped({ id, position: position.toArray() })
+		}
+		const activeBallistics = new Set<number>()
+		for (const ballistic of snapshot.ballistics ?? []) {
+			activeBallistics.add(ballistic.id)
+			this.#onBallistic(ballistic)
+		}
+		for (const [id, visual] of this.#ballistics) {
+			if (!activeBallistics.has(id))
+				this.#onBallisticEnded({ id, position: visual.mesh.position.toArray() })
+		}
 	}
 
 	#bindEvents(): void {
@@ -1173,6 +1408,7 @@ export class ArenaGame {
 		window.addEventListener("keyup", this.#onKeyUp)
 		window.addEventListener("mousemove", this.#onMouseMove)
 		window.addEventListener("mousedown", this.#onMouseDown)
+		window.addEventListener("mouseup", this.#onMouseUp)
 		window.addEventListener("wheel", this.#onWheel, { passive: true })
 		window.addEventListener("contextmenu", this.#onContextMenu)
 		window.addEventListener("resize", this.#resize)
@@ -1198,8 +1434,19 @@ export class ArenaGame {
 		this.#socket.on("arena:mini-missile-ended", this.#onMiniMissileEnded)
 		this.#socket.on("arena:mini-missile-exploded", this.#onMiniMissileExploded)
 		this.#socket.on("arena:mini-missile-pickup", this.#onMiniMissilePickup)
+		this.#socket.on("arena:weapon-pickups", this.#onArenaWeaponPickups)
 		this.#socket.on("arena:projectile", this.#onProjectile)
 		this.#socket.on("arena:projectile-ended", this.#onProjectileEnded)
+		this.#socket.on("arena:bubble", this.#onBubble)
+		this.#socket.on("arena:bubble-popped", this.#onBubblePopped)
+		this.#socket.on("arena:ballistic", this.#onBallistic)
+		this.#socket.on("arena:ballistic-ended", this.#onBallisticEnded)
+		this.#socket.on("arena:shotgun-pellets", this.#onShotgunPellets)
+		this.#socket.on(
+			"arena:shotgun-pellet-suspended",
+			this.#onShotgunPelletSuspended,
+		)
+		this.#socket.on("arena:shotgun-volley", this.#onShotgunVolley)
 		this.#socket.on("arena:snapshot", this.#onSnapshot)
 		this.#resize()
 	}
@@ -1214,6 +1461,7 @@ export class ArenaGame {
 	}
 
 	#buildWorld(): void {
+		this.#scene.add(this.#bubbleField.mesh, this.#shotgunPellets.mesh)
 		const hemisphere = new THREE.HemisphereLight("#86d9d1", "#251522", 2.3)
 		this.#scene.add(hemisphere)
 		const sun = new THREE.DirectionalLight("#ffb06a", 5.4)
@@ -1308,6 +1556,55 @@ export class ArenaGame {
 		)
 		this.#missilePickup.rotation.z = Math.PI / 2
 		this.#scene.add(this.#missilePickup)
+
+		const arenaPickupColors = {
+			"bubble-gun": "#f58bdf",
+			"rail-gun": "#ffc15c",
+			shotgun: "#ff7657",
+		} as const
+		for (const weapon of ["shotgun", "bubble-gun", "rail-gun"] as const) {
+			const color = arenaPickupColors[weapon]
+			const group = new THREE.Group()
+			group.name = `${weapon} world pickup`
+			const pad = new THREE.Mesh(
+				new THREE.CylinderGeometry(1.15, 1.35, 0.16, 16),
+				new THREE.MeshStandardMaterial({
+					color: "#17202a",
+					emissive: color,
+					emissiveIntensity: 0.65,
+					metalness: 0.72,
+					roughness: 0.28,
+				}),
+			)
+			pad.position.y = -0.55
+			const marker = new THREE.Mesh(
+				new THREE.TorusGeometry(0.78, 0.055, 8, 28),
+				new THREE.MeshBasicMaterial({ color }),
+			)
+			marker.rotation.x = Math.PI / 2
+			marker.position.y = -0.43
+			const model = createGunModel(weapon, {
+				accent: color,
+				accentEmissive: color,
+				body: "#202936",
+			})
+			model.root.rotation.y = Math.PI / 2
+			model.root.scale.setScalar(0.78)
+			const light = new THREE.PointLight(color, 4.5, 8)
+			light.position.y = 0.55
+			group.add(pad, marker, model.root, light)
+			group.visible = false
+			this.#scene.add(group)
+			this.#arenaPickupVisuals.set(weapon, {
+				available: false,
+				availableAt: null,
+				group,
+				model,
+				ownerId: null,
+				position: new THREE.Vector3(),
+				weapon,
+			})
+		}
 
 		const ring = new THREE.Mesh(
 			new THREE.TorusGeometry(5.4, 0.26, 8, 48),
@@ -1709,20 +2006,41 @@ export class ArenaGame {
 			jumpStep.impulse === 1 || jumpStep.impulse === 2 ? jumpStep.impulse : null
 		this.#audioLandingImpact = jumpStep.landed ? jumpStep.impactVelocity : 0
 		const trigger = gamepad.fire || this.#keys.has("KeyF")
-		if (trigger && this.#fireCooldown <= 0) this.#fire()
+		if (this.#weaponKind === "rail-gun") {
+			if (trigger && !this.#triggerHeld) this.#beginRailCharge()
+			if (!trigger && this.#triggerHeld) this.#releaseRailCharge()
+		} else if (trigger && this.#fireCooldown <= 0) this.#fire()
+		this.#triggerHeld = trigger
 		if (gamepad.grenade && !this.#grenadeHeld) this.#throwGrenade()
 		this.#grenadeHeld = gamepad.grenade
 		this.#fireCooldown -= delta
 		this.#grenadeCooldown -= delta
 	}
 
+	#nearbyPickupWeapon(): Exclude<WeaponKind, "arc-blaster"> | null {
+		let nearest: {
+			distance: number
+			weapon: Exclude<WeaponKind, "arc-blaster">
+		} | null = null
+		if (this.#pickupAvailable) {
+			const distance = this.#player.position.distanceTo(this.#pickupPosition)
+			if (distance <= MINI_MISSILE_PICKUP_RADIUS)
+				nearest = { distance, weapon: "mini-missile" }
+		}
+		for (const pickup of this.#arenaPickupVisuals.values()) {
+			if (!pickup.available) continue
+			const distance = this.#player.position.distanceTo(pickup.position)
+			if (
+				distance <= ARENA_WEAPON_PICKUP_RADIUS &&
+				(nearest === null || distance < nearest.distance)
+			)
+				nearest = { distance, weapon: pickup.weapon }
+		}
+		return nearest?.weapon ?? null
+	}
+
 	#isPickupNearby(): boolean {
-		return (
-			this.#pickupAvailable &&
-			this.#equipmentSlots[1] === null &&
-			this.#player.position.distanceTo(this.#pickupPosition) <=
-				MINI_MISSILE_PICKUP_RADIUS
-		)
+		return this.#nearbyPickupWeapon() !== null
 	}
 
 	#nextInventoryActionId(): number {
@@ -1732,9 +2050,13 @@ export class ArenaGame {
 
 	#requestPickup(): void {
 		if (!this.#connected || this.#dead) return
+		const weapon = this.#nearbyPickupWeapon()
+		if (weapon === null) return
+		this.#releaseRailCharge()
 		this.#socket.emit("arena:inventory-action", {
 			clientActionId: this.#nextInventoryActionId(),
 			type: "collect",
+			weapon,
 		} satisfies InventoryActionIntent)
 	}
 
@@ -1753,7 +2075,7 @@ export class ArenaGame {
 			return
 		this.#socket.emit("arena:inventory-action", {
 			clientActionId: this.#nextInventoryActionId(),
-			type: "drop-mini-missile",
+			type: "drop-secondary",
 		} satisfies InventoryActionIntent)
 	}
 
@@ -1801,6 +2123,9 @@ export class ArenaGame {
 	}
 
 	#fire(): void {
+		if (this.#reload !== null && this.#weaponKind === "shotgun") {
+			this.#cancelReloadPresentation()
+		}
 		if (
 			this.#dead ||
 			this.#reload !== null ||
@@ -1816,6 +2141,7 @@ export class ArenaGame {
 		)
 			return
 		const gun = gunDefinition(this.#weaponKind)
+		if (gun.fire.type === "ballistic") return
 		this.#audio.playWeapon(this.#weaponKind)
 		this.#fireCooldown = gun.fire.clientCooldownSeconds
 		this.#weaponsFreeUntil =
@@ -1856,6 +2182,47 @@ export class ArenaGame {
 				origin: origin.toArray(),
 			} satisfies FireIntent)
 		}
+	}
+
+	#beginRailCharge(): void {
+		if (
+			this.#weaponKind !== "rail-gun" ||
+			this.#railCharging ||
+			this.#dead ||
+			this.#reload !== null ||
+			this.#ammo === 0 ||
+			this.#fireCooldown > 0
+		)
+			return
+		this.#shotSequence += 1
+		this.#railCharging = true
+		this.#railChargeStartedAt = performance.now()
+		this.#socket.emit("arena:rail-charge", {
+			clientChargeId: this.#shotSequence,
+			type: "start",
+		})
+	}
+
+	#releaseRailCharge(): void {
+		if (!this.#railCharging) return
+		this.#railCharging = false
+		if (this.#weaponKind !== "rail-gun" || this.#dead) return
+		this.#camera.position.copy(this.#player.position)
+		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
+		this.#camera.updateMatrixWorld(true)
+		const origin = this.#weaponMuzzle.getWorldPosition(new THREE.Vector3())
+		const direction = this.#getAimDirection(origin)
+		this.#pendingShotIds.add(this.#shotSequence)
+		this.#socket.emit("arena:rail-charge", {
+			clientChargeId: this.#shotSequence,
+			direction: direction.toArray(),
+			origin: origin.toArray(),
+			type: "release",
+		})
+		this.#audio.playWeapon("rail-gun")
+		this.#fireCooldown = gunDefinition("rail-gun").fire.clientCooldownSeconds
+		this.#recoilState = addRecoilShot(this.#recoilState)
+		this.#recoilPulse += 1
 	}
 
 	#throwGrenade(): void {
@@ -2029,6 +2396,9 @@ export class ArenaGame {
 			if (exhaust !== undefined) exhaust.visible = missile.phase === "powered"
 		}
 		this.#missilePickup.rotation.y += delta * 1.8
+		for (const pickup of this.#arenaPickupVisuals.values()) {
+			pickup.model.root.rotation.y += delta * 1.1
+		}
 	}
 
 	#updateGrenades(delta: number): void {
@@ -2096,6 +2466,8 @@ export class ArenaGame {
 		origin: THREE.Vector3,
 		direction: THREE.Vector3,
 		color: THREE.ColorRepresentation = "#b8fff1",
+		speed = 55,
+		lifetimeSeconds = 2.4,
 	): void {
 		const mesh = new THREE.Mesh(
 			new THREE.SphereGeometry(0.09, 8, 8),
@@ -2107,9 +2479,9 @@ export class ArenaGame {
 		this.#scene.add(mesh)
 		this.#projectiles.push({
 			id,
-			life: 2.4,
+			life: lifetimeSeconds,
 			mesh,
-			velocity: direction.multiplyScalar(55),
+			velocity: direction.multiplyScalar(speed),
 		})
 	}
 
@@ -2227,6 +2599,16 @@ export class ArenaGame {
 				this.#scene.remove(projectile.mesh)
 				this.#projectiles.splice(index, 1)
 			}
+		}
+	}
+
+	#updateSyncedWeaponVisuals(delta: number): void {
+		this.#bubbleField.update(delta)
+		this.#shotgunPellets.update(delta)
+		for (const visual of this.#ballistics.values()) {
+			visual.target.addScaledVector(visual.velocity, delta)
+			visual.mesh.position.lerp(visual.target, Math.min(1, delta * 14))
+			visual.mesh.rotation.y += delta * 2.2
 		}
 	}
 
@@ -2940,9 +3322,17 @@ export class ArenaGame {
 		this.#hudElapsed += delta
 		if (this.#hudElapsed < 0.09) return
 		this.#hudElapsed = 0
-		const pickupNearby = this.#isPickupNearby()
+		const nearbyPickup = this.#nearbyPickupWeapon()
+		const pickupNearby = nearbyPickup !== null
 		this.#onHud({
 			ammo: this.#ammo,
+			chargeProgress: this.#railCharging
+				? Math.min(
+						1,
+						(performance.now() - this.#railChargeStartedAt) /
+							RAIL_CHARGE_MAX_MS,
+					)
+				: 0,
 			activeSlot: this.#activeSlot,
 			connection: this.#connected
 				? "online"
@@ -2959,9 +3349,10 @@ export class ArenaGame {
 			drones: this.#drones.count,
 			jump: this.#player.jumps,
 			lockCountdown: Math.ceil(this.#targetEscapeRemaining),
+			nearbyPickup,
 			players: this.#remotePlayers.size + 1,
 			pickup:
-				this.#equipmentSlots[1] !== null || this.#pickupOwnerId !== null
+				this.#pickupOwnerId !== null
 					? "carried"
 					: pickupNearby
 						? "nearby"
@@ -2969,6 +3360,18 @@ export class ArenaGame {
 							? "available"
 							: "respawning",
 			pickupProgress: pickupNearby ? this.#pickupProgress : 0,
+			pickupStatuses: [...this.#arenaPickupVisuals.values()].map((pickup) => ({
+				remaining:
+					pickup.availableAt === null
+						? 0
+						: Math.max(0, Math.ceil((pickup.availableAt - Date.now()) / 1_000)),
+				status: pickup.available
+					? "available"
+					: pickup.ownerId !== null
+						? "carried"
+						: "returning",
+				weapon: pickup.weapon,
+			})),
 			reticleX: this.#reticleX,
 			reticleY: this.#reticleY,
 			recoilPulse: this.#recoilPulse,
@@ -3055,6 +3458,7 @@ export class ArenaGame {
 		this.#damageEffects.update(delta)
 		this.#fistContactEffects.update(delta)
 		this.#updateProjectiles(delta)
+		this.#updateSyncedWeaponVisuals(delta)
 		this.#updateGrenades(delta)
 		this.#updateMiniMissiles(delta)
 		this.#updateDustParticles(delta)

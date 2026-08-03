@@ -26,6 +26,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 	const setHud = useI(gameHudStateAtom)
 	const incomingThreats = hud.incomingMissileLocks + hud.incomingStandardLocks
 	const gun = gunDefinition(hud.weapon)
+	const nearbyGun =
+		hud.nearbyPickup === null ? null : gunDefinition(hud.nearbyPickup)
 	const incomingThreatKind =
 		hud.incomingMissileLocks > 0 && hud.incomingStandardLocks > 0
 			? "combined"
@@ -142,7 +144,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					aria-hidden={hud.pickup !== "nearby"}
 					style={{ "--pickup-progress": hud.pickupProgress }}
 				>
-					<strong>MINI-MISSILE READY</strong>
+					<strong>{nearbyGun?.name ?? "WEAPON"} READY</strong>
 					<span>
 						<kbd>E</kbd>
 						<kbd>RB</kbd>
@@ -152,6 +154,19 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<i />
 					</pickup-progress>
 				</pickup-prompt>
+
+				<pickup-status-board aria-label="Arena weapon pickup status">
+					{hud.pickupStatuses.map((pickup) => (
+						<pickup-status key={pickup.weapon} data-status={pickup.status}>
+							<strong>{gunDefinition(pickup.weapon).name}</strong>
+							<span>
+								{pickup.status === "returning"
+									? `RETURN ${pickup.remaining}s`
+									: pickup.status.toUpperCase()}
+							</span>
+						</pickup-status>
+					))}
+				</pickup-status-board>
 
 				<smart-target-zone data-state={hud.targeting} aria-hidden="true">
 					<free-aim-label>
@@ -253,19 +268,21 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					<em>
 						{hud.reloading
 							? `RELOADING ${Math.round(hud.reloadProgress * 100)}%`
-							: gun.fire.type === "guided-missile"
-								? hud.ammo === 0
-									? "PRESS RB / R TO SERVICE LAUNCHER"
-									: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH • X TO DROP"
-								: hud.pickup === "nearby"
-									? "HOLD E / RB TO PICK UP"
-									: hud.ammo === 0
-										? "PRESS RB / R TO RELOAD"
-										: hud.pickup === "available"
-											? "MINI-MISSILE AVAILABLE"
-											: hud.pickup === "carried"
-												? "MINI-MISSILE CARRIED"
-												: "MINI-MISSILE RESPAWNING"}
+							: hud.weapon === "rail-gun" && hud.chargeProgress > 0
+								? `CHARGING ${Math.round(hud.chargeProgress * 100)}% • RELEASE TO FIRE`
+								: gun.fire.type === "guided-missile"
+									? hud.ammo === 0
+										? "PRESS RB / R TO SERVICE LAUNCHER"
+										: "GUIDANCE ARMED • 1 / Y / WHEEL TO SWITCH"
+									: hud.pickup === "nearby"
+										? "HOLD E / RB TO PICK UP"
+										: hud.ammo === 0
+											? "PRESS RB / R TO RELOAD"
+											: hud.pickup === "available"
+												? "MINI-MISSILE AVAILABLE"
+												: hud.pickup === "carried"
+													? "MINI-MISSILE CARRIED"
+													: "ROTATE TO ARMORY PADS"}
 					</em>
 				</weapon-status>
 

@@ -10,6 +10,7 @@ import type {
 
 export type GameHudState = {
 	ammo: number
+	chargeProgress: number
 	activeSlot: WeaponSlotIndex
 	connection: "connecting" | "offline" | "online"
 	dead: boolean
@@ -22,9 +23,15 @@ export type GameHudState = {
 	incomingStandardLocks: number
 	jump: 0 | 1 | 2
 	lockCountdown: number
+	nearbyPickup: Exclude<WeaponKind, "arc-blaster"> | null
 	players: number
 	pickup: "available" | "carried" | "nearby" | "respawning"
 	pickupProgress: number
+	pickupStatuses: readonly {
+		remaining: number
+		status: "available" | "carried" | "returning"
+		weapon: "bubble-gun" | "rail-gun" | "shotgun"
+	}[]
 	reticleX: number
 	reticleY: number
 	recoilPulse: number
@@ -44,6 +51,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 	key: "gameHudState",
 	default: {
 		ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
+		chargeProgress: 0,
 		activeSlot: 0,
 		connection: "connecting",
 		dead: false,
@@ -56,9 +64,11 @@ export const gameHudStateAtom = atom<GameHudState>({
 		incomingStandardLocks: 0,
 		jump: 0,
 		lockCountdown: 0,
+		nearbyPickup: null,
 		players: 1,
 		pickup: "respawning",
 		pickupProgress: 0,
+		pickupStatuses: [],
 		reticleX: 0.5,
 		reticleY: 0.5,
 		recoilPulse: 0,
