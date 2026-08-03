@@ -9,6 +9,8 @@ import {
 	isReloadSnapshot,
 } from "../arena-protocol.ts"
 import {
+	BUBBLE_GUN_MAGAZINE_SIZE,
+	BUBBLE_SPEED,
 	MINI_MISSILE_AMMO,
 	MINI_MISSILE_CLIENT_COOLDOWN_SECONDS,
 	MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS,
@@ -94,6 +96,17 @@ describe("gun definitions", () => {
 		for (const id of GUN_IDS) expect(isGunId(id)).toBe(true)
 		expect(isGunId("railgun")).toBe(false)
 		expect(isGunId(null)).toBe(false)
+	})
+
+	test("documents the competitive Bubble Gun ammo, reload, and travel buff", () => {
+		const bubbleGun = gunDefinition("bubble-gun")
+		expect(BUBBLE_GUN_MAGAZINE_SIZE).toBe(8)
+		expect(bubbleGun.magazineSize).toBe(8)
+		expect(bubbleGun.reload).toMatchObject({
+			ammoRule: "refill-magazine",
+			durationSeconds: 2,
+		})
+		expect(BUBBLE_SPEED).toBe(6.5)
 	})
 })
 

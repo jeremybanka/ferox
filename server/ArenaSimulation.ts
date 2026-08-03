@@ -96,6 +96,7 @@ export type SimulationPlayer = {
 }
 
 export type SimulationDroneSeed = {
+	attackCooldown?: number
 	health?: number
 	id: number
 	personality?: DronePersonality
@@ -304,7 +305,7 @@ export class ArenaSimulation {
 		for (const seed of options.initialDrones ?? []) {
 			const personality = seed.personality ?? "bully"
 			this.#drones.push({
-				attackCooldown: Number.POSITIVE_INFINITY,
+				attackCooldown: seed.attackCooldown ?? Number.POSITIVE_INFINITY,
 				burstRounds: 0,
 				health: seed.health ?? BODY_HEALTH[personality],
 				id: seed.id,
@@ -1020,6 +1021,10 @@ export class ArenaSimulation {
 			}
 			missile.position.addScaledVector(missile.velocity, delta)
 
+			const bubbleHit = this.#nearestBubbleAlongSegment(
+				previousPosition,
+				missile.position,
+			)
 			const droneHit = this.#nearestDroneAlongSegment(
 				previousPosition,
 				missile.position,
@@ -1031,7 +1036,16 @@ export class ArenaSimulation {
 				players,
 				missile.ownerId,
 			)
-			const hitEntity = droneHit !== undefined || playerHit !== undefined
+			const bubbleHitIsNearest = this.#collisionIsNearest(
+				bubbleHit,
+				droneHit,
+				playerHit,
+			)
+			if (bubbleHitIsNearest && bubbleHit !== undefined) {
+				this.#damageBubble(bubbleHit.target, miniMissileDamageAtDistance(0))
+			}
+			const hitEntity =
+				bubbleHitIsNearest || droneHit !== undefined || playerHit !== undefined
 			const hitGround =
 				missile.position.y <=
 				arenaHeightAt(this.#seed, missile.position.x, missile.position.z) +
@@ -1353,16 +1367,11 @@ export class ArenaSimulation {
 				projectile.position.addScaledVector(projectile.velocity, delta)
 			}
 			let hit = false
+			const bubbleHit = this.#nearestBubbleAlongSegment(
+				previousPosition,
+				projectile.position,
+			)
 			if (projectile.team === "player") {
-				const bubbleHit = this.#nearestBubbleAlongSegment(
-					previousPosition,
-					projectile.position,
-					projectile.ownerId,
-				)
-				if (bubbleHit !== undefined) {
-					this.#damageBubble(bubbleHit.target, projectile.damage)
-					hit = true
-				}
 				const droneHit = this.#nearestDroneAlongSegment(
 					previousPosition,
 					projectile.position,
@@ -1374,8 +1383,10 @@ export class ArenaSimulation {
 					players,
 					projectile.ownerId,
 				)
-				if (
-					!hit &&
+				if (this.#collisionIsNearest(bubbleHit, droneHit, playerHit)) {
+					this.#damageBubble(bubbleHit.target, projectile.damage)
+					hit = true
+				} else if (
 					droneHit !== undefined &&
 					(playerHit === undefined ||
 						droneHit.travelFraction <= playerHit.travelFraction)
@@ -1389,7 +1400,7 @@ export class ArenaSimulation {
 						targetType: "drone",
 					})
 					hit = true
-				} else if (!hit && playerHit !== undefined) {
+				} else if (playerHit !== undefined) {
 					const damage =
 						playerHit.classification === "headshot"
 							? projectile.damage * projectile.headshotMultiplier
@@ -1417,7 +1428,10 @@ export class ArenaSimulation {
 					players,
 					null,
 				)
-				if (playerHit !== undefined) {
+				if (this.#collisionIsNearest(bubbleHit, playerHit)) {
+					this.#damageBubble(bubbleHit.target, projectile.damage)
+					hit = true
+				} else if (playerHit !== undefined) {
 					this.#onPlayerDamage(playerHit.target.id, projectile.damage, {
 						direction: projectile.velocity.clone().normalize().toArray(),
 						position: previousPosition
@@ -1467,13 +1481,11 @@ export class ArenaSimulation {
 	#nearestBubbleAlongSegment(
 		start: THREE.Vector3,
 		end: THREE.Vector3,
-		excludedOwnerId: string | null,
 	): CollisionCandidate<BubbleState> | undefined {
 		let nearest: CollisionCandidate<BubbleState> | undefined
 		const travel = end.clone().sub(start)
 		const travelLengthSquared = travel.lengthSq()
 		for (const bubble of this.#bubbles) {
-			if (bubble.ownerId === excludedOwnerId) continue
 			const travelFraction =
 				travelLengthSquared === 0
 					? 0
@@ -1490,6 +1502,20 @@ export class ArenaSimulation {
 				nearest = { target: bubble, travelFraction }
 		}
 		return nearest
+	}
+
+	#collisionIsNearest<T>(
+		candidate: CollisionCandidate<T> | undefined,
+		...others: Array<CollisionCandidate<unknown> | undefined>
+	): candidate is CollisionCandidate<T> {
+		return (
+			candidate !== undefined &&
+			others.every(
+				(other) =>
+					other === undefined ||
+					candidate.travelFraction <= other.travelFraction,
+			)
+		)
 	}
 
 	#damageBubble(bubble: BubbleState, damage: number): void {
@@ -1560,12 +1586,7 @@ export class ArenaSimulation {
 			const bubbleHit = this.#nearestBubbleAlongSegment(
 				previous,
 				ballistic.position,
-				ballistic.ownerId,
 			)
-			if (bubbleHit !== undefined) {
-				this.#damageBubble(bubbleHit.target, ballistic.damage)
-				hit = true
-			}
 			const droneHit = this.#nearestDroneAlongSegment(
 				previous,
 				ballistic.position,
@@ -1577,8 +1598,10 @@ export class ArenaSimulation {
 				players,
 				ballistic.ownerId,
 			)
-			if (
-				!hit &&
+			if (this.#collisionIsNearest(bubbleHit, droneHit, playerHit)) {
+				this.#damageBubble(bubbleHit.target, ballistic.damage)
+				hit = true
+			} else if (
 				droneHit !== undefined &&
 				(playerHit === undefined ||
 					droneHit.travelFraction <= playerHit.travelFraction)
@@ -1594,7 +1617,7 @@ export class ArenaSimulation {
 					"normal",
 				)
 				hit = true
-			} else if (!hit && playerHit !== undefined) {
+			} else if (playerHit !== undefined) {
 				this.#onPlayerDamage(playerHit.target.id, ballistic.damage, {
 					direction: ballistic.velocity.clone().normalize().toArray(),
 					position: previous

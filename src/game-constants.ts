@@ -20,13 +20,15 @@ export const SHOTGUN_PELLET_MAX_DISTANCE = 20
 export const SHOTGUN_PELLET_SPEED = 150
 export const SHOTGUN_RELOAD_SHELL_SECONDS = 0.72
 export const SHOTGUN_SERVER_MINIMUM_INTERVAL_MS = 720
-export const BUBBLE_GUN_MAGAZINE_SIZE = 4
+// Eight shots (56 bubbles), a two-second refill, and 6.5 m/s travel let the
+// Bubble Gun establish moving cover without the original long downtime.
+export const BUBBLE_GUN_MAGAZINE_SIZE = 8
 export const BUBBLES_PER_SHOT = 7
 export const BUBBLE_DAMAGE = 5
 export const BUBBLE_HEALTH = 80
 export const BUBBLE_LIFETIME_SECONDS = 9
 export const BUBBLE_RADIUS = 0.72
-export const BUBBLE_SPEED = 3.4
+export const BUBBLE_SPEED = 6.5
 export const BUBBLE_SERVER_MINIMUM_INTERVAL_MS = 520
 export const RAIL_GUN_MAGAZINE_SIZE = 4
 export const RAIL_CHARGE_MAX_MS = 1_800

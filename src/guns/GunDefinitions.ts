@@ -203,7 +203,7 @@ export const GUN_DEFINITIONS = {
 		reload: {
 			ammoRule: "refill-magazine",
 			animation: "arc-cell",
-			durationSeconds: 3.4,
+			durationSeconds: 2,
 			refillProgress: 0.86,
 		},
 		tuning: { kind: "bubbles" },
