@@ -148,11 +148,12 @@ import {
 } from "./ReloadState.ts"
 import { stepSlideDust } from "./SlideDustState.ts"
 import {
-	movementSpeedLimit,
+	limitHorizontalSpeed,
 	sampleTerrainGradient,
 	stepSlidePhysics,
 } from "./SlidePhysics.ts"
 import {
+	horizontalViewDirectionFromYaw,
 	INITIAL_WALL_TRAVERSAL_STATE,
 	jumpCountAfterWallContact,
 	stepWallTraversal,
@@ -1797,21 +1798,17 @@ export class ArenaGame {
 		const damping = Math.exp(-friction * delta)
 		this.#player.velocity.x *= damping
 		this.#player.velocity.z *= damping
-		const cap = movementSpeedLimit({
-			crouching: crouch,
-			grounded,
-			sliding: this.#slide,
-			sprinting: this.#sprinting,
-		})
-		const horizontalSpeed = Math.hypot(
-			this.#player.velocity.x,
-			this.#player.velocity.z,
+		const limitedVelocity = limitHorizontalSpeed(
+			{ x: this.#player.velocity.x, z: this.#player.velocity.z },
+			{
+				crouching: crouch,
+				grounded,
+				sliding: this.#slide,
+				sprinting: this.#sprinting,
+			},
 		)
-		if (horizontalSpeed > cap) {
-			const scale = cap / horizontalSpeed
-			this.#player.velocity.x *= scale
-			this.#player.velocity.z *= scale
-		}
+		this.#player.velocity.x = limitedVelocity.x
+		this.#player.velocity.z = limitedVelocity.z
 
 		const gamepadJumpPressed = gamepad.jump
 		if (gamepadJumpPressed && !this.#shotHeld) this.#jumpQueued = true
@@ -1835,6 +1832,7 @@ export class ArenaGame {
 			grounded,
 			jumpRequested: this.#jumpQueued,
 			velocity: this.#player.velocity.toArray(),
+			viewDirection: horizontalViewDirectionFromYaw(this.#player.yaw),
 		})
 		this.#wallTraversal = wallStep.state
 		this.#player.velocity.set(...wallStep.velocity)

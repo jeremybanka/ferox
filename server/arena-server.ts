@@ -29,11 +29,21 @@ import {
 	PLAYER_SPAWN_POINTS,
 } from "../src/game-constants.ts"
 import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
+import { isJumpGrounded } from "../src/JumpPhysics.ts"
+import {
+	PILOT_CROUCH_EYE_HEIGHT,
+	PILOT_STANDING_EYE_HEIGHT,
+} from "../src/pilot-targeting.ts"
 import {
 	advanceReload,
 	startReload,
 	type ReloadState,
 } from "../src/ReloadState.ts"
+import {
+	horizontalViewDirectionFromYaw,
+	INITIAL_WALL_TRAVERSAL_STATE,
+	type WallTraversalState,
+} from "../src/WallTraversal.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
 import { reconcileAuthoritativeMovement } from "./AuthoritativeMovement.ts"
 import { MeleeCombat } from "./MeleeCombat.ts"
@@ -315,6 +325,10 @@ realtime(
 	({ socket }) => {
 		const gameSocket = socket as unknown as IoSocket
 		const socketId = gameSocket.id
+		let authoritativeLifeSequence = 0
+		let authoritativeWallTraversal: WallTraversalState =
+			INITIAL_WALL_TRAVERSAL_STATE
+		let lastMoveAt = performance.now()
 		const occupiedSlots = new Set(playerSpawnSlots.values())
 		const availableSlot = PLAYER_SPAWN_ORDER.find(
 			(index) => !occupiedSlots.has(index),
@@ -412,20 +426,42 @@ realtime(
 				return
 			const current = players.get(socketId)
 			if (current === undefined) return
+			const moveAt = performance.now()
+			if (current.lifeSequence !== authoritativeLifeSequence) {
+				authoritativeLifeSequence = current.lifeSequence
+				authoritativeWallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+				lastMoveAt = moveAt
+			}
+			const delta = Math.min(Math.max((moveAt - lastMoveAt) / 1_000, 0), 0.1)
+			lastMoveAt = moveAt
 			const resolvedMotion = resolveArenaMotion(
 				ARENA_SEED,
 				[current.position[0], current.position[2]],
 				[payload.position[0], payload.position[2]],
 				payload.position[1] - 0.86,
 			)
+			const eyeHeight = payload.crouching
+				? PILOT_CROUCH_EYE_HEIGHT
+				: PILOT_STANDING_EYE_HEIGHT
+			const grounded = isJumpGrounded(
+				{ positionY: payload.position[1], velocityY: payload.velocity[1] },
+				arenaHeightAt(ARENA_SEED, resolvedMotion.x, resolvedMotion.z) +
+					eyeHeight,
+			)
+			const yaw = payload.rotation[0]
 			const authoritativeMovement = reconcileAuthoritativeMovement({
 				contact: resolvedMotion.contact,
 				crouching: payload.crouching,
+				delta,
+				grounded,
 				jump: payload.jump,
+				previousWallTraversal: authoritativeWallTraversal,
+				reportedWallTraversal: payload.wallTraversal,
 				sliding: payload.sliding,
 				velocity: payload.velocity,
-				wallTraversal: payload.wallTraversal,
+				viewDirection: horizontalViewDirectionFromYaw(yaw),
 			})
+			authoritativeWallTraversal = authoritativeMovement.traversalState
 			players.set(socketId, {
 				...current,
 				...payload,

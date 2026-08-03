@@ -3,8 +3,8 @@ import type { ArenaSurfaceContact } from "./ArenaWorld.ts"
 export const WALL_MINIMUM_INCLINATION_RADIANS = (80 * Math.PI) / 180
 export const WALL_RUN_ENTRY_SPEED = 7.2
 export const WALL_RUN_EXIT_SPEED = 5.4
-export const WALL_RUN_ENTRY_ANGLE_RADIANS = (50 * Math.PI) / 180
-export const WALL_RUN_PARALLEL_COSINE = Math.cos(WALL_RUN_ENTRY_ANGLE_RADIANS)
+export const WALL_SLIDE_VIEW_ANGLE_RADIANS = (20 * Math.PI) / 180
+export const WALL_SLIDE_VIEW_COSINE = Math.cos(WALL_SLIDE_VIEW_ANGLE_RADIANS)
 export const WALL_RUN_MAXIMUM_SECONDS = 1.65
 export const WALL_RUN_DOWNWARD_SPEED = 1.25
 export const WALL_SLIDE_DOWNWARD_SPEED = 2.25
@@ -40,6 +40,7 @@ export type WallTraversalInput = Readonly<{
 	grounded: boolean
 	jumpRequested: boolean
 	velocity: readonly [number, number, number]
+	viewDirection: readonly [number, number, number]
 }>
 
 export type WallTraversalStep = Readonly<{
@@ -58,23 +59,55 @@ function resetWithCooldown(state: WallTraversalState): WallTraversalState {
 	}
 }
 
-export function wallRunVelocityQualifies(
-	velocity: readonly [number, number, number],
+export function horizontalViewDirectionFromYaw(
+	yaw: number,
+): readonly [number, number, number] {
+	return [-Math.sin(yaw), 0, -Math.cos(yaw)]
+}
+
+export function viewPointsTowardWall(
+	viewDirection: readonly [number, number, number],
 	normal: readonly [number, number, number],
-	minimumSpeed = WALL_RUN_ENTRY_SPEED,
 ): boolean {
+	const [viewX, , viewZ] = viewDirection
+	const [normalX, , normalZ] = normal
+	const viewLength = Math.hypot(viewX, viewZ)
+	const normalLength = Math.hypot(normalX, normalZ)
+	if (viewLength === 0 || normalLength === 0) return false
+	const towardWallDot =
+		(-viewX * normalX - viewZ * normalZ) / (viewLength * normalLength)
+	return towardWallDot >= WALL_SLIDE_VIEW_COSINE
+}
+
+function runVelocityAlongWall(
+	velocity: readonly [number, number, number],
+	viewDirection: readonly [number, number, number],
+	normal: readonly [number, number, number],
+): readonly [number, number] {
 	const [velocityX, , velocityZ] = velocity
 	const [normalX, , normalZ] = normal
 	const planarSpeed = Math.hypot(velocityX, velocityZ)
+	if (planarSpeed === 0) return [0, 0]
 	const normalSpeed = velocityX * normalX + velocityZ * normalZ
-	const tangentSpeed = Math.hypot(
-		velocityX - normalX * normalSpeed,
-		velocityZ - normalZ * normalSpeed,
-	)
-	return (
-		planarSpeed >= minimumSpeed &&
-		tangentSpeed / planarSpeed >= WALL_RUN_PARALLEL_COSINE
-	)
+	const projectedX = velocityX - normalX * normalSpeed
+	const projectedZ = velocityZ - normalZ * normalSpeed
+	const projectedSpeed = Math.hypot(projectedX, projectedZ)
+	if (projectedSpeed > 0.000_1) {
+		return [
+			(projectedX / projectedSpeed) * planarSpeed,
+			(projectedZ / projectedSpeed) * planarSpeed,
+		]
+	}
+	const normalLength = Math.hypot(normalX, normalZ)
+	if (normalLength === 0) return [0, 0]
+	const tangentX = -normalZ / normalLength
+	const tangentZ = normalX / normalLength
+	const viewTangent = viewDirection[0] * tangentX + viewDirection[2] * tangentZ
+	const direction = viewTangent < 0 ? -1 : 1
+	return [
+		tangentX * planarSpeed * direction,
+		tangentZ * planarSpeed * direction,
+	]
 }
 
 export function stepWallTraversal(
@@ -153,10 +186,11 @@ export function stepWallTraversal(
 	}
 	const [normalX, , normalZ] = contact.normal
 	if (input.jumpRequested) {
-		const [velocityX, , velocityZ] = input.velocity
-		const normalSpeed = velocityX * normalX + velocityZ * normalZ
-		const tangentX = velocityX - normalX * normalSpeed
-		const tangentZ = velocityZ - normalZ * normalSpeed
+		const [tangentX, tangentZ] = runVelocityAlongWall(
+			input.velocity,
+			input.viewDirection,
+			contact.normal,
+		)
 		return {
 			consumedJump: true,
 			detachedByCrouch: false,
@@ -178,15 +212,27 @@ export function stepWallTraversal(
 	const normalSpeed = velocityX * normalX + velocityZ * normalZ
 	const tangentX = velocityX - normalX * normalSpeed
 	const tangentZ = velocityZ - normalZ * normalSpeed
+	const [runVelocityX, runVelocityZ] = runVelocityAlongWall(
+		input.velocity,
+		input.viewDirection,
+		contact.normal,
+	)
+	const lookingIntoWall = viewPointsTowardWall(
+		input.viewDirection,
+		contact.normal,
+	)
 	const continuingRun =
 		state.mode === "run" &&
 		state.surfaceId === contact.surfaceId &&
 		planarSpeed >= WALL_RUN_EXIT_SPEED &&
 		state.elapsed < WALL_RUN_MAXIMUM_SECONDS
 	const enteringRun =
-		(state.mode === "none" || state.surfaceId !== contact.surfaceId) &&
-		wallRunVelocityQualifies(input.velocity, contact.normal)
-	const mode: WallTraversalMode = continuingRun || enteringRun ? "run" : "slide"
+		state.mode !== "run" &&
+		planarSpeed >= WALL_RUN_ENTRY_SPEED &&
+		(state.surfaceId !== contact.surfaceId ||
+			state.elapsed < WALL_RUN_MAXIMUM_SECONDS)
+	const mode: WallTraversalMode =
+		!lookingIntoWall && (continuingRun || enteringRun) ? "run" : "slide"
 	const elapsed =
 		state.surfaceId === contact.surfaceId ? state.elapsed + delta : 0
 	return {
@@ -203,7 +249,11 @@ export function stepWallTraversal(
 		},
 		velocity:
 			mode === "run"
-				? [tangentX, Math.max(velocityY, -WALL_RUN_DOWNWARD_SPEED), tangentZ]
+				? [
+						runVelocityX,
+						Math.max(velocityY, -WALL_RUN_DOWNWARD_SPEED),
+						runVelocityZ,
+					]
 				: [
 						tangentX * 0.78,
 						Math.max(velocityY, -WALL_SLIDE_DOWNWARD_SPEED),
