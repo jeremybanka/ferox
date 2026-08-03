@@ -8,6 +8,7 @@ import {
 	activeEquipmentSlot,
 	isNewInventoryActionIntent,
 	isVisorExpression,
+	isWallTraversalSnapshot,
 	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
 	type FireIntent,
@@ -20,6 +21,7 @@ import {
 	type PlayerSnapshot,
 } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
+import { resolveArenaMotion } from "../src/ArenaWorld.ts"
 import {
 	ARENA_SEED,
 	MINI_MISSILE_PICKUP_POSITION,
@@ -27,12 +29,23 @@ import {
 	PLAYER_SPAWN_POINTS,
 } from "../src/game-constants.ts"
 import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
+import { isJumpGrounded } from "../src/JumpPhysics.ts"
+import {
+	PILOT_CROUCH_EYE_HEIGHT,
+	PILOT_STANDING_EYE_HEIGHT,
+} from "../src/pilot-targeting.ts"
 import {
 	advanceReload,
 	startReload,
 	type ReloadState,
 } from "../src/ReloadState.ts"
+import {
+	horizontalViewDirectionFromYaw,
+	INITIAL_WALL_TRAVERSAL_STATE,
+	type WallTraversalState,
+} from "../src/WallTraversal.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
+import { reconcileAuthoritativeMovement } from "./AuthoritativeMovement.ts"
 import { MeleeCombat } from "./MeleeCombat.ts"
 import { isFireCadenceReady } from "./FireCadence.ts"
 import { MiniMissileArmory, type LockUpdate } from "./MiniMissileArmory.ts"
@@ -117,6 +130,7 @@ const applyPlayerDamage = (
 				sliding: false,
 				sprinting: false,
 				velocity: [0, 0, 0],
+				wallTraversal: { mode: "none", normal: [0, 0, 0] },
 				visorExpression: "defeated",
 				visorStartedAt: nowMs / 1_000,
 				weaponsFree: false,
@@ -311,6 +325,10 @@ realtime(
 	({ socket }) => {
 		const gameSocket = socket as unknown as IoSocket
 		const socketId = gameSocket.id
+		let authoritativeLifeSequence = 0
+		let authoritativeWallTraversal: WallTraversalState =
+			INITIAL_WALL_TRAVERSAL_STATE
+		let lastMoveAt = performance.now()
 		const occupiedSlots = new Set(playerSpawnSlots.values())
 		const availableSlot = PLAYER_SPAWN_ORDER.find(
 			(index) => !occupiedSlots.has(index),
@@ -351,6 +369,7 @@ realtime(
 			sliding: false,
 			sprinting: false,
 			velocity: [0, 0, 0],
+			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 			visorExpression: "boot",
 			visorStartedAt: Date.now() / 1_000,
 			weaponsFree: false,
@@ -388,6 +407,7 @@ realtime(
 				typeof payload.freeAim !== "boolean" ||
 				typeof payload.sliding !== "boolean" ||
 				typeof payload.sprinting !== "boolean" ||
+				!isWallTraversalSnapshot(payload.wallTraversal) ||
 				typeof payload.weaponsFree !== "boolean" ||
 				(payload.jump !== 0 && payload.jump !== 1 && payload.jump !== 2) ||
 				payload.aimDirection.length !== 3 ||
@@ -406,9 +426,49 @@ realtime(
 				return
 			const current = players.get(socketId)
 			if (current === undefined) return
+			const moveAt = performance.now()
+			if (current.lifeSequence !== authoritativeLifeSequence) {
+				authoritativeLifeSequence = current.lifeSequence
+				authoritativeWallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+				lastMoveAt = moveAt
+			}
+			const delta = Math.min(Math.max((moveAt - lastMoveAt) / 1_000, 0), 0.1)
+			lastMoveAt = moveAt
+			const resolvedMotion = resolveArenaMotion(
+				ARENA_SEED,
+				[current.position[0], current.position[2]],
+				[payload.position[0], payload.position[2]],
+				payload.position[1] - 0.86,
+			)
+			const eyeHeight = payload.crouching
+				? PILOT_CROUCH_EYE_HEIGHT
+				: PILOT_STANDING_EYE_HEIGHT
+			const grounded = isJumpGrounded(
+				{ positionY: payload.position[1], velocityY: payload.velocity[1] },
+				arenaHeightAt(ARENA_SEED, resolvedMotion.x, resolvedMotion.z) +
+					eyeHeight,
+			)
+			const yaw = payload.rotation[0]
+			const authoritativeMovement = reconcileAuthoritativeMovement({
+				contact: resolvedMotion.contact,
+				crouching: payload.crouching,
+				delta,
+				grounded,
+				jump: payload.jump,
+				previousWallTraversal: authoritativeWallTraversal,
+				reportedWallTraversal: payload.wallTraversal,
+				sliding: payload.sliding,
+				velocity: payload.velocity,
+				viewDirection: horizontalViewDirectionFromYaw(yaw),
+			})
+			authoritativeWallTraversal = authoritativeMovement.traversalState
 			players.set(socketId, {
 				...current,
 				...payload,
+				jump: authoritativeMovement.jump,
+				position: [resolvedMotion.x, payload.position[1], resolvedMotion.z],
+				sliding: authoritativeMovement.sliding,
+				wallTraversal: authoritativeMovement.wallTraversal,
 				equippedWeapon: armory.activeWeapon(socketId),
 				dead: false,
 				deathStartedAt: null,
@@ -618,6 +678,7 @@ setInterval(() => {
 			sliding: false,
 			sprinting: false,
 			velocity: [0, 0, 0],
+			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 			visorExpression: "boot",
 			visorStartedAt: Date.now() / 1_000,
 			weaponsFree: false,

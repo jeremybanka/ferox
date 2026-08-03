@@ -36,6 +36,7 @@ export type GameHudState = {
 	sliding: boolean
 	speed: number
 	targeting: "acquired" | "escaping" | "free" | "idle" | "locked" | "lost"
+	wallTraversal: "none" | "run" | "slide"
 	weapon: WeaponKind
 	weaponSlots: EquipmentSlots
 }
@@ -70,6 +71,7 @@ export const gameHudStateAtom = atom<GameHudState>({
 		sliding: false,
 		speed: 0,
 		targeting: "idle",
+		wallTraversal: "none",
 		weapon: DEFAULT_GUN_ID,
 		weaponSlots: [
 			{
