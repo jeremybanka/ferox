@@ -1,3 +1,5 @@
+import { parkourArenaHeightAt } from "./ParkourArena.ts"
+
 function seededValue(seed: number, x: number, z: number): number {
 	const value = Math.sin(x * 127.1 + z * 311.7 + seed * 0.000_013) * 43_758.5453
 	return value - Math.floor(value)
@@ -17,7 +19,7 @@ function smoothNoise(seed: number, x: number, z: number): number {
 	return (a + (b - a) * sx) * (1 - sz) + (c + (d - c) * sx) * sz
 }
 
-export function arenaHeightAt(seed: number, x: number, z: number): number {
+function naturalArenaHeightAt(seed: number, x: number, z: number): number {
 	const radial = Math.sqrt(x * x + z * z)
 	const rim = Math.max(0, (radial - 144) / 28)
 	let height = -1.4
@@ -32,6 +34,10 @@ export function arenaHeightAt(seed: number, x: number, z: number): number {
 	}
 	height += Math.sin(x * 0.08) * Math.cos(z * 0.065) * 1.7
 	return height + rim * rim * 8
+}
+
+export function arenaHeightAt(seed: number, x: number, z: number): number {
+	return parkourArenaHeightAt(seed, x, z, naturalArenaHeightAt)
 }
 
 export function arenaSeededValue(seed: number, x: number, z: number): number {

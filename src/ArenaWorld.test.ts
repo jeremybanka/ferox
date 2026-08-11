@@ -36,8 +36,11 @@ describe("arena world", () => {
 		expect(arenaWalls(ARENA_SEED + 1)).not.toEqual(first)
 		expect(first.length).toBeGreaterThanOrEqual(60)
 		expect(new Set(first.map((wall) => wall.role))).toEqual(
-			new Set(["channel", "connector", "outer", "staggered"]),
+			new Set(["channel", "connector", "outer", "park", "staggered"]),
 		)
+		expect(
+			first.filter((wall) => wall.role === "park").length,
+		).toBeGreaterThanOrEqual(16)
 		const orientationBuckets = new Set(
 			first.map((wall) => Math.round(wall.yaw / (Math.PI / 24))),
 		)
@@ -121,6 +124,29 @@ describe("arena world", () => {
 				(result.x - start[0]) * tangentX + (result.z - start[1]) * tangentZ
 			expect(tangentProgress).toBeGreaterThan(wall.length * 0.25)
 		}
+	})
+
+	test("makes the park transition lips solid and wall-runnable", () => {
+		const wall = arenaWalls(ARENA_SEED).find(
+			(candidate) => candidate.role === "park" && candidate.height > 9,
+		)!
+		const y = wall.baseY + Math.cos(wall.leanRadians) * 2
+		const center = wallCenterAtY(wall, y)!
+		const [normalX, normalZ] = wallNormal(wall)
+		const clearance = wall.thickness * 0.5 + PLAYER_COLLISION_RADIUS
+		const start: readonly [number, number] = [
+			center[0] + normalX * (clearance + 2),
+			center[1] + normalZ * (clearance + 2),
+		]
+		const requested: readonly [number, number] = [
+			center[0] - normalX * 2,
+			center[1] - normalZ * 2,
+		]
+		const result = resolveArenaMotion(ARENA_SEED, start, requested, y)
+		expect(result.contact?.surfaceId).toBe(wall.id)
+		expect(result.contact?.inclinationRadians).toBeGreaterThanOrEqual(
+			(80 * Math.PI) / 180,
+		)
 	})
 
 	test("uses rounded wall endpoints instead of snagging their corners", () => {
