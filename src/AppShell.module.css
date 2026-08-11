@@ -15,27 +15,6 @@ app-shell.class {
 		outline: none;
 	}
 
-	> game-vignette {
-		position: absolute;
-		inset: 0;
-		z-index: 1;
-		display: block;
-		pointer-events: none;
-		background:
-			linear-gradient(
-				180deg,
-				rgb(8 9 22 / 0.42),
-				transparent 28%,
-				transparent 68%,
-				rgb(8 9 22 / 0.55)
-			),
-			radial-gradient(
-			circle at center,
-			transparent 38%,
-			rgb(6 8 18 / 0.52) 100%
-		);
-	}
-
 	> game-hud {
 		position: absolute;
 		inset: 0;
