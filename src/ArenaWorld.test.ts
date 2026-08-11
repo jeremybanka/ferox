@@ -10,14 +10,18 @@ import {
 	ARENA_TERRAIN_SEGMENTS,
 	arenaPillars,
 	arenaWalls,
+	arenaMovementGroundAt,
 	isSpawnClear,
 	PLAYER_COLLISION_RADIUS,
 	pointInsideArenaObstacle,
+	queryArenaLedge,
 	resolveArenaMotion,
 	wallCenterAtY,
 	wallNormal,
 	wallTangent,
 } from "./ArenaWorld.ts"
+import { MANTLE_MAXIMUM_RISE } from "./MantleTraversal.ts"
+import { PILOT_STANDING_EYE_HEIGHT } from "./pilot-targeting.ts"
 
 describe("arena world", () => {
 	test("quadruples playable area by doubling both linear dimensions", () => {
@@ -188,6 +192,81 @@ describe("arena world", () => {
 		expect(
 			pointInsideArenaObstacle(ARENA_SEED, [center![0], centerY, center![1]]),
 		).toBe(true)
+	})
+
+	test("finds an occupiable short wall-top mantle and supports its endpoint", () => {
+		const wall = arenaWalls(ARENA_SEED).find(
+			(candidate) => candidate.thickness >= PLAYER_COLLISION_RADIUS * 2 + 0.08,
+		)!
+		const topY = wall.baseY + Math.cos(wall.leanRadians) * wall.height
+		const rootY = topY - MANTLE_MAXIMUM_RISE
+		const bodyY = rootY + PILOT_STANDING_EYE_HEIGHT * 0.5
+		const center = wallCenterAtY(wall, bodyY)!
+		const [normalX, normalZ] = wallNormal(wall)
+		const faceDistance = wall.thickness * 0.5 + PLAYER_COLLISION_RADIUS
+		const position: readonly [number, number, number] = [
+			center[0] + normalX * faceDistance,
+			rootY + PILOT_STANDING_EYE_HEIGHT,
+			center[1] + normalZ * faceDistance,
+		]
+		const ledge = queryArenaLedge(ARENA_SEED, {
+			contact: {
+				inclinationRadians: Math.PI / 2 - Math.abs(wall.leanRadians),
+				normal: [normalX, 0, normalZ],
+				point: [
+					position[0] - normalX * PLAYER_COLLISION_RADIUS,
+					bodyY,
+					position[2] - normalZ * PLAYER_COLLISION_RADIUS,
+				],
+				surfaceId: wall.id,
+				time: 1,
+			},
+			eyeHeight: PILOT_STANDING_EYE_HEIGHT,
+			maximumRise: MANTLE_MAXIMUM_RISE,
+			position,
+			velocity: [-normalX * 6, 0, -normalZ * 6],
+		})
+
+		expect(ledge).not.toBeNull()
+		expect(ledge!.rise).toBeCloseTo(MANTLE_MAXIMUM_RISE)
+		const support = arenaMovementGroundAt(
+			ARENA_SEED,
+			ledge!.target[0],
+			ledge!.target[2],
+			topY + 0.001,
+		)
+		expect(support).toEqual({ height: topY, surfaceId: wall.id })
+	})
+
+	test("rejects a ledge just above the derived mantle limit", () => {
+		const wall = arenaWalls(ARENA_SEED).find(
+			(candidate) => candidate.thickness >= PLAYER_COLLISION_RADIUS * 2 + 0.08,
+		)!
+		const topY = wall.baseY + Math.cos(wall.leanRadians) * wall.height
+		const rootY = topY - MANTLE_MAXIMUM_RISE - 0.001
+		const bodyY = rootY + PILOT_STANDING_EYE_HEIGHT * 0.5
+		const center = wallCenterAtY(wall, bodyY)!
+		const [normalX, normalZ] = wallNormal(wall)
+		const position: readonly [number, number, number] = [
+			center[0] + normalX * (wall.thickness * 0.5 + PLAYER_COLLISION_RADIUS),
+			rootY + PILOT_STANDING_EYE_HEIGHT,
+			center[1] + normalZ * (wall.thickness * 0.5 + PLAYER_COLLISION_RADIUS),
+		]
+		expect(
+			queryArenaLedge(ARENA_SEED, {
+				contact: {
+					inclinationRadians: Math.PI / 2,
+					normal: [normalX, 0, normalZ],
+					point: [position[0], bodyY, position[2]],
+					surfaceId: wall.id,
+					time: 1,
+				},
+				eyeHeight: PILOT_STANDING_EYE_HEIGHT,
+				maximumRise: MANTLE_MAXIMUM_RISE,
+				position,
+				velocity: [-normalX * 6, 0, -normalZ * 6],
+			}),
+		).toBeNull()
 	})
 
 	test("clamps the doubled shared playable boundary", () => {

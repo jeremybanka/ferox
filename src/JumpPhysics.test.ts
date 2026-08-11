@@ -94,6 +94,56 @@ test("a true ledge departs into gravity instead of magnetically snapping", () =>
 	assert.equal(step.velocityY, -JUMP_PHYSICS.gravity * 0.04)
 	assert.ok(step.positionY < 5)
 	assert.ok(step.positionY > 2)
+	assert.equal(step.coyoteRemaining, JUMP_PHYSICS.coyoteTimeSeconds)
+})
+
+test("coyote jump at the inclusive boundary uses the normal first impulse", () => {
+	const step = stepJumpPhysics(
+		{
+			coyoteRemaining: 0,
+			jumpCount: 1,
+			positionY: 4,
+			velocityY: -2,
+		},
+		{
+			delta: 1 / 60,
+			groundAfter: 0,
+			groundBefore: 0,
+			jumpRequested: true,
+		},
+	)
+
+	assert.equal(step.impulse, 1)
+	assert.equal(step.jumpCount, 1)
+	assert.equal(step.coyoteRemaining, null)
+	assert.ok(step.velocityY < JUMP_PHYSICS.jumpVelocity)
+})
+
+test("expired coyote time retains the existing directional-double-jump budget", () => {
+	const expired = stepJumpPhysics(
+		{
+			coyoteRemaining: 0.001,
+			jumpCount: 1,
+			positionY: 4,
+			velocityY: -2,
+		},
+		{
+			delta: 0.002,
+			groundAfter: 0,
+			groundBefore: 0,
+			jumpRequested: false,
+		},
+	)
+	const jumped = stepJumpPhysics(expired, {
+		delta: 1 / 60,
+		groundAfter: 0,
+		groundBefore: 0,
+		jumpRequested: true,
+	})
+
+	assert.equal(expired.coyoteRemaining, null)
+	assert.equal(jumped.impulse, 2)
+	assert.equal(jumped.jumpCount, 2)
 })
 
 test("momentum-driven departure preserves upward velocity and double jump", () => {
@@ -115,6 +165,7 @@ test("momentum-driven departure preserves upward velocity and double jump", () =
 	assert.equal(step.jumpCount, 1)
 	assert.equal(step.velocityY, takeoffVelocity - JUMP_PHYSICS.gravity * delta)
 	assert.ok(step.positionY > 5)
+	assert.equal(step.coyoteRemaining, null)
 })
 
 test("a deliberate jump takes precedence over momentum departure", () => {

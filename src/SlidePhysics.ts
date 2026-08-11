@@ -16,6 +16,8 @@ export const SLIDE_PHYSICS = {
 	maximumSpeed: 500 / 3.6,
 	minimumTakeoffVerticalSpeed: 0.5,
 	minimumDynamicSlopeGrade: 0.015,
+	steepSurfaceDegrees: 60,
+	steepSurfaceRadians: Math.PI / 3,
 	exitSpeed: PLAYER_CROUCH_BASE_SPEED_LIMIT * 0.5,
 	terrainSampleDistance: 0.4,
 } as const
@@ -32,15 +34,22 @@ export type TerrainGradient = {
 
 export type SlidePhysicsState = PlanarVelocity & {
 	sliding: boolean
+	surfaceSliding?: boolean
 }
 
-export type MovementState = "airborne" | "crouching" | "running" | "sliding"
+export type MovementState =
+	| "airborne"
+	| "crouching"
+	| "running"
+	| "sliding"
+	| "surface-sliding"
 
 export type SlidePhysicsStep = SlidePhysicsState & {
 	downhillAcceleration: PlanarVelocity
 	movementState: MovementState
 	slopeAngleRadians: number
 	slopeGrade: number
+	surfaceSliding: boolean
 }
 
 export type SlideSurfaceContact = {
@@ -56,6 +65,10 @@ export function resolveMovementState(options: {
 	wasSliding: boolean
 }): MovementState {
 	if (!options.grounded) return "airborne"
+	const steepSurface =
+		options.slopeNormalUpDot <
+		Math.cos(SLIDE_PHYSICS.steepSurfaceRadians) - 1e-12
+	if (!options.crouching && steepSurface) return "surface-sliding"
 	if (!options.crouching) return "running"
 	if (
 		options.slopeNormalUpDot <= SLIDE_PHYSICS.entrySlopeNormalUpDot ||
@@ -196,21 +209,25 @@ export function stepSlidePhysics(
 		wasSliding: state.sliding,
 	})
 	const sliding = movementState === "sliding"
+	const surfaceSliding = movementState === "surface-sliding"
 
-	if (!sliding) {
+	if (!sliding && !surfaceSliding) {
 		return {
 			downhillAcceleration: { x: 0, z: 0 },
 			movementState,
 			slopeAngleRadians,
 			slopeGrade,
 			sliding: false,
+			surfaceSliding: false,
 			x: state.x,
 			z: state.z,
 		}
 	}
-	const entrySpeed = state.sliding
-		? speed
-		: speed + SLIDE_PHYSICS.entrySpeedBoost
+	const continuingSurfaceSlide = surfaceSliding && state.surfaceSliding === true
+	const entrySpeed =
+		state.sliding || continuingSurfaceSlide || surfaceSliding
+			? speed
+			: speed + SLIDE_PHYSICS.entrySpeedBoost
 	const entryScale = speed > 0 ? entrySpeed / speed : 1
 	const entryVelocity = {
 		x: state.x * entryScale,
@@ -224,7 +241,8 @@ export function stepSlidePhysics(
 			movementState,
 			slopeAngleRadians,
 			slopeGrade,
-			sliding: true,
+			sliding,
+			surfaceSliding,
 			x: entryVelocity.x * damping,
 			z: entryVelocity.z * damping,
 		})
@@ -253,7 +271,8 @@ export function stepSlidePhysics(
 		movementState,
 		slopeAngleRadians,
 		slopeGrade,
-		sliding: true,
+		sliding,
+		surfaceSliding,
 		x: directionX * downhillSpeed + crossSlopeX * crossSlopeDamping,
 		z: directionZ * downhillSpeed + crossSlopeZ * crossSlopeDamping,
 	})

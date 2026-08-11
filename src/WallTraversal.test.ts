@@ -131,7 +131,7 @@ describe("wall traversal", () => {
 		expect(run.state.mode).toBe("run")
 	})
 
-	test("slow and sub-80-degree contacts cannot start a run", () => {
+	test("slow and sub-80-degree contacts use controlled slide instead of run", () => {
 		const slow = stepWallTraversal(INITIAL_WALL_TRAVERSAL_STATE, {
 			blocked: false,
 			contact: contact(),
@@ -154,7 +154,27 @@ describe("wall traversal", () => {
 		})
 
 		expect(slow.state.mode).toBe("slide")
-		expect(shallow.state.mode).toBe("none")
+		expect(shallow.state.mode).toBe("slide")
+	})
+
+	test("uses a strict 60-degree surface-slide threshold", () => {
+		for (const { degrees, expected } of [
+			{ degrees: 59.9, expected: "none" },
+			{ degrees: 60, expected: "none" },
+			{ degrees: 60.1, expected: "slide" },
+		] as const) {
+			const result = stepWallTraversal(INITIAL_WALL_TRAVERSAL_STATE, {
+				blocked: false,
+				contact: contact(degrees),
+				crouching: false,
+				delta: 1 / 60,
+				grounded: false,
+				jumpRequested: false,
+				velocity: [0, -8, 3],
+				viewDirection: [0, 0, 1],
+			})
+			expect(result.state.mode).toBe(expected)
+		}
 	})
 
 	test("wall jump preserves tangential momentum and adds outward impulse", () => {
@@ -180,14 +200,14 @@ describe("wall traversal", () => {
 	})
 
 	test.each(["run", "slide"] as const)(
-		"crouch detaches from a wall %s without sliding and requires contact release",
+		"crouch changes a wall %s into a regular slide without a release latch",
 		(activeMode) => {
 			const active = {
 				...INITIAL_WALL_TRAVERSAL_STATE,
 				mode: activeMode,
 				surfaceId: "wall-a",
 			}
-			const detached = stepWallTraversal(active, {
+			const crouchSlide = stepWallTraversal(active, {
 				blocked: false,
 				contact: contact(),
 				crouching: true,
@@ -197,12 +217,13 @@ describe("wall traversal", () => {
 				velocity: [0, -1, 9],
 				viewDirection: [0, 0, 1],
 			})
-			expect(detached.detachedByCrouch).toBe(true)
-			expect(detached.state.mode).toBe("none")
-			expect(detached.state.requiresContactRelease).toBe(true)
-			expect(detached.velocity).toEqual([0, -1, 9])
+			expect(crouchSlide.detachedByCrouch).toBe(false)
+			expect(crouchSlide.state.mode).toBe("crouch-slide")
+			expect(crouchSlide.state.requiresContactRelease).toBe(false)
+			expect(crouchSlide.velocity[1]).toBe(-1)
+			expect(crouchSlide.velocity[2]).toBeCloseTo(7.02)
 
-			const stillTouching = stepWallTraversal(detached.state, {
+			const releasedCrouch = stepWallTraversal(crouchSlide.state, {
 				blocked: false,
 				contact: contact(),
 				crouching: false,
@@ -212,31 +233,8 @@ describe("wall traversal", () => {
 				velocity: [0, -1, 9],
 				viewDirection: [0, 0, 1],
 			})
-			expect(stillTouching.state.mode).toBe("none")
-			expect(stillTouching.state.requiresContactRelease).toBe(true)
-
-			const released = stepWallTraversal(stillTouching.state, {
-				blocked: false,
-				contact: null,
-				crouching: false,
-				delta: 1 / 60,
-				grounded: false,
-				jumpRequested: false,
-				velocity: [0, -1, 9],
-				viewDirection: [0, 0, 1],
-			})
-			const recontacted = stepWallTraversal(released.state, {
-				blocked: false,
-				contact: contact(),
-				crouching: false,
-				delta: 1 / 60,
-				grounded: false,
-				jumpRequested: false,
-				velocity: [0, -1, 9],
-				viewDirection: [0, 0, 1],
-			})
-			expect(released.state.requiresContactRelease).toBe(false)
-			expect(recontacted.state.mode).toBe("run")
+			expect(releasedCrouch.state.mode).toBe("run")
+			expect(releasedCrouch.state.requiresContactRelease).toBe(false)
 		},
 	)
 

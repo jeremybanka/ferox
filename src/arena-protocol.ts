@@ -7,6 +7,32 @@ export type WallTraversalSnapshot = Readonly<{
 	normal: Vector3Tuple
 }>
 
+export type MantleSnapshot = Readonly<{
+	active: boolean
+	progress: number
+	surfaceId: string | null
+}>
+
+export const NO_MANTLE_SNAPSHOT: MantleSnapshot = {
+	active: false,
+	progress: 0,
+	surfaceId: null,
+}
+
+export function isMantleSnapshot(value: unknown): value is MantleSnapshot {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 3 &&
+		typeof record["active"] === "boolean" &&
+		typeof record["progress"] === "number" &&
+		Number.isFinite(record["progress"]) &&
+		(record["progress"] as number) >= 0 &&
+		(record["progress"] as number) <= 1 &&
+		(record["surfaceId"] === null || typeof record["surfaceId"] === "string")
+	)
+}
+
 export function isWallTraversalSnapshot(
 	value: unknown,
 ): value is WallTraversalSnapshot {
@@ -62,6 +88,7 @@ export type PlayerSnapshot = {
 	freeAim: boolean
 	id: string
 	jump: 0 | 1 | 2
+	mantle?: MantleSnapshot
 	lifeSequence: number
 	position: Vector3Tuple
 	punchSequence: number

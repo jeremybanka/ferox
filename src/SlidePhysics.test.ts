@@ -79,6 +79,44 @@ test("resting crouch starts sliding at a 30 degree slope boundary", () => {
 	}
 })
 
+test("standing terrain uses a strict 60-degree controlled surface slide", () => {
+	for (const { degrees, expected } of [
+		{ degrees: 59.9, expected: false },
+		{ degrees: 60, expected: false },
+		{ degrees: 60.1, expected: true },
+	] as const) {
+		const step = stepSlidePhysics(
+			{ sliding: false, surfaceSliding: false, x: 0, z: 0 },
+			{
+				crouching: false,
+				delta: 0.1,
+				grounded: true,
+				terrainGradient: gradientAtDegrees(degrees),
+			},
+		)
+		assert.equal(step.surfaceSliding, expected)
+		assert.equal(step.movementState, expected ? "surface-sliding" : "running")
+		assert.equal(step.sliding, false)
+	}
+})
+
+test("crouching on the same steep terrain selects regular slide", () => {
+	const step = stepSlidePhysics(
+		{ sliding: false, surfaceSliding: true, x: 4, z: 0 },
+		{
+			crouching: true,
+			delta: 0.1,
+			grounded: true,
+			terrainGradient: gradientAtDegrees(70),
+		},
+	)
+
+	assert.equal(step.movementState, "sliding")
+	assert.equal(step.sliding, true)
+	assert.equal(step.surfaceSliding, false)
+	assert.ok(step.x < 4)
+})
+
 test("downhill sliding gains momentum and uphill sliding loses it", () => {
 	const options = {
 		crouching: true,
