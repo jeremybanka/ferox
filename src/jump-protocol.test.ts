@@ -18,6 +18,7 @@ describe("jump direction protocol", () => {
 		undefined,
 		[0],
 		[0, 0, 0],
+		[Number.MIN_VALUE, 0],
 		[1.001, 0],
 		[Number.NaN, 0],
 		[Number.POSITIVE_INFINITY, 0],

@@ -86,3 +86,13 @@ test("directional steering is gated to the accepted second jump", () => {
 		velocity,
 	)
 })
+
+test("subnormal directions resolve to a finite zero impulse", () => {
+	const impulse = directionalDoubleJumpImpulse({
+		x: Number.MIN_VALUE,
+		z: 0,
+	})
+	assert.deepEqual(impulse, { x: 0, z: 0 })
+	assert.ok(Number.isFinite(impulse.x))
+	assert.ok(Number.isFinite(impulse.z))
+})

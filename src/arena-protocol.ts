@@ -109,6 +109,7 @@ export type PlayerSnapshot = {
 
 export type JumpImpulse = 1 | 2 | null
 export type JumpDirection = [number, number] | null
+export const JUMP_DIRECTION_MINIMUM_MAGNITUDE = 1e-6
 
 export type PlayerMoveSnapshot = Omit<
 	PlayerSnapshot,
@@ -139,12 +140,17 @@ export function isJumpImpulse(value: unknown): value is JumpImpulse {
 }
 
 export function isJumpDirection(value: unknown): value is JumpDirection {
+	if (value === null) return true
+	if (
+		!Array.isArray(value) ||
+		value.length !== 2 ||
+		!value.every(Number.isFinite)
+	)
+		return false
+	const magnitude = Math.hypot(value[0] as number, value[1] as number)
 	return (
-		value === null ||
-		(Array.isArray(value) &&
-			value.length === 2 &&
-			value.every(Number.isFinite) &&
-			Math.hypot(value[0] as number, value[1] as number) <= 1 + 1e-6)
+		magnitude === 0 ||
+		(magnitude >= JUMP_DIRECTION_MINIMUM_MAGNITUDE && magnitude <= 1 + 1e-6)
 	)
 }
 

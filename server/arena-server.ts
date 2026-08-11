@@ -578,6 +578,11 @@ realtime(
 				previousVelocity: current.velocity,
 				previousWallTraversal: authoritativeWallTraversal,
 				reportedWallTraversal: payload.wallTraversal,
+				resolvedPosition: [
+					resolvedMotion.x,
+					requestedPosition[1],
+					resolvedMotion.z,
+				],
 				sliding: payload.sliding,
 				terrainGradient: sampleTerrainGradient(
 					(x, z) => arenaHeightAt(ARENA_SEED, x, z),
@@ -594,11 +599,12 @@ realtime(
 			authoritativeJump = authoritativeMovement.jump
 			authoritativeSliding = authoritativeMovement.sliding
 			authoritativeSurfaceSliding = authoritativeMovement.surfaceSliding
-			const authoritativePosition = authoritativeMovement.mantlePosition ?? [
-				resolvedMotion.x,
-				requestedPosition[1],
-				resolvedMotion.z,
-			]
+			const authoritativePosition = authoritativeMovement.mantlePosition ??
+				authoritativeMovement.resolvedPosition ?? [
+					resolvedMotion.x,
+					requestedPosition[1],
+					resolvedMotion.z,
+				]
 			players.set(socketId, {
 				...current,
 				aimDirection: payload.aimDirection,

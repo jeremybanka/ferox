@@ -152,6 +152,7 @@ export type AuthoritativeMovementInput = Readonly<{
 	previousVelocity?: readonly [number, number, number]
 	previousWallTraversal: WallTraversalState
 	reportedWallTraversal: WallTraversalSnapshot
+	resolvedPosition?: readonly [number, number, number]
 	sliding: boolean
 	terrainGradient?: TerrainGradient
 	velocity: readonly [number, number, number]
@@ -164,6 +165,7 @@ export type AuthoritativeMovementState = Readonly<{
 	mantle: MantleSnapshot
 	mantlePosition: readonly [number, number, number] | null
 	mantleState: MantleState
+	resolvedPosition: readonly [number, number, number] | null
 	sliding: boolean
 	surfaceSliding: boolean
 	traversalState: WallTraversalState
@@ -197,6 +199,7 @@ export function reconcileAuthoritativeMovement(
 					: { active: false, progress: 0, surfaceId: null },
 			mantlePosition: mantleStep.position,
 			mantleState: mantleStep.state,
+			resolvedPosition: mantleStep.position,
 			sliding: false,
 			surfaceSliding: false,
 			traversalState: INITIAL_WALL_TRAVERSAL_STATE,
@@ -362,6 +365,7 @@ export function reconcileAuthoritativeMovement(
 		mantle: { active: false, progress: 0, surfaceId: null },
 		mantlePosition: null,
 		mantleState: INITIAL_MANTLE_STATE,
+		resolvedPosition: input.resolvedPosition ?? null,
 		sliding:
 			wallRegularSlide ||
 			(mode === "none" &&

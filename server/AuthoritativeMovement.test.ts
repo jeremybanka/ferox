@@ -589,4 +589,95 @@ describe("authoritative movement packet envelopes", () => {
 			2 + 3.2 * direction[1],
 		])
 	})
+
+	test.each([
+		{
+			clientVelocity: [3.2, 1_000, 0] as const,
+			direction: [1, 0] as const,
+			expectedVelocity: [3.2, 9.4, 0] as const,
+			label: "cardinal",
+			previousVelocity: [0, -2, 0] as const,
+			resolvedPosition: [0, 5, 0] as const,
+		},
+		{
+			clientVelocity: [3.2 * Math.SQRT1_2, 1_000, 3.2 * Math.SQRT1_2] as const,
+			direction: [Math.SQRT1_2, Math.SQRT1_2] as const,
+			expectedVelocity: [3.2 * Math.SQRT1_2, 9.4, 3.2 * Math.SQRT1_2] as const,
+			label: "diagonal",
+			previousVelocity: [0, -2, 0] as const,
+			resolvedPosition: [0, 5, 0] as const,
+		},
+		{
+			clientVelocity: [0.8, 1_000, 0] as const,
+			direction: [-1, 0] as const,
+			expectedVelocity: [0.8, 9.4, 0] as const,
+			label: "opposite",
+			previousVelocity: [4, -2, 0] as const,
+			resolvedPosition: [0.2, 5, 0] as const,
+		},
+		{
+			clientVelocity: [2, 1_000, 1] as const,
+			direction: [0, 0] as const,
+			expectedVelocity: [2, 9.4, 1] as const,
+			label: "zero",
+			previousVelocity: [2, -2, 1] as const,
+			resolvedPosition: [0.1, 5, 0.05] as const,
+		},
+	])(
+		"applies $label double-jump velocity after planar position integration",
+		({
+			clientVelocity,
+			direction,
+			expectedVelocity,
+			previousVelocity,
+			resolvedPosition,
+		}) => {
+			const state = reconcileAuthoritativeMovement({
+				contact: null,
+				crouching: false,
+				delta: 0.05,
+				grounded: false,
+				jump: 2,
+				jumpDirection: direction,
+				jumpImpulse: 2,
+				previousGrounded: false,
+				previousJump: 1,
+				previousVelocity,
+				previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+				reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+				resolvedPosition,
+				sliding: false,
+				velocity: clientVelocity,
+				viewDirection: [0, 0, 1],
+			})
+
+			expect(state.resolvedPosition).toEqual(resolvedPosition)
+			for (const index of [0, 1, 2] as const)
+				expect(state.velocity[index]).toBeCloseTo(expectedVelocity[index], 12)
+		},
+	)
+
+	test("keeps authoritative state finite for a subnormal direction", () => {
+		const state = reconcileAuthoritativeMovement({
+			contact: null,
+			crouching: false,
+			delta: 0.05,
+			grounded: false,
+			jump: 2,
+			jumpDirection: [Number.MIN_VALUE, 0],
+			jumpImpulse: 2,
+			previousGrounded: false,
+			previousJump: 1,
+			previousVelocity: [0, -2, 0],
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			resolvedPosition: [0, 5, 0],
+			sliding: false,
+			velocity: [Number.MIN_VALUE, 1_000, 0],
+			viewDirection: [0, 0, 1],
+		})
+
+		expect(state.resolvedPosition?.every(Number.isFinite)).toBe(true)
+		expect(state.velocity.every(Number.isFinite)).toBe(true)
+	})
 })
