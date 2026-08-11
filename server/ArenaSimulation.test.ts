@@ -39,6 +39,7 @@ import {
 	type SimulationDroneSeed,
 	type SimulationPlayer,
 } from "./ArenaSimulation.ts"
+import { findArenaDronePath } from "./DronePathfinder.ts"
 
 function makeSimulation(
 	players: SimulationPlayer[],
@@ -1273,83 +1274,44 @@ test("a deployed Bully keeps owner-safe targeting and leash recovery above orbit
 	expect(drone.velocity[0]).toBeLessThan(0)
 })
 
-test("an orbiting Bully reverses once on wall contact and escapes without chatter", () => {
+test("a pursuing Bully routes around a wall instead of orbiting into it", () => {
+	const start = [0, -20] as const
+	const goal = [0, -44] as const
+	const firstWaypoint = findArenaDronePath(7_431_905, start, goal)?.[0]
+	expect(firstWaypoint).toBeDefined()
+	if (firstWaypoint === undefined) return
 	const players: SimulationPlayer[] = [
 		{
 			crouching: false,
 			id: "target",
-			position: [0, 1.72, -44],
+			position: [goal[0], 1.72, goal[1]],
 			velocity: [0, 0, 0],
 		},
 	]
 	const simulation = makeDroneFeatureSimulation(players, [
-		{ id: 105, position: [0, 3.2, -20], stationary: false },
+		{ id: 105, position: [start[0], 3.2, start[1]], stationary: false },
 	])
-	const samples: Array<{
-		position: readonly [number, number, number]
-		tangentialSpeed: number
-		time: number
-	}> = []
+	const samples: Array<readonly [number, number, number]> = []
 	for (let step = 0; step < 160; step += 1) {
 		simulation.update(0.05)
 		const drone = simulation
 			.snapshot()
 			.drones.find((candidate) => candidate.id === 105)!
-		const inward = new THREE.Vector3(
-			-drone.position[0],
-			0,
-			-44 - drone.position[2],
-		).normalize()
-		const tangent = new THREE.Vector3(-inward.z, 0, inward.x)
-		samples.push({
-			position: drone.position,
-			tangentialSpeed: tangent.dot(new THREE.Vector3(...drone.velocity)),
-			time: step * 0.05,
-		})
+		samples.push(drone.position)
 	}
-	const wallContact = samples.find((sample) => sample.position[2] < -36.75)
-	expect(wallContact).toBeDefined()
-	expect(
-		samples.some(
-			(sample) =>
-				sample.time < wallContact!.time && sample.tangentialSpeed < -5,
-		),
-	).toBe(true)
-	expect(
-		samples.some(
-			(sample) =>
-				sample.time >= wallContact!.time &&
-				sample.time <= wallContact!.time + 0.5 &&
-				sample.tangentialSpeed > 2,
-		),
-	).toBe(true)
-
-	let previousDirection = 0
-	let directionReversals = 0
-	for (const sample of samples) {
-		if (Math.abs(sample.tangentialSpeed) < 1.5) continue
-		const direction = Math.sign(sample.tangentialSpeed)
-		if (previousDirection !== 0 && direction !== previousDirection)
-			directionReversals += 1
-		previousDirection = direction
-	}
-	expect(directionReversals).toBe(1)
-	expect(
-		Math.max(
-			...samples
-				.filter((sample) => sample.time > wallContact!.time)
-				.map((sample) => sample.position[2]),
-		) - wallContact!.position[2],
-	).toBeGreaterThan(6)
-
-	for (const { position, time } of samples) {
+	for (const position of samples) {
 		expect(position.every(Number.isFinite)).toBe(true)
-		expect(position[2]).toBeGreaterThan(-38.5)
-		if (time >= 3)
-			expect(Math.hypot(position[0], position[2] + 44)).toBeLessThan(
-				BULLY_ORBIT_EXIT_DISTANCE + 0.5,
-			)
+		expect(position[2]).toBeGreaterThan(-36.75)
 	}
+	const finalPosition = samples.at(-1)!
+	expect(
+		Math.hypot(
+			firstWaypoint[0] - finalPosition[0],
+			firstWaypoint[1] - finalPosition[2],
+		),
+	).toBeLessThan(
+		Math.hypot(firstWaypoint[0] - start[0], firstWaypoint[1] - start[1]) - 40,
+	)
 })
 
 test("a wreck can be recovered once and deploys exactly once after ten meters", () => {
