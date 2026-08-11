@@ -118,6 +118,10 @@ import {
 } from "./game-input.ts"
 import type { GameHudState } from "./game-state.ts"
 import {
+	applyDirectionalDoubleJump,
+	cameraRelativeMovementDirection,
+} from "./DirectionalJumpPhysics.ts"
+import {
 	INITIAL_MOVEMENT_CORE_STATE,
 	resetMovementCore,
 	stepMovementCore,
@@ -180,6 +184,7 @@ import {
 import { stepSlideDust } from "./SlideDustState.ts"
 import {
 	limitHorizontalSpeed,
+	resolveSlideSurfaceContact,
 	sampleTerrainGradient,
 	stepSlidePhysics,
 } from "./SlidePhysics.ts"
@@ -2089,6 +2094,11 @@ export class ArenaGame {
 		)
 		const wallCrouchDetach = crouch && this.#wallTraversal.mode !== "none"
 		const wasPhysicsSliding = this.#slide
+		const terrainGradient = sampleTerrainGradient(
+			(x, z) => this.#heightAt(x, z),
+			this.#player.position.x,
+			this.#player.position.z,
+		)
 		const slideStep = stepSlidePhysics(
 			{
 				sliding: this.#slide,
@@ -2099,11 +2109,7 @@ export class ArenaGame {
 				crouching: crouch && !wallCrouchDetach,
 				delta,
 				grounded,
-				terrainGradient: sampleTerrainGradient(
-					(x, z) => this.#heightAt(x, z),
-					this.#player.position.x,
-					this.#player.position.z,
-				),
+				terrainGradient,
 			},
 		)
 		this.#player.velocity.x = slideStep.x
@@ -2226,6 +2232,19 @@ export class ArenaGame {
 				(this.#player.position.z + nextZ) * 0.5,
 			) + eye
 		const nextGround = this.#heightAt(nextX, nextZ) + eye
+		const slideSurfaceContact = this.#slide
+			? resolveSlideSurfaceContact({
+					delta,
+					groundAfter: nextGround,
+					groundBefore: ground,
+					groundMidpoint: midpointGround,
+					terrainGradient,
+					velocity: {
+						x: this.#player.velocity.x,
+						z: this.#player.velocity.z,
+					},
+				})
+			: null
 		const jumpStep = stepJumpPhysics(
 			{
 				jumpCount: this.#player.jumps,
@@ -2238,10 +2257,20 @@ export class ArenaGame {
 				groundBefore: ground,
 				groundMidpoint: midpointGround,
 				jumpRequested: this.#jumpQueued,
+				momentumDepartureVelocityY: slideSurfaceContact?.verticalVelocity ?? 0,
 			},
 		)
 		this.#jumpQueued = false
 		this.#player.jumps = jumpStep.jumpCount
+		if (jumpStep.impulse === 2) {
+			const steeredMomentum = applyDirectionalDoubleJump(
+				{ x: this.#player.velocity.x, z: this.#player.velocity.z },
+				cameraRelativeMovementDirection(physicalInput, this.#player.yaw),
+				jumpStep.impulse,
+			)
+			this.#player.velocity.x = steeredMomentum.x
+			this.#player.velocity.z = steeredMomentum.z
+		}
 		if (jumpStep.impulse !== null || jumpStep.departedGround) {
 			this.#slide = false
 		} else if (jumpStep.landed && crouch) {

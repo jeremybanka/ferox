@@ -95,3 +95,41 @@ test("a true ledge departs into gravity instead of magnetically snapping", () =>
 	assert.ok(step.positionY < 5)
 	assert.ok(step.positionY > 2)
 })
+
+test("momentum-driven departure preserves upward velocity and double jump", () => {
+	const takeoffVelocity = 8
+	const delta = 0.04
+	const step = stepJumpPhysics(
+		{ jumpCount: 0, positionY: 5, velocityY: 0 },
+		{
+			delta,
+			groundAfter: 4.8,
+			groundBefore: 5,
+			jumpRequested: false,
+			momentumDepartureVelocityY: takeoffVelocity,
+		},
+	)
+
+	assert.equal(step.departedGround, true)
+	assert.equal(step.impulse, null)
+	assert.equal(step.jumpCount, 1)
+	assert.equal(step.velocityY, takeoffVelocity - JUMP_PHYSICS.gravity * delta)
+	assert.ok(step.positionY > 5)
+})
+
+test("a deliberate jump takes precedence over momentum departure", () => {
+	const step = stepJumpPhysics(
+		{ jumpCount: 0, positionY: 5, velocityY: 0 },
+		{
+			delta: 0.04,
+			groundAfter: 5,
+			groundBefore: 5,
+			jumpRequested: true,
+			momentumDepartureVelocityY: 8,
+		},
+	)
+
+	assert.equal(step.departedGround, false)
+	assert.equal(step.impulse, 1)
+	assert.equal(step.jumpCount, 1)
+})
