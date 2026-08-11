@@ -29,6 +29,7 @@ export type AuthoritativeMovementInput = Readonly<{
 	previousGrounded?: boolean
 	previousMantle?: MantleState
 	previousSliding?: boolean
+	previousSurfaceSliding?: boolean
 	previousWallTraversal: WallTraversalState
 	reportedWallTraversal: WallTraversalSnapshot
 	sliding: boolean
@@ -46,6 +47,7 @@ export type AuthoritativeMovementState = Readonly<{
 	sliding: boolean
 	surfaceSliding: boolean
 	traversalState: WallTraversalState
+	velocity: readonly [number, number, number]
 	wallTraversal: WallTraversalSnapshot
 }>
 
@@ -78,6 +80,7 @@ export function reconcileAuthoritativeMovement(
 			sliding: false,
 			surfaceSliding: false,
 			traversalState: INITIAL_WALL_TRAVERSAL_STATE,
+			velocity: mantleStep.velocity,
 			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 		}
 	}
@@ -130,12 +133,21 @@ export function reconcileAuthoritativeMovement(
 		traversal.resetJumpAvailability,
 		input.jump,
 	)
+	let velocity: readonly [number, number, number] =
+		mode === "none" && terrainSlide !== null
+			? [terrainSlide.x, input.velocity[1], terrainSlide.z]
+			: traversal.velocity
 	if (input.grounded || mode !== "none") {
 		coyoteRemaining = null
 	} else if (
 		input.previousGrounded === true &&
 		input.velocity[1] <= 0 &&
 		input.previousSliding !== true &&
+		input.previousSurfaceSliding !== true &&
+		input.previousWallTraversal.mode === "none" &&
+		(input.previousMantle ?? INITIAL_MANTLE_STATE).mode === "none" &&
+		input.contact === null &&
+		(input.mantleCandidate ?? null) === null &&
 		!surfaceSliding
 	) {
 		coyoteRemaining = JUMP_PHYSICS.coyoteTimeSeconds
@@ -148,8 +160,13 @@ export function reconcileAuthoritativeMovement(
 		input.velocity[1] > 0 &&
 		input.jump === 1
 	) {
-		if (coyoteRemaining !== null) coyoteRemaining = null
-		else jump = 2
+		if (coyoteRemaining !== null) {
+			coyoteRemaining = null
+			velocity = [velocity[0], JUMP_PHYSICS.jumpVelocity, velocity[2]]
+		} else {
+			jump = 2
+			velocity = [velocity[0], JUMP_PHYSICS.doubleJumpVelocity, velocity[2]]
+		}
 	}
 	return {
 		coyoteRemaining,
@@ -163,6 +180,7 @@ export function reconcileAuthoritativeMovement(
 				(terrainSlide === null ? input.sliding : terrainSlide.sliding)),
 		surfaceSliding,
 		traversalState: traversal.state,
+		velocity,
 		wallTraversal,
 	}
 }

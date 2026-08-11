@@ -1,5 +1,5 @@
 import type { ArenaSurfaceContact } from "./ArenaWorld.ts"
-import { SLIDE_PHYSICS } from "./SlidePhysics.ts"
+import { SLIDE_PHYSICS, stepContactSlidePhysics } from "./SlidePhysics.ts"
 
 export const WALL_MINIMUM_INCLINATION_RADIANS = (80 * Math.PI) / 180
 export const WALL_RUN_ENTRY_SPEED = 7.2
@@ -174,10 +174,20 @@ export function stepWallTraversal(
 	const tangentX = velocityX - normalX * normalSpeed
 	const tangentZ = velocityZ - normalZ * normalSpeed
 	if (input.crouching) {
+		const continuingRegularSlide =
+			state.mode === "crouch-slide" && state.surfaceId === contact.surfaceId
+		const regularSlide = stepContactSlidePhysics(
+			{ sliding: continuingRegularSlide, velocity: input.velocity },
+			{
+				delta,
+				surfaceNormal: contact.surfaceNormal ?? contact.normal,
+			},
+		)
 		return {
 			consumedJump: false,
 			detachedByCrouch: false,
-			resetJumpAvailability: true,
+			resetJumpAvailability:
+				state.mode === "none" || state.surfaceId !== contact.surfaceId,
 			state: {
 				elapsed:
 					state.mode === "crouch-slide" && state.surfaceId === contact.surfaceId
@@ -189,11 +199,7 @@ export function stepWallTraversal(
 				requiresContactRelease: false,
 				surfaceId: contact.surfaceId,
 			},
-			velocity: [
-				tangentX * 0.78,
-				Math.max(velocityY, -WALL_SLIDE_DOWNWARD_SPEED),
-				tangentZ * 0.78,
-			],
+			velocity: regularSlide.velocity,
 		}
 	}
 	if (input.jumpRequested) {
@@ -246,10 +252,12 @@ export function stepWallTraversal(
 			: "slide"
 	const elapsed =
 		state.surfaceId === contact.surfaceId ? state.elapsed + delta : 0
+	const acquiredSurface =
+		state.mode === "none" || state.surfaceId !== contact.surfaceId
 	return {
 		consumedJump: false,
 		detachedByCrouch: false,
-		resetJumpAvailability: true,
+		resetJumpAvailability: acquiredSurface,
 		state: {
 			elapsed,
 			mode,

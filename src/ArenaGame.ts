@@ -2406,6 +2406,7 @@ export class ArenaGame {
 				},
 				{
 					delta,
+					gravityScale: wallStep.state.mode === "crouch-slide" ? 0 : 1,
 					groundAfter: nextGround,
 					groundBefore: ground,
 					groundMidpoint: midpointGround,

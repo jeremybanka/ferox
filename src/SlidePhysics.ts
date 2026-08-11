@@ -57,6 +57,96 @@ export type SlideSurfaceContact = {
 	verticalVelocity: number
 }
 
+export type ContactSlidePhysicsState = Readonly<{
+	sliding: boolean
+	velocity: readonly [number, number, number]
+}>
+
+export type ContactSlidePhysicsStep = Readonly<{
+	downhillAcceleration: readonly [number, number, number]
+	velocity: readonly [number, number, number]
+}>
+
+/**
+ * Applies the regular slide's one-shot boost, projected gravity, cross-slope
+ * friction, and speed cap to an arbitrary contacted surface plane.
+ */
+export function stepContactSlidePhysics(
+	state: ContactSlidePhysicsState,
+	options: Readonly<{
+		delta: number
+		surfaceNormal: readonly [number, number, number]
+	}>,
+): ContactSlidePhysicsStep {
+	const normalLength = Math.hypot(...options.surfaceNormal)
+	if (normalLength <= 1e-9) {
+		return {
+			downhillAcceleration: [0, 0, 0],
+			velocity: state.velocity,
+		}
+	}
+	const normal = options.surfaceNormal.map((value) => value / normalLength) as [
+		number,
+		number,
+		number,
+	]
+	const normalSpeed =
+		state.velocity[0] * normal[0] +
+		state.velocity[1] * normal[1] +
+		state.velocity[2] * normal[2]
+	let velocity = state.velocity.map(
+		(value, index) => value - normal[index]! * normalSpeed,
+	) as [number, number, number]
+	const entrySpeed = Math.hypot(...velocity)
+	if (!state.sliding && entrySpeed > 0) {
+		const scale = (entrySpeed + SLIDE_PHYSICS.entrySpeedBoost) / entrySpeed
+		velocity = velocity.map((value) => value * scale) as [
+			number,
+			number,
+			number,
+		]
+	}
+	const gravity: readonly [number, number, number] = [
+		0,
+		-SLIDE_PHYSICS.gravity,
+		0,
+	]
+	const gravityNormal =
+		gravity[0] * normal[0] + gravity[1] * normal[1] + gravity[2] * normal[2]
+	const downhillAcceleration = gravity.map(
+		(value, index) => value - normal[index]! * gravityNormal,
+	) as [number, number, number]
+	const delta = Math.max(0, options.delta)
+	velocity = velocity.map(
+		(value, index) => value + downhillAcceleration[index]! * delta,
+	) as [number, number, number]
+	const downhillLength = Math.hypot(...downhillAcceleration)
+	if (downhillLength > 1e-9) {
+		const downhill = downhillAcceleration.map(
+			(value) => value / downhillLength,
+		) as [number, number, number]
+		const downhillSpeed =
+			velocity[0] * downhill[0] +
+			velocity[1] * downhill[1] +
+			velocity[2] * downhill[2]
+		const damping = Math.exp(-SLIDE_PHYSICS.flatFriction * delta)
+		velocity = velocity.map((value, index) => {
+			const downhillVelocity = downhill[index]! * downhillSpeed
+			return downhillVelocity + (value - downhillVelocity) * damping
+		}) as [number, number, number]
+	}
+	const speed = Math.hypot(...velocity)
+	if (speed > SLIDE_PHYSICS.maximumSpeed) {
+		const scale = SLIDE_PHYSICS.maximumSpeed / speed
+		velocity = velocity.map((value) => value * scale) as [
+			number,
+			number,
+			number,
+		]
+	}
+	return { downhillAcceleration, velocity }
+}
+
 export function resolveMovementState(options: {
 	crouching: boolean
 	grounded: boolean

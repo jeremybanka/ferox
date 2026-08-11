@@ -70,6 +70,7 @@ export function stepJumpPhysics(
 		groundAfter: number
 		groundBefore: number
 		groundMidpoint?: number
+		gravityScale?: number
 		jumpRequested: boolean
 		ledgeCoyoteEligible?: boolean
 		momentumDepartureVelocityY?: number
@@ -141,7 +142,10 @@ export function stepJumpPhysics(
 	}
 
 	if (!groundedBefore || departedGround) {
-		velocityY -= JUMP_PHYSICS.gravity * options.delta
+		velocityY -=
+			JUMP_PHYSICS.gravity *
+			options.delta *
+			Math.max(0, options.gravityScale ?? 1)
 	}
 	if (followsGround) {
 		positionY = options.groundAfter

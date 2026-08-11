@@ -184,3 +184,19 @@ test("a deliberate jump takes precedence over momentum departure", () => {
 	assert.equal(step.impulse, 1)
 	assert.equal(step.jumpCount, 1)
 })
+
+test("an external surface owner can suppress duplicate gravity integration", () => {
+	const step = stepJumpPhysics(
+		{ jumpCount: 1, positionY: 5, velocityY: -4 },
+		{
+			delta: 0.04,
+			gravityScale: 0,
+			groundAfter: 0,
+			groundBefore: 0,
+			jumpRequested: false,
+		},
+	)
+
+	assert.equal(step.velocityY, -4)
+	assert.equal(step.positionY, 4.84)
+})

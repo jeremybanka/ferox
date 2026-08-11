@@ -15,6 +15,7 @@ import {
 	sampleTerrainGradient,
 	SLIDE_PHYSICS,
 	slopeAngleFromTerrainGradient,
+	stepContactSlidePhysics,
 	stepSlidePhysics,
 } from "./SlidePhysics.ts"
 
@@ -115,6 +116,54 @@ test("crouching on the same steep terrain selects regular slide", () => {
 	assert.equal(step.sliding, true)
 	assert.equal(step.surfaceSliding, false)
 	assert.ok(step.x < 4)
+})
+
+test("contact regular slide projects gravity and boosts entry exactly once", () => {
+	const first = stepContactSlidePhysics(
+		{ sliding: false, velocity: [0, 0, 10] },
+		{ delta: 0, surfaceNormal: [1, 0, 0] },
+	)
+	const continued = stepContactSlidePhysics(
+		{ sliding: true, velocity: first.velocity },
+		{ delta: 0, surfaceNormal: [1, 0, 0] },
+	)
+	const falling = stepContactSlidePhysics(
+		{ sliding: true, velocity: continued.velocity },
+		{ delta: 0.25, surfaceNormal: [1, 0, 0] },
+	)
+
+	assert.ok(Math.abs(Math.hypot(...first.velocity) - 11.2) < 1e-10)
+	assert.deepEqual(continued.velocity, first.velocity)
+	assert.deepEqual(falling.downhillAcceleration, [0, -SLIDE_PHYSICS.gravity, 0])
+	assert.equal(falling.velocity[1], -SLIDE_PHYSICS.gravity * 0.25)
+	assert.ok(falling.velocity[2] < continued.velocity[2])
+})
+
+test("contact regular slide follows an inclined plane and shares the speed cap", () => {
+	const inclination = (70 * Math.PI) / 180
+	const surfaceNormal: readonly [number, number, number] = [
+		Math.sin(inclination),
+		Math.cos(inclination),
+		0,
+	]
+	const inclined = stepContactSlidePhysics(
+		{ sliding: true, velocity: [0, 0, 0] },
+		{ delta: 0.25, surfaceNormal },
+	)
+	const capped = stepContactSlidePhysics(
+		{ sliding: true, velocity: [0, -1_000, 0] },
+		{ delta: 0, surfaceNormal: [1, 0, 0] },
+	)
+
+	assert.ok(inclined.velocity[0] > 0)
+	assert.ok(inclined.velocity[1] < 0)
+	assert.ok(
+		Math.abs(
+			inclined.velocity[0] * surfaceNormal[0] +
+				inclined.velocity[1] * surfaceNormal[1],
+		) < 1e-10,
+	)
+	assert.equal(Math.hypot(...capped.velocity), SLIDE_PHYSICS.maximumSpeed)
 })
 
 test("downhill sliding gains momentum and uphill sliding loses it", () => {

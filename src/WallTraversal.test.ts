@@ -211,7 +211,7 @@ describe("wall traversal", () => {
 				blocked: false,
 				contact: contact(),
 				crouching: true,
-				delta: 1 / 60,
+				delta: 0,
 				grounded: false,
 				jumpRequested: false,
 				velocity: [0, -1, 9],
@@ -220,10 +220,25 @@ describe("wall traversal", () => {
 			expect(crouchSlide.detachedByCrouch).toBe(false)
 			expect(crouchSlide.state.mode).toBe("crouch-slide")
 			expect(crouchSlide.state.requiresContactRelease).toBe(false)
-			expect(crouchSlide.velocity[1]).toBe(-1)
-			expect(crouchSlide.velocity[2]).toBeCloseTo(7.02)
+			expect(crouchSlide.resetJumpAvailability).toBe(false)
+			expect(Math.hypot(...crouchSlide.velocity)).toBeCloseTo(
+				Math.hypot(1, 9) + 1.2,
+			)
+			const continued = stepWallTraversal(crouchSlide.state, {
+				blocked: false,
+				contact: contact(),
+				crouching: true,
+				delta: 0,
+				grounded: false,
+				jumpRequested: false,
+				velocity: crouchSlide.velocity,
+				viewDirection: [0, 0, 1],
+			})
+			expect(continued.velocity).toEqual(crouchSlide.velocity)
+			expect(continued.resetJumpAvailability).toBe(false)
+			expect(jumpCountAfterWallContact(false, 2)).toBe(2)
 
-			const releasedCrouch = stepWallTraversal(crouchSlide.state, {
+			const releasedCrouch = stepWallTraversal(continued.state, {
 				blocked: false,
 				contact: contact(),
 				crouching: false,
@@ -258,6 +273,35 @@ describe("wall traversal", () => {
 			expect(jumpCountAfterWallContact(result.resetJumpAvailability, 2)).toBe(1)
 		},
 	)
+
+	test("sustained same-surface contact cannot repeatedly refill double jump", () => {
+		const acquired = stepWallTraversal(INITIAL_WALL_TRAVERSAL_STATE, {
+			blocked: false,
+			contact: contact(),
+			crouching: true,
+			delta: 1 / 60,
+			grounded: false,
+			jumpRequested: false,
+			velocity: [0, -2, 9],
+			viewDirection: [0, 0, 1],
+		})
+		const sustained = stepWallTraversal(acquired.state, {
+			blocked: false,
+			contact: contact(),
+			crouching: true,
+			delta: 1 / 60,
+			grounded: false,
+			jumpRequested: false,
+			velocity: acquired.velocity,
+			viewDirection: [0, 0, 1],
+		})
+
+		expect(acquired.resetJumpAvailability).toBe(true)
+		expect(sustained.resetJumpAvailability).toBe(false)
+		expect(jumpCountAfterWallContact(sustained.resetJumpAvailability, 2)).toBe(
+			2,
+		)
+	})
 
 	test("landing and lifecycle blockers reset traversal", () => {
 		const active = {

@@ -269,6 +269,45 @@ describe("arena world", () => {
 		).toBeNull()
 	})
 
+	test("rejects a mantle whose full capsule overlaps a crossing wall", () => {
+		const wall = arenaWalls(ARENA_SEED).find(
+			(candidate) => candidate.id === "wall-connector-45",
+		)!
+		const topY = wall.baseY + Math.cos(wall.leanRadians) * wall.height
+		const rootY = topY - 1
+		const bodyY = rootY + PILOT_STANDING_EYE_HEIGHT * 0.5
+		const center = wallCenterAtY(wall, bodyY)!
+		const [normalX, normalZ] = wallNormal(wall)
+		const [tangentX, tangentZ] = wallTangent(wall)
+		const along = wall.length * -0.16
+		const faceDistance = wall.thickness * 0.5 + PLAYER_COLLISION_RADIUS
+		const position: readonly [number, number, number] = [
+			center[0] + tangentX * along + normalX * faceDistance,
+			rootY + PILOT_STANDING_EYE_HEIGHT,
+			center[1] + tangentZ * along + normalZ * faceDistance,
+		]
+
+		expect(
+			queryArenaLedge(ARENA_SEED, {
+				contact: {
+					inclinationRadians: Math.PI / 2 - Math.abs(wall.leanRadians),
+					normal: [normalX, 0, normalZ],
+					point: [
+						position[0] - normalX * PLAYER_COLLISION_RADIUS,
+						bodyY,
+						position[2] - normalZ * PLAYER_COLLISION_RADIUS,
+					],
+					surfaceId: wall.id,
+					time: 1,
+				},
+				eyeHeight: PILOT_STANDING_EYE_HEIGHT,
+				maximumRise: MANTLE_MAXIMUM_RISE,
+				position,
+				velocity: [-normalX * 6, 0, -normalZ * 6],
+			}),
+		).toBeNull()
+	})
+
 	test("clamps the doubled shared playable boundary", () => {
 		const result = resolveArenaMotion(ARENA_SEED, [0, 0], [900, -900], 200)
 		expect(result.x).toBe(ARENA_PLAYABLE_HALF_EXTENT)

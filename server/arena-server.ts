@@ -373,6 +373,7 @@ realtime(
 		let authoritativeCoyoteRemaining: number | null = null
 		let authoritativeGrounded = true
 		let authoritativeSliding = false
+		let authoritativeSurfaceSliding = false
 		let lastMoveAt = performance.now()
 		const occupiedSlots = new Set(playerSpawnSlots.values())
 		const availableSlot = PLAYER_SPAWN_ORDER.find(
@@ -488,6 +489,7 @@ realtime(
 				authoritativeCoyoteRemaining = null
 				authoritativeGrounded = true
 				authoritativeSliding = false
+				authoritativeSurfaceSliding = false
 				lastMoveAt = moveAt
 			}
 			const delta = Math.min(Math.max((moveAt - lastMoveAt) / 1_000, 0), 0.1)
@@ -534,6 +536,7 @@ realtime(
 				previousGrounded: authoritativeGrounded,
 				previousMantle: authoritativeMantle,
 				previousSliding: authoritativeSliding,
+				previousSurfaceSliding: authoritativeSurfaceSliding,
 				previousWallTraversal: authoritativeWallTraversal,
 				reportedWallTraversal: payload.wallTraversal,
 				sliding: payload.sliding,
@@ -550,6 +553,7 @@ realtime(
 			authoritativeCoyoteRemaining = authoritativeMovement.coyoteRemaining
 			authoritativeGrounded = grounded
 			authoritativeSliding = authoritativeMovement.sliding
+			authoritativeSurfaceSliding = authoritativeMovement.surfaceSliding
 			const authoritativePosition = authoritativeMovement.mantlePosition ?? [
 				resolvedMotion.x,
 				payload.position[1],
@@ -562,6 +566,7 @@ realtime(
 				mantle: authoritativeMovement.mantle,
 				position: [...authoritativePosition],
 				sliding: authoritativeMovement.sliding,
+				velocity: [...authoritativeMovement.velocity],
 				wallTraversal: authoritativeMovement.wallTraversal,
 				equippedWeapon: armory.activeWeapon(socketId),
 				dead: false,

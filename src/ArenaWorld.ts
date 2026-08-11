@@ -44,6 +44,7 @@ export type ArenaSurfaceContact = Readonly<{
 	inclinationRadians: number
 	normal: readonly [number, number, number]
 	point: readonly [number, number, number]
+	surfaceNormal?: readonly [number, number, number]
 	surfaceId: string
 	time: number
 }>
@@ -555,6 +556,32 @@ function pillarCenterAtY(
 	return [pillar.x + axisX * localY, pillar.z + axisZ * localY]
 }
 
+function pillarSurfaceNormal(
+	pillar: ArenaPillar,
+	normalX: number,
+	normalZ: number,
+): readonly [number, number, number] {
+	const [axisX, axisY, axisZ] = pillarAxis(pillar)
+	const normalY = -(normalX * axisX + normalZ * axisZ) / axisY
+	const length = Math.hypot(normalX, normalY, normalZ)
+	return [normalX / length, normalY / length, normalZ / length]
+}
+
+function wallSurfaceNormal(
+	wall: ArenaWall,
+	normalX: number,
+	normalZ: number,
+): readonly [number, number, number] {
+	const [wallNormalX, wallNormalZ] = wallNormal(wall)
+	const face = normalX * wallNormalX + normalZ * wallNormalZ >= 0 ? 1 : -1
+	const horizontalScale = Math.cos(wall.leanRadians)
+	return [
+		normalX * horizontalScale,
+		-Math.sin(wall.leanRadians) * face,
+		normalZ * horizontalScale,
+	]
+}
+
 function wallLocalPoint(
 	wall: ArenaWall,
 	center: readonly [number, number],
@@ -583,7 +610,17 @@ export function pointInsideArenaObstacle(
 	point: readonly [number, number, number],
 	padding = 0,
 ): boolean {
+	return pointInsideArenaObstacleExcept(seed, point, padding, null)
+}
+
+function pointInsideArenaObstacleExcept(
+	seed: number,
+	point: readonly [number, number, number],
+	padding: number,
+	ignoredSurfaceId: string | null,
+): boolean {
 	for (const pillar of arenaPillars(seed)) {
+		if (pillar.id === ignoredSurfaceId) continue
 		const center = pillarCenterAtY(pillar, point[1])
 		if (center === null) continue
 		if (
@@ -593,6 +630,7 @@ export function pointInsideArenaObstacle(
 			return true
 	}
 	for (const wall of arenaWalls(seed)) {
+		if (wall.id === ignoredSurfaceId) continue
 		const center = wallCenterAtY(wall, point[1])
 		if (center === null) continue
 		const local = wallLocalPoint(wall, center, [point[0], point[2]])
@@ -600,6 +638,27 @@ export function pointInsideArenaObstacle(
 			return true
 	}
 	return false
+}
+
+function mantleCapsuleIsClear(
+	seed: number,
+	eyePosition: readonly [number, number, number],
+	eyeHeight: number,
+	ignoredSurfaceId: string,
+): boolean {
+	const rootY = eyePosition[1] - eyeHeight
+	for (const height of [0.08, eyeHeight * 0.5, eyeHeight]) {
+		if (
+			pointInsideArenaObstacleExcept(
+				seed,
+				[eyePosition[0], rootY + height, eyePosition[2]],
+				PLAYER_COLLISION_RADIUS + 0.02,
+				ignoredSurfaceId,
+			)
+		)
+			return false
+	}
+	return true
 }
 
 export type ArenaMotionResolution = Readonly<{
@@ -832,6 +891,7 @@ export function resolveArenaMotion(
 			inclinationRadians: Math.PI / 2 - pillar.leanRadians,
 			normal: [normalX, 0, normalZ],
 			point: [x - normalX * radius, y, z - normalZ * radius],
+			surfaceNormal: pillarSurfaceNormal(pillar, normalX, normalZ),
 			surfaceId: pillar.id,
 			time: closestTime,
 		}
@@ -848,6 +908,7 @@ export function resolveArenaMotion(
 			inclinationRadians: Math.PI / 2 - Math.abs(wall.leanRadians),
 			normal: [normalX, 0, normalZ],
 			point: [x - normalX * radius, y, z - normalZ * radius],
+			surfaceNormal: wallSurfaceNormal(wall, normalX, normalZ),
 			surfaceId: wall.id,
 			time: resolved.time,
 		}
@@ -978,9 +1039,22 @@ export function queryArenaLedge(
 		topY + options.eyeHeight,
 		targetZ,
 	]
-	const torsoY = topY + options.eyeHeight * 0.5
-	if (pointInsideArenaObstacle(seed, [targetX, torsoY, targetZ], 0.02))
+	if (!mantleCapsuleIsClear(seed, target, options.eyeHeight, contact.surfaceId))
 		return null
+	for (const progress of [0.25, 0.5, 0.75]) {
+		const pathPosition = options.position.map(
+			(value, index) => value + (target[index]! - value) * progress,
+		) as [number, number, number]
+		if (
+			!mantleCapsuleIsClear(
+				seed,
+				pathPosition,
+				options.eyeHeight,
+				contact.surfaceId,
+			)
+		)
+			return null
+	}
 	const support = arenaMovementGroundAt(seed, targetX, targetZ, topY + 0.001)
 	if (support.surfaceId !== contact.surfaceId) return null
 	return { rise, surfaceId: contact.surfaceId, target }
