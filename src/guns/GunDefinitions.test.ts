@@ -9,6 +9,8 @@ import {
 	isReloadSnapshot,
 } from "../arena-protocol.ts"
 import {
+	BUBBLE_GUN_MAGAZINE_SIZE,
+	BUBBLE_SPEED,
 	MINI_MISSILE_AMMO,
 	MINI_MISSILE_CLIENT_COOLDOWN_SECONDS,
 	MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS,
@@ -95,6 +97,17 @@ describe("gun definitions", () => {
 		expect(isGunId("railgun")).toBe(false)
 		expect(isGunId(null)).toBe(false)
 	})
+
+	test("documents the competitive Bubble Gun ammo, reload, and travel buff", () => {
+		const bubbleGun = gunDefinition("bubble-gun")
+		expect(BUBBLE_GUN_MAGAZINE_SIZE).toBe(8)
+		expect(bubbleGun.magazineSize).toBe(8)
+		expect(bubbleGun.reload).toMatchObject({
+			ammoRule: "refill-magazine",
+			durationSeconds: 2,
+		})
+		expect(BUBBLE_SPEED).toBe(6.5)
+	})
 })
 
 describe("equipment protocol", () => {
@@ -114,9 +127,13 @@ describe("equipment protocol", () => {
 		expect(isReloadSnapshot({ ...reload, clientAmmo: 4 })).toBe(false)
 	})
 
-	test("accepts strict sequenced inventory actions without client gun IDs", () => {
+	test("accepts strict sequenced inventory actions with server-checked pickup IDs", () => {
 		expect(
-			isInventoryActionIntent({ clientActionId: 1, type: "collect" }),
+			isInventoryActionIntent({
+				clientActionId: 1,
+				type: "collect",
+				weapon: "shotgun",
+			}),
 		).toBe(true)
 		expect(
 			isInventoryActionIntent({
@@ -128,7 +145,7 @@ describe("equipment protocol", () => {
 		expect(
 			isInventoryActionIntent({
 				clientActionId: 3,
-				type: "drop-mini-missile",
+				type: "drop-secondary",
 			}),
 		).toBe(true)
 		expect(isInventoryActionIntent({ clientActionId: 4, type: "reload" })).toBe(
@@ -137,15 +154,35 @@ describe("equipment protocol", () => {
 		expect(
 			isInventoryActionIntent({
 				clientActionId: 5,
+				type: "collect",
+				weapon: "bubble-gun",
+			}),
+		).toBe(true)
+		expect(
+			isInventoryActionIntent({
+				clientActionId: 6,
 				type: "switch",
 				weapon: "mini-missile",
 			}),
 		).toBe(false)
 		expect(
-			isNewInventoryActionIntent({ clientActionId: 5, type: "collect" }, 4),
+			isInventoryActionIntent({
+				clientActionId: 7,
+				type: "collect",
+				weapon: "arc-blaster",
+			}),
+		).toBe(false)
+		expect(
+			isNewInventoryActionIntent(
+				{ clientActionId: 5, type: "collect", weapon: "rail-gun" },
+				4,
+			),
 		).toBe(true)
 		expect(
-			isNewInventoryActionIntent({ clientActionId: 5, type: "collect" }, 5),
+			isNewInventoryActionIntent(
+				{ clientActionId: 5, type: "collect", weapon: "rail-gun" },
+				5,
+			),
 		).toBe(false)
 	})
 

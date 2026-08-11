@@ -24,6 +24,66 @@ export const DRONE_PAYLOAD_LIFETIME_SECONDS = 4
 export const PLAYER_PROJECTILE_DAMAGE = 20
 export const PLAYER_HEADSHOT_MULTIPLIER = 2
 
+// Additional weapon balance lives beside the existing combat constants. The
+// server owns every value; clients use these only for presentation/input.
+export const SHOTGUN_MAGAZINE_SIZE = 6
+export const SHOTGUN_CONE_HALF_ANGLE_RADIANS = (Math.PI * 8) / 180
+export const SHOTGUN_MAX_ACTIVE_PELLETS = 1_024
+export const SHOTGUN_PELLET_COUNT = 20
+export const SHOTGUN_PELLET_DAMAGE = 6
+export const SHOTGUN_PELLET_HANG_SECONDS = 10
+export const SHOTGUN_PELLET_MAX_DISTANCE = 20
+export const SHOTGUN_PELLET_SPEED = 150
+export const SHOTGUN_RELOAD_SHELL_SECONDS = 0.72
+export const SHOTGUN_SERVER_MINIMUM_INTERVAL_MS = 720
+// Eight shots (56 bubbles), a two-second refill, and 6.5 m/s travel let the
+// Bubble Gun establish moving cover without the original long downtime.
+export const BUBBLE_GUN_MAGAZINE_SIZE = 8
+export const BUBBLES_PER_SHOT = 7
+export const BUBBLE_DAMAGE = 5
+export const BUBBLE_HEALTH = 80
+export const BUBBLE_LIFETIME_SECONDS = 9
+export const BUBBLE_RADIUS = 0.72
+export const BUBBLE_SPEED = 6.5
+export const BUBBLE_SERVER_MINIMUM_INTERVAL_MS = 520
+export const RAIL_GUN_MAGAZINE_SIZE = 4
+export const RAIL_CHARGE_MAX_MS = 1_800
+export const RAIL_DAMAGE_MIN = 34
+export const RAIL_DAMAGE_MAX = 120
+export const RAIL_GRAVITY_MIN = 4
+export const RAIL_GRAVITY_MAX = 22
+export const RAIL_SPEED_MIN = 24
+export const RAIL_SPEED_MAX = 76
+export const RAIL_SERVER_MINIMUM_INTERVAL_MS = 1_050
+
+// Mid-arena armory pads are shared by the three standard weapon pickups. Their
+// initial pad indices are distinct and every return advances to the next pad
+// not reserved by another gun. Staggering and proportional return delays make
+// shotgun contests frequent, Bubble Gun contests medium, and Rail contests rare.
+export const ARENA_WEAPON_PICKUP_PADS: readonly (readonly [number, number])[] =
+	[
+		[-18, -7],
+		[-9, 16],
+		[8, -17],
+		[18, 7],
+		[0, 20],
+	]
+export const ARENA_WEAPON_PICKUP_RADIUS = 2.4
+export const ARENA_WEAPON_INITIAL_DELAY_MS = {
+	"bubble-gun": 4_000,
+	"rail-gun": 9_000,
+	shotgun: 0,
+} as const
+export const ARENA_WEAPON_RESPAWN_MS = {
+	"bubble-gun": 11_000,
+	"rail-gun": 16_000,
+	shotgun: 7_000,
+} as const
+
+export function railChargeFraction(durationMs: number): number {
+	return Math.max(0, Math.min(1, durationMs / RAIL_CHARGE_MAX_MS))
+}
+
 export const RECOIL_BASELINE_SPREAD_RADIANS = 0.0015
 export const RECOIL_PER_SHOT_INCREASE_RADIANS = 0.006
 export const RECOIL_MAX_SPREAD_RADIANS = 0.045

@@ -97,6 +97,24 @@ test("per-gun timing, eligibility, and cancellation never emit late refill", () 
 	})
 })
 
+test("Bubble Gun reload captures the competitive two-second refill", () => {
+	const bubble = startReload({ ammo: 1, gunId: "bubble-gun", slot: 1 }, 20)
+	assert.deepEqual(bubble, {
+		completesAt: 22,
+		gunId: "bubble-gun",
+		refillAt: 21.72,
+		refilled: false,
+		slot: 1,
+		startedAt: 20,
+	})
+	assert.equal(advanceReload(bubble, 21.719).refill, null)
+	assert.equal(advanceReload(bubble, 21.72).refill?.gunId, "bubble-gun")
+	assert.equal(
+		advanceReload({ ...bubble!, refilled: true }, 22).completed,
+		true,
+	)
+})
+
 test("slide dust emits on entry and a bounded cadence, then resets", () => {
 	let state = { active: false, elapsed: 0 }
 	let step = stepSlideDust(state, true, 0.01)

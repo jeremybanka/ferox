@@ -268,6 +268,52 @@ const miniMissile = defineSynthPatch({
 	pitchJitterCents: 22,
 })
 
+const shotgun = defineSynthPatch({
+	baseFrequencyHz: 68,
+	id: "shotgun-blast",
+	layers: [
+		{
+			distortion: 0.82,
+			durationSeconds: 0.34,
+			envelope: impactEnvelope,
+			gain: 0.72,
+			source: { kind: "noise", texture: "crunch" },
+		},
+	],
+	pitchJitterCents: 18,
+})
+
+const bubbleGun = defineSynthPatch({
+	baseFrequencyHz: 420,
+	id: "bubble-gun-bloom",
+	layers: [
+		{
+			durationSeconds: 0.38,
+			envelope: pluckEnvelope,
+			frequencyEndRatio: 1.8,
+			gain: 0.48,
+			source: { kind: "oscillator", waveform: "sine" },
+		},
+	],
+	pitchJitterCents: 45,
+})
+
+const railGun = defineSynthPatch({
+	baseFrequencyHz: 92,
+	id: "rail-gun-release",
+	layers: [
+		{
+			distortion: 0.48,
+			durationSeconds: 0.52,
+			envelope: impactEnvelope,
+			frequencyEndRatio: 4.2,
+			gain: 0.65,
+			source: { kind: "oscillator", waveform: "sawtooth" },
+		},
+	],
+	pitchJitterCents: 12,
+})
+
 const musicPad = defineSynthPatch({
 	baseFrequencyHz: 110,
 	id: "music-heat-haze",
@@ -1002,6 +1048,9 @@ export const DEFAULT_GAME_AUDIO = defineGameAudio({
 	},
 	weapons: {
 		"arc-blaster": arcBlaster,
+		"bubble-gun": bubbleGun,
 		"mini-missile": miniMissile,
+		"rail-gun": railGun,
+		shotgun,
 	},
 } as const satisfies GameAudioDefinition)
