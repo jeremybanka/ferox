@@ -79,13 +79,31 @@ export function movementSpeedLimit(options: {
 	grounded: boolean
 	sliding: boolean
 	sprinting: boolean
-}): number {
-	if (!options.grounded || options.sliding || options.sprinting) {
+}): number | null {
+	if (!options.grounded) return null
+	if (options.sliding || options.sprinting) {
 		return PLAYER_SPRINT_SPEED_LIMIT
 	}
 	return options.crouching
 		? PLAYER_CROUCH_BASE_SPEED_LIMIT
 		: PLAYER_RUN_SPEED_LIMIT
+}
+
+export function limitHorizontalSpeed(
+	velocity: PlanarVelocity,
+	options: {
+		crouching: boolean
+		grounded: boolean
+		sliding: boolean
+		sprinting: boolean
+	},
+): PlanarVelocity {
+	const cap = movementSpeedLimit(options)
+	if (cap === null) return velocity
+	const speed = Math.hypot(velocity.x, velocity.z)
+	if (speed <= cap) return velocity
+	const scale = cap / speed
+	return { x: velocity.x * scale, z: velocity.z * scale }
 }
 
 export function sampleTerrainGradient(

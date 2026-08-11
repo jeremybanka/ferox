@@ -9,6 +9,7 @@ import {
 } from "./game-constants.ts"
 import { stepJumpPhysics } from "./JumpPhysics.ts"
 import {
+	limitHorizontalSpeed,
 	movementSpeedLimit,
 	sampleTerrainGradient,
 	SLIDE_PHYSICS,
@@ -313,8 +314,40 @@ test("slide jump and airborne transitions retain planar momentum", () => {
 			sliding: false,
 			sprinting: false,
 		}),
-		PLAYER_SPRINT_SPEED_LIMIT,
+		null,
 	)
+})
+
+test("airborne horizontal speed accumulates beyond the old cap without truncation", () => {
+	const velocity = { x: PLAYER_SPRINT_SPEED_LIMIT + 6, z: 9 }
+	const limited = limitHorizontalSpeed(velocity, {
+		crouching: false,
+		grounded: false,
+		sliding: false,
+		sprinting: false,
+	})
+
+	assert.deepEqual(limited, velocity)
+	assert.ok(Math.hypot(limited.x, limited.z) > PLAYER_SPRINT_SPEED_LIMIT)
+})
+
+test("grounded run and sprint caps remain unchanged", () => {
+	const velocity = { x: PLAYER_SPRINT_SPEED_LIMIT + 6, z: 0 }
+	const run = limitHorizontalSpeed(velocity, {
+		crouching: false,
+		grounded: true,
+		sliding: false,
+		sprinting: false,
+	})
+	const sprint = limitHorizontalSpeed(velocity, {
+		crouching: false,
+		grounded: true,
+		sliding: false,
+		sprinting: true,
+	})
+
+	assert.equal(Math.hypot(run.x, run.z), PLAYER_RUN_SPEED_LIMIT)
+	assert.equal(Math.hypot(sprint.x, sprint.z), PLAYER_SPRINT_SPEED_LIMIT)
 })
 
 test("ledge departure retains planar slide velocity while gravity takes over", () => {

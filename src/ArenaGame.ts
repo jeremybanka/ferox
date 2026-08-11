@@ -41,6 +41,18 @@ import {
 	isVisorExpression,
 } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
+import {
+	ARENA_GRID_DIVISIONS,
+	ARENA_RENDER_SIZE,
+	ARENA_TERRAIN_SEGMENTS,
+	arenaPillars,
+	arenaWalls,
+	pillarAxis,
+	resolveArenaMotion,
+	wallCenterAtY,
+	wallNormal,
+	wallTangent,
+} from "./ArenaWorld.ts"
 import { GameAudio } from "./audio/GameAudio.ts"
 import type { GameAudioDefinition } from "./audio/GameAudioDefinitions.ts"
 import { DamageParticleBurst } from "./DamageParticles.ts"
@@ -76,6 +88,12 @@ import {
 	type HoldInputState,
 } from "./game-input.ts"
 import type { GameHudState } from "./game-state.ts"
+import {
+	INITIAL_MOVEMENT_CORE_STATE,
+	resetMovementCore,
+	stepMovementCore,
+	type MovementCoreState,
+} from "./MovementCore.ts"
 import {
 	DEFAULT_GUN_ID,
 	gunDefinition,
@@ -130,10 +148,17 @@ import {
 } from "./ReloadState.ts"
 import { stepSlideDust } from "./SlideDustState.ts"
 import {
-	movementSpeedLimit,
+	limitHorizontalSpeed,
 	sampleTerrainGradient,
 	stepSlidePhysics,
 } from "./SlidePhysics.ts"
+import {
+	horizontalViewDirectionFromYaw,
+	INITIAL_WALL_TRAVERSAL_STATE,
+	jumpCountAfterWallContact,
+	stepWallTraversal,
+	type WallTraversalState,
+} from "./WallTraversal.ts"
 import {
 	airborneMomentumLayer,
 	airborneVelocityLayer,
@@ -316,6 +341,7 @@ type RemotePilot = {
 	slideHeading: SlideHeading
 	sliding: boolean
 	sprinting: boolean
+	wallTraversal: PlayerSnapshot["wallTraversal"]
 	target: THREE.Vector3
 	velocity: THREE.Vector3
 	visorExpression: VisorExpression
@@ -326,7 +352,6 @@ type RemotePilot = {
 	yaw: number
 }
 
-const ARENA_SIZE = 118
 const WEAPONS_FREE_COOLDOWN_SECONDS = 2
 const REMOTE_MARKER_GEOMETRY = new THREE.OctahedronGeometry(0.2, 0)
 const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
@@ -337,7 +362,7 @@ const REMOTE_MARKER_MATERIAL = new THREE.MeshBasicMaterial({
 export class ArenaGame {
 	readonly #audio: GameAudio
 	readonly #canvas: HTMLCanvasElement
-	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 280)
+	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 620)
 	readonly #drones: DroneBotSystem
 	readonly #damageEffects = new BoundedDamageEffects<DamageParticleBurst>()
 	readonly #fistContactEffects =
@@ -366,6 +391,7 @@ export class ArenaGame {
 	readonly #missilePickup = new THREE.Group()
 	readonly #projectiles: Projectile[] = []
 	readonly #pendingShotIds = new Set<number>()
+	readonly #structureMeshes: THREE.Mesh[] = []
 	readonly #remotePlayers = new Map<string, RemotePilot>()
 	readonly #renderer: THREE.WebGLRenderer
 	readonly #scene = new THREE.Scene()
@@ -445,6 +471,10 @@ export class ArenaGame {
 	#wasSliding = false
 	#snapshotElapsed = 0
 	#sprinting = false
+	#movementCore: MovementCoreState = INITIAL_MOVEMENT_CORE_STATE
+	#movementToggleQueued = false
+	#gamepadConnected = false
+	#wallTraversal: WallTraversalState = INITIAL_WALL_TRAVERSAL_STATE
 	#standardLockReported = false
 	#standardLockSequence = 0
 	#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
@@ -505,6 +535,8 @@ export class ArenaGame {
 
 	dispose(): void {
 		this.#disposed = true
+		this.#movementCore = resetMovementCore()
+		this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
 		this.#disposeLocalDeathRagdoll()
 		this.#reload = cancelReload(this.#reload)
 		this.#audio.dispose()
@@ -544,6 +576,15 @@ export class ArenaGame {
 		this.#drones.dispose()
 		this.#damageEffects.clear()
 		this.#fistContactEffects.clear()
+		for (const structure of this.#structureMeshes) {
+			this.#scene.remove(structure)
+			structure.geometry.dispose()
+			const materials = Array.isArray(structure.material)
+				? structure.material
+				: [structure.material]
+			for (const material of materials) material.dispose()
+		}
+		this.#structureMeshes.length = 0
 		for (const flash of this.#muzzleFlashes) {
 			this.#scene.remove(flash.mesh)
 			flash.mesh.geometry.dispose()
@@ -575,6 +616,8 @@ export class ArenaGame {
 		if (this.#dead) return
 		this.#keys.add(event.code)
 		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
+		if ((event.code === "CapsLock" || event.code === "KeyV") && !event.repeat)
+			this.#movementToggleQueued = true
 		if (event.code === "KeyR" && !event.repeat) this.#requestReload()
 		if (isWeaponSwitchKeyboardInput(event.code, event.repeat))
 			this.#requestSwitch(1)
@@ -639,6 +682,8 @@ export class ArenaGame {
 
 	readonly #onDisconnect = (): void => {
 		this.#connected = false
+		this.#movementCore = resetMovementCore()
+		this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
 		this.#disposeLocalDeathRagdoll()
 		this.#pickupHoldState = IDLE_HOLD_INPUT_STATE
 		this.#pickupProgress = 0
@@ -710,6 +755,7 @@ export class ArenaGame {
 			sliding: false,
 			sprinting: false,
 			velocity: [0, 0, 0],
+			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 			visorExpression: this.#visorExpression,
 			visorStartedAt: this.#visorStartedAt,
 			weaponsFree: false,
@@ -773,6 +819,7 @@ export class ArenaGame {
 					slideHeading: initialSlideHeading(),
 					sliding: false,
 					sprinting: false,
+					wallTraversal: { mode: "none", normal: [0, 0, 0] },
 					target: new THREE.Vector3(),
 					velocity: new THREE.Vector3(),
 					visorExpression: "boot",
@@ -880,6 +927,7 @@ export class ArenaGame {
 				model.landingImpactVelocity = Math.max(0, -previousVerticalVelocity)
 			}
 			model.sprinting = snapshot.sprinting
+			model.wallTraversal = snapshot.wallTraversal
 			model.reload = model.dead ? null : snapshot.reload
 			model.sliding = snapshot.sliding === true && !model.dead
 			if (model.sliding && !wasSliding) {
@@ -1220,7 +1268,12 @@ export class ArenaGame {
 		sun.position.set(-34, 44, 18)
 		this.#scene.add(sun)
 
-		const geometry = new THREE.PlaneGeometry(ARENA_SIZE, ARENA_SIZE, 104, 104)
+		const geometry = new THREE.PlaneGeometry(
+			ARENA_RENDER_SIZE,
+			ARENA_RENDER_SIZE,
+			ARENA_TERRAIN_SEGMENTS,
+			ARENA_TERRAIN_SEGMENTS,
+		)
 		geometry.rotateX(-Math.PI / 2)
 		const positions = geometry.attributes.position
 		if (positions === undefined) throw new Error("Terrain has no positions.")
@@ -1253,7 +1306,12 @@ export class ArenaGame {
 		)
 		this.#scene.add(terrain)
 
-		const grid = new THREE.GridHelper(ARENA_SIZE, 36, "#79e7d4", "#4d6b6e")
+		const grid = new THREE.GridHelper(
+			ARENA_RENDER_SIZE,
+			ARENA_GRID_DIVISIONS,
+			"#79e7d4",
+			"#4d6b6e",
+		)
 		grid.position.y = -6
 		const gridMaterial = grid.material
 		if (!Array.isArray(gridMaterial)) {
@@ -1261,6 +1319,93 @@ export class ArenaGame {
 			gridMaterial.opacity = 0.16
 		}
 		this.#scene.add(grid)
+
+		for (const [index, pillar] of arenaPillars(this.#seed).entries()) {
+			const axis = new THREE.Vector3(...pillarAxis(pillar))
+			const pillarMesh = new THREE.Mesh(
+				new THREE.CylinderGeometry(
+					pillar.radius * 0.92,
+					pillar.radius,
+					pillar.height,
+					16,
+					4,
+				),
+				new THREE.MeshStandardMaterial({
+					color: index % 2 === 0 ? "#4a6470" : "#5d526a",
+					emissive: index % 2 === 0 ? "#12343d" : "#321d3d",
+					emissiveIntensity: 0.45,
+					metalness: 0.25,
+					roughness: 0.8,
+				}),
+			)
+			pillarMesh.name = pillar.id
+			pillarMesh.position.set(pillar.x, pillar.baseY, pillar.z)
+			pillarMesh.position.addScaledVector(axis, pillar.height * 0.5)
+			pillarMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis)
+			pillarMesh.castShadow = true
+			pillarMesh.receiveShadow = true
+			this.#structureMeshes.push(pillarMesh)
+			this.#scene.add(pillarMesh)
+		}
+
+		const walls = arenaWalls(this.#seed)
+		const wallGeometry = new THREE.BoxGeometry(1, 1, 1)
+		const wallMaterial = new THREE.MeshStandardMaterial({
+			color: "#ffffff",
+			emissive: "#172936",
+			emissiveIntensity: 0.34,
+			metalness: 0.34,
+			roughness: 0.76,
+		})
+		const wallMesh = new THREE.InstancedMesh(
+			wallGeometry,
+			wallMaterial,
+			walls.length,
+		)
+		wallMesh.name = "arena wall-running superstructure"
+		wallMesh.castShadow = true
+		wallMesh.receiveShadow = true
+		const basis = new THREE.Matrix4()
+		const instance = new THREE.Matrix4()
+		const position = new THREE.Vector3()
+		const quaternion = new THREE.Quaternion()
+		const scale = new THREE.Vector3()
+		const tangent = new THREE.Vector3()
+		const up = new THREE.Vector3()
+		const depth = new THREE.Vector3()
+		const wallColors = {
+			channel: new THREE.Color("#476f7c"),
+			connector: new THREE.Color("#8a7652"),
+			outer: new THREE.Color("#405a76"),
+			staggered: new THREE.Color("#76536f"),
+		} as const
+		for (const [index, wall] of walls.entries()) {
+			const [tangentX, tangentZ] = wallTangent(wall)
+			const [normalX, normalZ] = wallNormal(wall)
+			const centerY =
+				wall.baseY + Math.cos(wall.leanRadians) * wall.height * 0.5
+			const center = wallCenterAtY(wall, centerY)
+			if (center === null) continue
+			tangent.set(tangentX, 0, tangentZ)
+			up.set(
+				normalX * Math.sin(wall.leanRadians),
+				Math.cos(wall.leanRadians),
+				normalZ * Math.sin(wall.leanRadians),
+			)
+			depth.crossVectors(tangent, up).normalize()
+			basis.makeBasis(tangent, up, depth)
+			quaternion.setFromRotationMatrix(basis)
+			position.set(center[0], centerY, center[1])
+			scale.set(wall.length, wall.height, wall.thickness)
+			instance.compose(position, quaternion, scale)
+			wallMesh.setMatrixAt(index, instance)
+			wallMesh.setColorAt(index, wallColors[wall.role])
+		}
+		wallMesh.instanceMatrix.needsUpdate = true
+		if (wallMesh.instanceColor !== null)
+			wallMesh.instanceColor.needsUpdate = true
+		this.#structureMeshes.push(wallMesh)
+		this.#scene.add(wallMesh)
 
 		const crystalGeometry = new THREE.OctahedronGeometry(0.62, 0)
 		const crystalMaterial = new THREE.MeshStandardMaterial({
@@ -1270,9 +1415,9 @@ export class ArenaGame {
 			metalness: 0.25,
 			roughness: 0.22,
 		})
-		for (let index = 0; index < 18; index += 1) {
+		for (let index = 0; index < 48; index += 1) {
 			const angle = arenaSeededValue(this.#seed, index, 2) * Math.PI * 2
-			const radius = 13 + arenaSeededValue(this.#seed, index, 7) * 38
+			const radius = 22 + arenaSeededValue(this.#seed, index, 7) * 128
 			const x = Math.cos(angle) * radius
 			const z = Math.sin(angle) * radius
 			const crystal = new THREE.Mesh(crystalGeometry, crystalMaterial)
@@ -1325,7 +1470,7 @@ export class ArenaGame {
 			new THREE.SphereGeometry(7, 24, 16),
 			new THREE.MeshBasicMaterial({ color: "#ffc99f" }),
 		)
-		moon.position.set(-76, 54, -118)
+		moon.position.set(-230, 118, -340)
 		this.#scene.add(moon)
 	}
 
@@ -1358,6 +1503,9 @@ export class ArenaGame {
 		this.#wasSliding = false
 		this.#slideDustElapsed = 0
 		this.#sprinting = false
+		this.#movementCore = resetMovementCore()
+		this.#movementToggleQueued = false
+		this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
 		this.#freeAim = false
 		this.#leftBumperHeld = false
 		this.#rightBumperHeld = false
@@ -1382,6 +1530,7 @@ export class ArenaGame {
 	}
 
 	#pollGamepad(): {
+		connected: boolean
 		crouch: boolean
 		fire: boolean
 		fistbump: boolean
@@ -1402,6 +1551,7 @@ export class ArenaGame {
 		if (gamepad === undefined || gamepad === null) {
 			this.#lookGamepad.set(0, 0)
 			return {
+				connected: false,
 				crouch: false,
 				fire: false,
 				fistbump: false,
@@ -1436,6 +1586,7 @@ export class ArenaGame {
 		const switchWeapon = isWeaponSwitchGamepadInput(gamepad.buttons)
 		const gestures = gamepadGestureInputs(gamepad.buttons)
 		return {
+			connected: true,
 			crouch,
 			fire,
 			fistbump: gestures.fistbump,
@@ -1468,6 +1619,11 @@ export class ArenaGame {
 			return
 		}
 		const gamepad = this.#pollGamepad()
+		if (!gamepad.connected && this.#gamepadConnected) {
+			this.#movementCore = resetMovementCore()
+			this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+		}
+		this.#gamepadConnected = gamepad.connected
 		const switchEdge = inputEdge(gamepad.switchWeapon, this.#switchHeld)
 		this.#switchHeld = switchEdge.held
 		if (switchEdge.triggered) this.#requestSwitch(1)
@@ -1555,6 +1711,7 @@ export class ArenaGame {
 			},
 			ground,
 		)
+		const wallCrouchDetach = crouch && this.#wallTraversal.mode !== "none"
 		const wasPhysicsSliding = this.#slide
 		const slideStep = stepSlidePhysics(
 			{
@@ -1563,7 +1720,7 @@ export class ArenaGame {
 				z: this.#player.velocity.z,
 			},
 			{
-				crouching: crouch,
+				crouching: crouch && !wallCrouchDetach,
 				delta,
 				grounded,
 				terrainGradient: sampleTerrainGradient(
@@ -1576,6 +1733,7 @@ export class ArenaGame {
 		this.#player.velocity.x = slideStep.x
 		this.#player.velocity.z = slideStep.z
 		this.#slide = slideStep.sliding
+		if (wallCrouchDetach) this.#slide = false
 		if (this.#slide && !wasPhysicsSliding) {
 			const localSlideVelocity = this.#player.velocity
 				.clone()
@@ -1590,15 +1748,26 @@ export class ArenaGame {
 			Number(this.#keys.has("KeyD")) - Number(this.#keys.has("KeyA"))
 		const keyboardY =
 			Number(this.#keys.has("KeyS")) - Number(this.#keys.has("KeyW"))
-		const input = new THREE.Vector2(
+		const physicalInput = new THREE.Vector2(
 			keyboardX + gamepad.x,
 			keyboardY + gamepad.y,
 		)
-		if (input.length() > 1) input.normalize()
+		if (physicalInput.length() > 1) physicalInput.normalize()
+		const movementStep = stepMovementCore(this.#movementCore, {
+			canSprint: grounded && !crouch && !this.#slide && !this.#dead,
+			leftStickPressed: gamepad.sprint || this.#movementToggleQueued,
+			stick: { x: physicalInput.x, y: physicalInput.y },
+		})
+		this.#movementToggleQueued = false
+		this.#movementCore = movementStep.state
+		const input = new THREE.Vector2(
+			movementStep.direction.x,
+			movementStep.direction.y,
+		)
 		const sprint =
 			this.#keys.has("ShiftLeft") ||
 			this.#keys.has("ShiftRight") ||
-			gamepad.sprint
+			this.#movementCore.sprintLatched
 		this.#sprinting =
 			grounded && !crouch && sprint && input.lengthSq() > 0 && !this.#slide
 		if (grounded && input.lengthSq() > 0 && !this.#slide) {
@@ -1629,36 +1798,52 @@ export class ArenaGame {
 		const damping = Math.exp(-friction * delta)
 		this.#player.velocity.x *= damping
 		this.#player.velocity.z *= damping
-		const cap = movementSpeedLimit({
-			crouching: crouch,
-			grounded,
-			sliding: this.#slide,
-			sprinting: this.#sprinting,
-		})
-		const horizontalSpeed = Math.hypot(
-			this.#player.velocity.x,
-			this.#player.velocity.z,
+		const limitedVelocity = limitHorizontalSpeed(
+			{ x: this.#player.velocity.x, z: this.#player.velocity.z },
+			{
+				crouching: crouch,
+				grounded,
+				sliding: this.#slide,
+				sprinting: this.#sprinting,
+			},
 		)
-		if (horizontalSpeed > cap) {
-			const scale = cap / horizontalSpeed
-			this.#player.velocity.x *= scale
-			this.#player.velocity.z *= scale
-		}
+		this.#player.velocity.x = limitedVelocity.x
+		this.#player.velocity.z = limitedVelocity.z
 
 		const gamepadJumpPressed = gamepad.jump
 		if (gamepadJumpPressed && !this.#shotHeld) this.#jumpQueued = true
 		this.#shotHeld = gamepadJumpPressed
-		const boundary = ARENA_SIZE * 0.47
-		const nextX = THREE.MathUtils.clamp(
-			this.#player.position.x + this.#player.velocity.x * delta,
-			-boundary,
-			boundary,
+		const motion = resolveArenaMotion(
+			this.#seed,
+			[this.#player.position.x, this.#player.position.z],
+			[
+				this.#player.position.x + this.#player.velocity.x * delta,
+				this.#player.position.z + this.#player.velocity.z * delta,
+			],
+			this.#player.position.y - eye * 0.5,
 		)
-		const nextZ = THREE.MathUtils.clamp(
-			this.#player.position.z + this.#player.velocity.z * delta,
-			-boundary,
-			boundary,
+		const nextX = motion.x
+		const nextZ = motion.z
+		const wallStep = stepWallTraversal(this.#wallTraversal, {
+			blocked: this.#slide || this.#dead,
+			contact: motion.contact,
+			crouching: crouch,
+			delta,
+			grounded,
+			jumpRequested: this.#jumpQueued,
+			velocity: this.#player.velocity.toArray(),
+			viewDirection: horizontalViewDirectionFromYaw(this.#player.yaw),
+		})
+		this.#wallTraversal = wallStep.state
+		this.#player.velocity.set(...wallStep.velocity)
+		this.#player.jumps = jumpCountAfterWallContact(
+			wallStep.resetJumpAvailability,
+			this.#player.jumps,
 		)
+		if (wallStep.detachedByCrouch) this.#slide = false
+		if (wallStep.consumedJump) {
+			this.#jumpQueued = false
+		}
 		const midpointGround =
 			this.#heightAt(
 				(this.#player.position.x + nextX) * 0.5,
@@ -2037,7 +2222,27 @@ export class ArenaGame {
 			if (grenade === undefined) continue
 			grenade.life -= delta
 			grenade.velocity.y -= GRENADE_GRAVITY * delta
+			const grenadeStartX = grenade.mesh.position.x
+			const grenadeStartZ = grenade.mesh.position.z
 			grenade.mesh.position.addScaledVector(grenade.velocity, delta)
+			const grenadeMotion = resolveArenaMotion(
+				this.#seed,
+				[grenadeStartX, grenadeStartZ],
+				[grenade.mesh.position.x, grenade.mesh.position.z],
+				grenade.mesh.position.y,
+				GRENADE_RADIUS,
+			)
+			grenade.mesh.position.x = grenadeMotion.x
+			grenade.mesh.position.z = grenadeMotion.z
+			if (grenadeMotion.contact !== null) {
+				const [normalX, , normalZ] = grenadeMotion.contact.normal
+				const inward =
+					grenade.velocity.x * normalX + grenade.velocity.z * normalZ
+				if (inward < 0) {
+					grenade.velocity.x -= (1 + GRENADE_RESTITUTION) * inward * normalX
+					grenade.velocity.z -= (1 + GRENADE_RESTITUTION) * inward * normalZ
+				}
+			}
 			grenade.mesh.rotation.x += delta * 7.5
 			grenade.mesh.rotation.z += delta * 4.5
 			const ground =
@@ -2310,6 +2515,13 @@ export class ArenaGame {
 			this.#slideHeading,
 		)
 		const slideTilt = slideTravelTilt(this.#slideHeading, 0.055)
+		const wallSide =
+			this.#wallTraversal.normal[0] * Math.cos(this.#player.yaw) -
+			this.#wallTraversal.normal[2] * Math.sin(this.#player.yaw)
+		const wallRoll =
+			this.#wallTraversal.mode === "none"
+				? 0
+				: wallSide * (this.#wallTraversal.mode === "run" ? 0.11 : 0.065)
 		if (localDeathRig === null) {
 			this.#camera.position.y -= deathProgress * 0.82
 			this.#camera.rotation.set(
@@ -2318,7 +2530,7 @@ export class ArenaGame {
 					slideSurface.inclinationRadians * 0.16 * this.#slidePoseWeight +
 					slideTilt.x * this.#slidePoseWeight,
 				this.#player.yaw,
-				deathProgress * 0.2 + slideTilt.z * this.#slidePoseWeight,
+				deathProgress * 0.2 + slideTilt.z * this.#slidePoseWeight + wallRoll,
 				"YXZ",
 			)
 		} else {
@@ -2870,6 +3082,14 @@ export class ArenaGame {
 				} else {
 					model.rig.root.rotation.y += model.yaw
 				}
+				if (model.wallTraversal.mode !== "none") {
+					const side =
+						model.wallTraversal.normal[0] * Math.cos(model.yaw) -
+						model.wallTraversal.normal[2] * Math.sin(model.yaw)
+					model.rig.root.rotateZ(
+						side * (model.wallTraversal.mode === "run" ? 0.16 : 0.1),
+					)
+				}
 				model.rig.root.position.copy(model.position).add(poseOffset)
 			}
 			if (model.dead) {
@@ -2930,6 +3150,10 @@ export class ArenaGame {
 			sliding: this.#slide,
 			sprinting: this.#sprinting,
 			velocity: this.#player.velocity.toArray(),
+			wallTraversal: {
+				mode: this.#wallTraversal.mode,
+				normal: [...this.#wallTraversal.normal],
+			},
 			visorExpression: this.#visorExpression,
 			visorStartedAt: this.#visorStartedAt,
 			weaponsFree: now < this.#weaponsFreeUntil,
@@ -2985,6 +3209,7 @@ export class ArenaGame {
 				Math.hypot(this.#player.velocity.x, this.#player.velocity.z) * 3.6,
 			),
 			targeting: this.#targetingState,
+			wallTraversal: this.#wallTraversal.mode,
 			weapon: this.#weaponKind,
 			weaponSlots: [
 				{ ...this.#equipmentSlots[0] },

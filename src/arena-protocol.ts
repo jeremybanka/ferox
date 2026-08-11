@@ -2,6 +2,27 @@ import { isGunId, type GunId } from "./guns/GunDefinitions.ts"
 
 export type Vector3Tuple = [number, number, number]
 
+export type WallTraversalSnapshot = Readonly<{
+	mode: "none" | "run" | "slide"
+	normal: Vector3Tuple
+}>
+
+export function isWallTraversalSnapshot(
+	value: unknown,
+): value is WallTraversalSnapshot {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 2 &&
+		(record["mode"] === "none" ||
+			record["mode"] === "run" ||
+			record["mode"] === "slide") &&
+		Array.isArray(record["normal"]) &&
+		record["normal"].length === 3 &&
+		record["normal"].every(Number.isFinite)
+	)
+}
+
 export const VISOR_EXPRESSIONS = [
 	"aim-left",
 	"aim-right",
@@ -53,6 +74,7 @@ export type PlayerSnapshot = {
 	sliding: boolean
 	sprinting: boolean
 	velocity: Vector3Tuple
+	wallTraversal: WallTraversalSnapshot
 	visorExpression: VisorExpression
 	visorStartedAt: number
 	weaponsFree: boolean
