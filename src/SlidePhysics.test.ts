@@ -7,10 +7,11 @@ import {
 	PLAYER_RUN_SPEED_LIMIT,
 	PLAYER_SPRINT_SPEED_LIMIT,
 } from "./game-constants.ts"
-import { stepJumpPhysics } from "./JumpPhysics.ts"
+import { JUMP_PHYSICS, stepJumpPhysics } from "./JumpPhysics.ts"
 import {
 	limitHorizontalSpeed,
 	movementSpeedLimit,
+	resolveSlideSurfaceContact,
 	sampleTerrainGradient,
 	SLIDE_PHYSICS,
 	slopeAngleFromTerrainGradient,
@@ -42,7 +43,12 @@ test("flat crouching requires planar momentum strictly above base move speed", (
 			},
 		)
 		assert.equal(step.sliding, outcome.expected)
-		assert.equal(step.x, outcome.speed)
+		assert.equal(
+			step.x,
+			outcome.expected
+				? outcome.speed + SLIDE_PHYSICS.entrySpeedBoost
+				: outcome.speed,
+		)
 	}
 })
 
@@ -202,8 +208,9 @@ test("ordinary shallow arena terrain keeps a resting crouch out of slide", () =>
 	assert.equal(step.z, 0)
 })
 
-test("run to crouch transfers above-base momentum directly into slide", () => {
+test("slide entry boosts speed once without rotating momentum", () => {
 	const velocity = { x: 9, z: -2.25 }
+	const originalSpeed = Math.hypot(velocity.x, velocity.z)
 	const step = stepSlidePhysics(
 		{ ...velocity, sliding: false },
 		{
@@ -213,10 +220,51 @@ test("run to crouch transfers above-base momentum directly into slide", () => {
 			terrainGradient: flatGradient,
 		},
 	)
+	const sustained = stepSlidePhysics(
+		{ sliding: true, x: step.x, z: step.z },
+		{
+			crouching: true,
+			delta: 0,
+			grounded: true,
+			terrainGradient: flatGradient,
+		},
+	)
 
 	assert.equal(step.movementState, "sliding")
-	assert.equal(step.x, velocity.x)
-	assert.equal(step.z, velocity.z)
+	assert.ok(
+		Math.abs(
+			Math.hypot(step.x, step.z) -
+				(originalSpeed + SLIDE_PHYSICS.entrySpeedBoost),
+		) < 1e-10,
+	)
+	assert.ok(Math.abs(step.x / step.z - velocity.x / velocity.z) < 1e-10)
+	assert.equal(sustained.x, step.x)
+	assert.equal(sustained.z, step.z)
+})
+
+test("leaving and re-entering a slide permits one new entry boost", () => {
+	const options = {
+		crouching: true,
+		delta: 0,
+		grounded: true,
+		terrainGradient: flatGradient,
+	}
+	const first = stepSlidePhysics(
+		{ sliding: false, x: PLAYER_RUN_SPEED_LIMIT + 1, z: 0 },
+		options,
+	)
+	const exited = stepSlidePhysics(
+		{ sliding: true, x: first.x, z: first.z },
+		{ ...options, crouching: false },
+	)
+	const second = stepSlidePhysics(
+		{ sliding: exited.sliding, x: exited.x, z: exited.z },
+		options,
+	)
+
+	assert.equal(exited.sliding, false)
+	assert.equal(second.sliding, true)
+	assert.equal(second.x, first.x + SLIDE_PHYSICS.entrySpeedBoost)
 })
 
 test("a crouched high-speed landing resolves slide without losing momentum", () => {
@@ -242,8 +290,7 @@ test("a crouched high-speed landing resolves slide without losing momentum", () 
 
 	assert.equal(landing.landed, true)
 	assert.equal(slide.movementState, "sliding")
-	assert.equal(slide.x, velocity.x)
-	assert.equal(slide.z, velocity.z)
+	assert.ok(Math.hypot(slide.x, slide.z) > Math.hypot(velocity.x, velocity.z))
 })
 
 test("airborne crouch waits for a qualifying landing before entering slide", () => {
@@ -348,6 +395,97 @@ test("grounded run and sprint caps remain unchanged", () => {
 
 	assert.equal(Math.hypot(run.x, run.z), PLAYER_RUN_SPEED_LIMIT)
 	assert.equal(Math.hypot(sprint.x, sprint.z), PLAYER_SPRINT_SPEED_LIMIT)
+})
+
+test("slide speed cap is 500 km/h in both slide limit paths", () => {
+	const cap = 500 / 3.6
+	assert.equal(SLIDE_PHYSICS.maximumSpeed, cap)
+	const atCap = stepSlidePhysics(
+		{ sliding: true, x: cap, z: 0 },
+		{
+			crouching: true,
+			delta: 0,
+			grounded: true,
+			terrainGradient: flatGradient,
+		},
+	)
+	const overCap = stepSlidePhysics(
+		{ sliding: true, x: cap * 2, z: cap },
+		{
+			crouching: true,
+			delta: 0,
+			grounded: true,
+			terrainGradient: flatGradient,
+		},
+	)
+	const loopLimited = limitHorizontalSpeed(
+		{ x: cap * 2, z: cap },
+		{ crouching: true, grounded: true, sliding: true, sprinting: false },
+	)
+
+	assert.equal(atCap.x, cap)
+	assert.equal(Math.hypot(overCap.x, overCap.z), cap)
+	assert.equal(Math.hypot(loopLimited.x, loopLimited.z), cap)
+	assert.ok(overCap.x > 0 && overCap.z > 0)
+})
+
+test("a rising slide detaches over a crest but follows supported terrain", () => {
+	const shared = {
+		delta: 0.04,
+		groundBefore: 2,
+		terrainGradient: { x: 0.5, z: 0 },
+		velocity: { x: 20, z: 0 },
+	}
+	const supported = resolveSlideSurfaceContact({
+		...shared,
+		groundMidpoint: 2.2,
+		groundAfter: 2.4,
+	})
+	const crest = resolveSlideSurfaceContact({
+		...shared,
+		groundMidpoint: 2.08,
+		groundAfter: 2.08,
+	})
+
+	assert.deepEqual(supported, { detached: false, verticalVelocity: 0 })
+	assert.equal(crest.detached, true)
+	assert.equal(crest.verticalVelocity, 10)
+})
+
+test("surface contact tolerance rejects noise and exact-boundary separation", () => {
+	const delta = 0.04
+	const verticalVelocity = 4
+	const ballisticMidpoint =
+		verticalVelocity * (delta / 2) -
+		0.5 * SLIDE_PHYSICS.gravity * (delta / 2) ** 2
+	const ballisticAfter =
+		verticalVelocity * delta - 0.5 * SLIDE_PHYSICS.gravity * delta ** 2
+	const contact = resolveSlideSurfaceContact({
+		delta,
+		groundAfter: ballisticAfter - SLIDE_PHYSICS.contactSeparationTolerance,
+		groundBefore: 0,
+		groundMidpoint:
+			ballisticMidpoint - SLIDE_PHYSICS.contactSeparationTolerance,
+		terrainGradient: { x: 0.2, z: 0 },
+		velocity: { x: 20, z: 0 },
+	})
+
+	assert.equal(contact.detached, false)
+})
+
+test("crest detachment stays deterministic across representative frame deltas", () => {
+	for (const delta of [1 / 60, 1 / 30, JUMP_PHYSICS.maximumStepSeconds]) {
+		const contact = resolveSlideSurfaceContact({
+			delta,
+			groundAfter: 0,
+			groundBefore: 0,
+			groundMidpoint: 0,
+			terrainGradient: { x: 0.5, z: 0 },
+			velocity: { x: 40, z: 0 },
+		})
+		assert.equal(contact.detached, true, `delta ${delta}`)
+		assert.equal(contact.verticalVelocity, 20)
+	}
 })
 
 test("ledge departure retains planar slide velocity while gravity takes over", () => {

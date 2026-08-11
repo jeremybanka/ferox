@@ -5,13 +5,16 @@ import {
 } from "./game-constants.ts"
 
 export const SLIDE_PHYSICS = {
+	contactSeparationTolerance: 0.035,
+	entrySpeedBoost: 1.2,
 	entryPlanarSpeed: PLAYER_RUN_SPEED_LIMIT,
 	entrySlopeDegrees: 30,
 	entrySlopeNormalUpDot: Math.cos(Math.PI / 6),
 	entrySlopeRadians: Math.PI / 6,
 	flatFriction: 1.05,
 	gravity: 23,
-	maximumSpeed: PLAYER_SPRINT_SPEED_LIMIT,
+	maximumSpeed: 500 / 3.6,
+	minimumTakeoffVerticalSpeed: 0.5,
 	minimumDynamicSlopeGrade: 0.015,
 	exitSpeed: PLAYER_CROUCH_BASE_SPEED_LIMIT * 0.5,
 	terrainSampleDistance: 0.4,
@@ -38,6 +41,11 @@ export type SlidePhysicsStep = SlidePhysicsState & {
 	movementState: MovementState
 	slopeAngleRadians: number
 	slopeGrade: number
+}
+
+export type SlideSurfaceContact = {
+	detached: boolean
+	verticalVelocity: number
 }
 
 export function resolveMovementState(options: {
@@ -81,12 +89,52 @@ export function movementSpeedLimit(options: {
 	sprinting: boolean
 }): number | null {
 	if (!options.grounded) return null
-	if (options.sliding || options.sprinting) {
-		return PLAYER_SPRINT_SPEED_LIMIT
-	}
+	if (options.sliding) return SLIDE_PHYSICS.maximumSpeed
+	if (options.sprinting) return PLAYER_SPRINT_SPEED_LIMIT
 	return options.crouching
 		? PLAYER_CROUCH_BASE_SPEED_LIMIT
 		: PLAYER_RUN_SPEED_LIMIT
+}
+
+/**
+ * Projects a grounded slide's planar velocity onto the local terrain tangent
+ * and compares that ballistic trajectory with the terrain sampled ahead.
+ */
+export function resolveSlideSurfaceContact(options: {
+	delta: number
+	groundAfter: number
+	groundBefore: number
+	groundMidpoint: number
+	terrainGradient: TerrainGradient
+	velocity: PlanarVelocity
+}): SlideSurfaceContact {
+	const delta = Math.max(0, options.delta)
+	const verticalVelocity =
+		options.terrainGradient.x * options.velocity.x +
+		options.terrainGradient.z * options.velocity.z
+	if (
+		delta === 0 ||
+		verticalVelocity < SLIDE_PHYSICS.minimumTakeoffVerticalSpeed
+	) {
+		return { detached: false, verticalVelocity: 0 }
+	}
+
+	const midpointDelta = delta * 0.5
+	const ballisticHeightAt = (time: number): number =>
+		options.groundBefore +
+		verticalVelocity * time -
+		0.5 * SLIDE_PHYSICS.gravity * time * time
+	const midpointSeparation =
+		ballisticHeightAt(midpointDelta) - options.groundMidpoint
+	const finalSeparation = ballisticHeightAt(delta) - options.groundAfter
+	const detached =
+		midpointSeparation > SLIDE_PHYSICS.contactSeparationTolerance &&
+		finalSeparation > SLIDE_PHYSICS.contactSeparationTolerance
+
+	return {
+		detached,
+		verticalVelocity: detached ? verticalVelocity : 0,
+	}
 }
 
 export function limitHorizontalSpeed(
@@ -160,6 +208,14 @@ export function stepSlidePhysics(
 			z: state.z,
 		}
 	}
+	const entrySpeed = state.sliding
+		? speed
+		: speed + SLIDE_PHYSICS.entrySpeedBoost
+	const entryScale = speed > 0 ? entrySpeed / speed : 1
+	const entryVelocity = {
+		x: state.x * entryScale,
+		z: state.z * entryScale,
+	}
 
 	if (!slopeAffectsMotion) {
 		const damping = Math.exp(-SLIDE_PHYSICS.flatFriction * delta)
@@ -169,8 +225,8 @@ export function stepSlidePhysics(
 			slopeAngleRadians,
 			slopeGrade,
 			sliding: true,
-			x: state.x * damping,
-			z: state.z * damping,
+			x: entryVelocity.x * damping,
+			z: entryVelocity.z * damping,
 		})
 	}
 
@@ -185,8 +241,8 @@ export function stepSlidePhysics(
 	const downhillLength = Math.hypot(downhillX, downhillZ)
 	const directionX = downhillX / downhillLength
 	const directionZ = downhillZ / downhillLength
-	const velocityX = state.x + downhillAcceleration.x * delta
-	const velocityZ = state.z + downhillAcceleration.z * delta
+	const velocityX = entryVelocity.x + downhillAcceleration.x * delta
+	const velocityZ = entryVelocity.z + downhillAcceleration.z * delta
 	const downhillSpeed = velocityX * directionX + velocityZ * directionZ
 	const crossSlopeX = velocityX - directionX * downhillSpeed
 	const crossSlopeZ = velocityZ - directionZ * downhillSpeed

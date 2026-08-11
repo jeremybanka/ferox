@@ -68,6 +68,7 @@ export function stepJumpPhysics(
 		groundBefore: number
 		groundMidpoint?: number
 		jumpRequested: boolean
+		momentumDepartureVelocityY?: number
 	},
 ): JumpPhysicsStep {
 	let jumpCount = state.jumpCount
@@ -97,16 +98,27 @@ export function stepJumpPhysics(
 	}
 	const groundMidpoint =
 		options.groundMidpoint ?? (options.groundBefore + options.groundAfter) * 0.5
+	const momentumDepartureVelocityY = Math.max(
+		0,
+		options.momentumDepartureVelocityY ?? 0,
+	)
+	const momentumDeparture =
+		groundedBefore && impulse === null && momentumDepartureVelocityY > 0
 	const followsGround =
 		groundedBefore &&
 		impulse === null &&
+		!momentumDeparture &&
 		canFollowGroundContour(
 			options.groundBefore,
 			groundMidpoint,
 			options.groundAfter,
 		)
-	const departedGround = groundedBefore && impulse === null && !followsGround
-	if (departedGround) jumpCount = 1
+	const departedGround =
+		groundedBefore && impulse === null && (momentumDeparture || !followsGround)
+	if (departedGround) {
+		jumpCount = 1
+		if (momentumDeparture) velocityY = momentumDepartureVelocityY
+	}
 
 	if (!groundedBefore || departedGround) {
 		velocityY -= JUMP_PHYSICS.gravity * options.delta
