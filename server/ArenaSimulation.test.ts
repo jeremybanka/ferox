@@ -14,6 +14,9 @@ import type {
 	ProjectileEndedSnapshot,
 } from "../src/arena-protocol.ts"
 import {
+	BULLY_ORBIT_EXIT_DISTANCE,
+	BULLY_ORBIT_MAX_DISTANCE,
+	BULLY_ORBIT_MIN_DISTANCE,
 	grenadeDamageAtDistance,
 	MINI_MISSILE_BLAST_RADIUS,
 	MINI_MISSILE_DAMAGE,
@@ -1062,6 +1065,243 @@ test("drones outside the soft leash return and corrupt positions hard-recover", 
 	)
 	for (const drone of snapshots)
 		expect(drone.position.every(Number.isFinite)).toBe(true)
+})
+
+test("an aggro Bully closes into a stable orbit while facing and firing at its target", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 1.72, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	let projectileCount = 0
+	const damage: number[] = []
+	const simulation = new ArenaSimulation({
+		emitDroneDestroyed: () => undefined,
+		emitGrenade: () => undefined,
+		emitGrenadeExploded: () => undefined,
+		emitMiniMissile: () => undefined,
+		emitMiniMissileEnded: () => undefined,
+		emitMiniMissileExploded: () => undefined,
+		emitProjectile: () => {
+			projectileCount += 1
+		},
+		emitProjectileEnded: () => undefined,
+		getPlayers: () => players,
+		initialDrones: [
+			{
+				attackCooldown: 0,
+				id: 101,
+				position: [0, 3.2, 24],
+				stationary: false,
+			},
+		],
+		onDirectHit: () => undefined,
+		onDroneKilled: () => undefined,
+		onLockChanged: () => undefined,
+		onPlayerDamage: (_playerId, amount) => damage.push(amount),
+		seed: 7_431_905,
+	})
+	const settledPositions: THREE.Vector3[] = []
+	for (let step = 0; step < 200; step += 1) {
+		simulation.update(0.05)
+		const drone = simulation
+			.snapshot()
+			.drones.find((candidate) => candidate.id === 101)
+		expect(drone).toBeDefined()
+		if (step >= 80 && drone !== undefined)
+			settledPositions.push(new THREE.Vector3(...drone.position))
+	}
+
+	const target = new THREE.Vector3(...players[0]!.position)
+	const radii = settledPositions.map((position) =>
+		Math.hypot(position.x - target.x, position.z - target.z),
+	)
+	for (const radius of radii) {
+		expect(radius).toBeGreaterThanOrEqual(BULLY_ORBIT_MIN_DISTANCE - 0.35)
+		expect(radius).toBeLessThanOrEqual(BULLY_ORBIT_MAX_DISTANCE + 0.35)
+	}
+	let angularDisplacement = 0
+	let previousAngle = Math.atan2(
+		settledPositions[0]!.z - target.z,
+		settledPositions[0]!.x - target.x,
+	)
+	for (const position of settledPositions.slice(1)) {
+		const angle = Math.atan2(position.z - target.z, position.x - target.x)
+		angularDisplacement += Math.atan2(
+			Math.sin(angle - previousAngle),
+			Math.cos(angle - previousAngle),
+		)
+		previousAngle = angle
+	}
+	expect(Math.abs(angularDisplacement)).toBeGreaterThan(2)
+	expect(projectileCount).toBeGreaterThanOrEqual(9)
+	expect(damage.length).toBeGreaterThan(0)
+
+	const drone = simulation
+		.snapshot()
+		.drones.find((candidate) => candidate.id === 101)!
+	const facing = target.clone().sub(new THREE.Vector3(...drone.position))
+	const targetYaw = Math.atan2(-facing.x, -facing.z)
+	const yawDifference = Math.atan2(
+		Math.sin(drone.yaw - targetYaw),
+		Math.cos(drone.yaw - targetYaw),
+	)
+	expect(Math.abs(yawDifference)).toBeLessThan(0.15)
+})
+
+test("Bullies choose deterministic opposite orbit sides and retain hysteresis", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 1.72, 0],
+			velocity: [0, 0, 0],
+		},
+	]
+	const simulation = makeDroneFeatureSimulation(players, [
+		{ id: 102, position: [-0.2, 3.2, 14], stationary: false },
+		{ id: 103, position: [0.2, 3.2, 14], stationary: false },
+	])
+	const initialAngles = new Map<number, number>()
+	const finalAngles = new Map<number, number>()
+	for (let step = 0; step < 60; step += 1) {
+		simulation.update(0.05)
+		for (const drone of simulation.snapshot().drones) {
+			if (drone.id !== 102 && drone.id !== 103) continue
+			const angle = Math.atan2(drone.position[2], drone.position[0])
+			if (!initialAngles.has(drone.id)) initialAngles.set(drone.id, angle)
+			finalAngles.set(drone.id, angle)
+		}
+	}
+	const displacement = (id: number): number => {
+		const initial = initialAngles.get(id)!
+		const final = finalAngles.get(id)!
+		return Math.atan2(Math.sin(final - initial), Math.cos(final - initial))
+	}
+	expect(displacement(102) * displacement(103)).toBeLessThan(0)
+	expect(Math.abs(displacement(102))).toBeGreaterThan(0.7)
+	expect(Math.abs(displacement(103))).toBeGreaterThan(0.7)
+
+	const beforeBoundaryMove = simulation
+		.snapshot()
+		.drones.find((drone) => drone.id === 102)!
+	players[0]!.position = [
+		beforeBoundaryMove.position[0],
+		1.72,
+		beforeBoundaryMove.position[2] - (BULLY_ORBIT_EXIT_DISTANCE - 0.25),
+	]
+	simulation.update(0.1)
+	const insideHysteresis = simulation
+		.snapshot()
+		.drones.find((drone) => drone.id === 102)!
+	const inward = new THREE.Vector3(...players[0]!.position)
+		.sub(new THREE.Vector3(...insideHysteresis.position))
+		.setY(0)
+		.normalize()
+	const velocity = new THREE.Vector3(...insideHysteresis.velocity).setY(0)
+	const tangentialSpeed = Math.abs(
+		velocity.dot(new THREE.Vector3(-inward.z, 0, inward.x)),
+	)
+	expect(tangentialSpeed).toBeGreaterThan(2)
+
+	players[0]!.position = [
+		insideHysteresis.position[0],
+		1.72,
+		insideHysteresis.position[2] - (BULLY_ORBIT_EXIT_DISTANCE + 3),
+	]
+	for (let step = 0; step < 12; step += 1) simulation.update(0.05)
+	const pursuing = simulation
+		.snapshot()
+		.drones.find((drone) => drone.id === 102)!
+	const pursuitDirection = new THREE.Vector3(...players[0]!.position)
+		.sub(new THREE.Vector3(...pursuing.position))
+		.setY(0)
+		.normalize()
+	const pursuitVelocity = new THREE.Vector3(...pursuing.velocity).setY(0)
+	expect(pursuitVelocity.dot(pursuitDirection)).toBeGreaterThan(5)
+
+	players[0]!.position = [pursuing.position[0], 1.72, pursuing.position[2] - 14]
+	for (let step = 0; step < 12; step += 1) simulation.update(0.05)
+	const reacquired = simulation
+		.snapshot()
+		.drones.find((drone) => drone.id === 102)!
+	const reacquiredDirection = new THREE.Vector3(...players[0]!.position)
+		.sub(new THREE.Vector3(...reacquired.position))
+		.setY(0)
+		.normalize()
+	const reacquiredVelocity = new THREE.Vector3(...reacquired.velocity).setY(0)
+	expect(
+		Math.abs(
+			reacquiredVelocity.dot(
+				new THREE.Vector3(-reacquiredDirection.z, 0, reacquiredDirection.x),
+			),
+		),
+	).toBeGreaterThan(3)
+})
+
+test("a deployed Bully keeps owner-safe targeting and leash recovery above orbit", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "owner",
+			position: [0, 1.72, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "enemy",
+			position: [46, 1.72, 0],
+			velocity: [9, 0, 0],
+		},
+	]
+	const simulation = makeDroneFeatureSimulation(players, [
+		{
+			id: 104,
+			ownerId: "owner",
+			position: [45, 3.2, 0],
+			stationary: false,
+		},
+	])
+	simulation.update(0.1)
+	const drone = simulation
+		.snapshot()
+		.drones.find((candidate) => candidate.id === 104)!
+	expect(drone.targetPlayerId).toBe("enemy")
+	expect(drone.velocity[0]).toBeLessThan(0)
+})
+
+test("an orbiting Bully slides along a channel wall without tunneling or pinning", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 1.72, -44],
+			velocity: [0, 0, 0],
+		},
+	]
+	const simulation = makeDroneFeatureSimulation(players, [
+		{ id: 105, position: [0, 3.2, -20], stationary: false },
+	])
+	const positions: Array<readonly [number, number, number]> = []
+	for (let step = 0; step < 240; step += 1) {
+		simulation.update(0.05)
+		const drone = simulation
+			.snapshot()
+			.drones.find((candidate) => candidate.id === 105)!
+		if (step >= 60) positions.push(drone.position)
+	}
+	const xPositions = positions.map((position) => position[0])
+	expect(Math.max(...xPositions) - Math.min(...xPositions)).toBeGreaterThan(18)
+	for (const position of positions) {
+		expect(position.every(Number.isFinite)).toBe(true)
+		expect(position[2]).toBeGreaterThan(-38.5)
+		expect(Math.hypot(position[0], position[2] + 44)).toBeLessThan(
+			BULLY_ORBIT_EXIT_DISTANCE + 0.5,
+		)
+	}
 })
 
 test("a wreck can be recovered once and deploys exactly once after ten meters", () => {
