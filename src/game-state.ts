@@ -21,6 +21,12 @@ export type GameHudState = {
 	incomingMissileLocks: number
 	incomingStandardLocks: number
 	jump: 0 | 1 | 2
+	droneGrenades: number
+	droneWreckNearby: boolean
+	grenadeKind: "drone" | "standard"
+	leadReticleVisible: boolean
+	leadReticleX: number
+	leadReticleY: number
 	lockCountdown: number
 	players: number
 	pickup: "available" | "carried" | "nearby" | "respawning"
@@ -56,6 +62,12 @@ export const gameHudStateAtom = atom<GameHudState>({
 		incomingMissileLocks: 0,
 		incomingStandardLocks: 0,
 		jump: 0,
+		droneGrenades: 0,
+		droneWreckNearby: false,
+		grenadeKind: "standard",
+		leadReticleVisible: false,
+		leadReticleX: 0.5,
+		leadReticleY: 0.5,
 		lockCountdown: 0,
 		players: 1,
 		pickup: "respawning",

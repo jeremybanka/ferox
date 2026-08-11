@@ -16,6 +16,7 @@ type RenderDrone = {
 	group: THREE.Group
 	id: number
 	mood: DroneMood
+	ownerId: string | null
 	personality: DronePersonality
 	rotors: THREE.Mesh[]
 	statusMaterial: THREE.MeshBasicMaterial
@@ -54,11 +55,15 @@ export class DroneBotSystem {
 		return this.#bots.size
 	}
 
-	getTargetCandidates(): { id: number; position: THREE.Vector3 }[] {
-		return [...this.#bots.values()].map((bot) => ({
-			id: bot.id,
-			position: bot.group.position.clone(),
-		}))
+	getTargetCandidates(
+		localPlayerId?: string,
+	): { id: number; position: THREE.Vector3 }[] {
+		return [...this.#bots.values()]
+			.filter((bot) => bot.ownerId !== localPlayerId)
+			.map((bot) => ({
+				id: bot.id,
+				position: bot.group.position.clone(),
+			}))
 	}
 
 	getTargetPosition(id: number): THREE.Vector3 | null {
@@ -132,13 +137,17 @@ export class DroneBotSystem {
 	#applyDroneSnapshot(snapshot: DroneSnapshot): void {
 		let bot = this.#bots.get(snapshot.id)
 		if (bot === undefined) {
-			const visual = this.#makeDrone(snapshot.personality)
+			const visual = this.#makeDrone(
+				snapshot.personality,
+				snapshot.ownerId !== null,
+			)
 			visual.group.position.set(...snapshot.position)
 			visual.group.rotation.y = snapshot.yaw
 			bot = {
 				...visual,
 				id: snapshot.id,
 				mood: snapshot.mood,
+				ownerId: snapshot.ownerId,
 				personality: snapshot.personality,
 				targetPosition: new THREE.Vector3(...snapshot.position),
 				targetYaw: snapshot.yaw,
@@ -156,13 +165,16 @@ export class DroneBotSystem {
 		}
 	}
 
-	#makeDrone(personality: DronePersonality): {
+	#makeDrone(
+		personality: DronePersonality,
+		friendly: boolean,
+	): {
 		group: THREE.Group
 		rotors: THREE.Mesh[]
 		statusMaterial: THREE.MeshBasicMaterial
 		visionMaterial: THREE.MeshBasicMaterial
 	} {
-		const color = PERSONALITY_COLORS[personality]
+		const color = friendly ? "#62ffb4" : PERSONALITY_COLORS[personality]
 		const group = new THREE.Group()
 		const bodyMaterial = new THREE.MeshStandardMaterial({
 			color,
