@@ -78,7 +78,6 @@ export function AppShell({ socket }: AppShellProps): VNode {
 	return (
 		<app-shell className={css.class} data-deployed={deployed}>
 			<canvas ref={canvasRef} tabIndex={-1} aria-label="FEROX 3D arena" />
-			<game-vignette aria-hidden="true" />
 			<game-hud aria-label="Arena heads-up display" data-dead={hud.dead}>
 				<game-header>
 					<brand-mark>
