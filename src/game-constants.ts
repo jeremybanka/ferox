@@ -21,6 +21,21 @@ export const DRONE_PAYLOAD_ACTIVATION_DISTANCE = 10
 export const DRONE_PAYLOAD_SPEED = 22
 export const DRONE_PAYLOAD_LIFETIME_SECONDS = 4
 
+// Bullies enter their orbit only after closing well inside weapon range, but
+// keep it until the target clears the effective range. This hysteresis avoids
+// chase/orbit chatter while bounded radial correction holds the combat band.
+export const BULLY_WEAPON_EFFECTIVE_RANGE = 18
+export const BULLY_ORBIT_MIN_DISTANCE = 11
+export const BULLY_ORBIT_MAX_DISTANCE = 16
+export const BULLY_ORBIT_ENTRY_DISTANCE = 16
+export const BULLY_ORBIT_EXIT_DISTANCE = BULLY_WEAPON_EFFECTIVE_RANGE
+export const BULLY_ORBIT_RADIAL_CORRECTION = 0.65
+// Reverse on meaningful contact, then keep the surface latched through tiny
+// solver gaps so sustained contact cannot flip the orbit every frame.
+export const BULLY_ORBIT_CONTACT_INWARD_SPEED = 0.01
+export const BULLY_ORBIT_CONTACT_RELEASE_SECONDS = 0.2
+export const BULLY_ORBIT_SIDE_SWITCH_COOLDOWN_SECONDS = 2
+
 export const PLAYER_PROJECTILE_DAMAGE = 20
 export const PLAYER_HEADSHOT_MULTIPLIER = 2
 

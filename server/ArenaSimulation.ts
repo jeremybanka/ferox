@@ -44,6 +44,15 @@ import {
 	BUBBLE_RADIUS,
 	BUBBLE_SPEED,
 	BUBBLES_PER_SHOT,
+	BULLY_ORBIT_CONTACT_INWARD_SPEED,
+	BULLY_ORBIT_CONTACT_RELEASE_SECONDS,
+	BULLY_ORBIT_ENTRY_DISTANCE,
+	BULLY_ORBIT_EXIT_DISTANCE,
+	BULLY_ORBIT_MAX_DISTANCE,
+	BULLY_ORBIT_MIN_DISTANCE,
+	BULLY_ORBIT_RADIAL_CORRECTION,
+	BULLY_ORBIT_SIDE_SWITCH_COOLDOWN_SECONDS,
+	BULLY_WEAPON_EFFECTIVE_RANGE,
 	DRONE_AUDITORY_RADIUS,
 	DEPLOYED_DRONE_LIFETIME_SECONDS,
 	DEPLOYED_DRONE_OWNER_CAP,
@@ -136,6 +145,12 @@ type DroneState = {
 	id: number
 	mood: DroneMood
 	ownerId: string | null
+	orbitContactClearSeconds: number
+	orbitContactSurfaceId: string | null
+	orbiting: boolean
+	orbitSide: -1 | 1
+	orbitSideSwitchCooldown: number
+	orbitTargetPlayerId: string | null
 	personality: DronePersonality
 	position: THREE.Vector3
 	stationary: boolean
@@ -356,6 +371,12 @@ export class ArenaSimulation {
 				id: seed.id,
 				mood: "idle",
 				ownerId: seed.ownerId ?? null,
+				orbitContactClearSeconds: 0,
+				orbitContactSurfaceId: null,
+				orbiting: false,
+				orbitSide: 1,
+				orbitSideSwitchCooldown: 0,
+				orbitTargetPlayerId: null,
 				personality,
 				position: new THREE.Vector3(...seed.position),
 				stationary: seed.stationary ?? true,
@@ -886,6 +907,12 @@ export class ArenaSimulation {
 			id: this.#nextDroneId,
 			mood: "idle",
 			ownerId: null,
+			orbitContactClearSeconds: 0,
+			orbitContactSurfaceId: null,
+			orbiting: false,
+			orbitSide: 1,
+			orbitSideSwitchCooldown: 0,
+			orbitTargetPlayerId: null,
 			personality,
 			position: new THREE.Vector3(x, arenaHeightAt(this.#seed, x, z) + 3.4, z),
 			stationary: false,
@@ -948,7 +975,10 @@ export class ArenaSimulation {
 					bestThreat = threat
 				}
 			}
+			const previousTargetPlayerId = drone.targetPlayerId
 			drone.targetPlayerId = bestId
+			if (bestId !== previousTargetPlayerId)
+				this.#beginBullyEngagement(drone, bestId)
 			this.#setMood(drone)
 		}
 	}
@@ -981,8 +1011,13 @@ export class ArenaSimulation {
 				: players.find((player) => player.id === drone.targetPlayerId)
 		if (target === undefined && drone.targetPlayerId !== null) {
 			drone.targetPlayerId = null
+			this.#beginBullyEngagement(drone, null)
 			drone.mood = "idle"
 		}
+		drone.orbitSideSwitchCooldown = Math.max(
+			0,
+			drone.orbitSideSwitchCooldown - delta,
+		)
 		const targetPosition =
 			target === undefined ? null : new THREE.Vector3(...target.position)
 		const toTarget =
@@ -1033,6 +1068,8 @@ export class ArenaSimulation {
 			anchorDistance > DRONE_SOFT_LEASH_DISTANCE || outsideArena
 
 		if (returnToAnchor) {
+			drone.orbiting = false
+			this.#clearBullyOrbitContact(drone)
 			speed = DRONE_RETURN_SPEED
 			desired.copy(anchor).sub(drone.position)
 		} else if (targetPosition === null) {
@@ -1070,8 +1107,9 @@ export class ArenaSimulation {
 			}
 		} else {
 			speed = 7
-			desired.copy(this.#rangeKeepingDirection(direction, distance, 10, 14))
-			if (distance < 18) this.#updateBullyWeapon(drone, targetPosition)
+			desired.copy(this.#bullySteeringDirection(drone, direction, distance))
+			if (distance < BULLY_WEAPON_EFFECTIVE_RANGE)
+				this.#updateBullyWeapon(drone, targetPosition)
 		}
 
 		desired.y = 0
@@ -1097,6 +1135,23 @@ export class ArenaSimulation {
 			)
 			drone.velocity.x -= normalX * inward
 			drone.velocity.z -= normalZ * inward
+			if (drone.orbiting) {
+				drone.orbitContactClearSeconds = 0
+				if (
+					inward < -BULLY_ORBIT_CONTACT_INWARD_SPEED &&
+					drone.orbitContactSurfaceId !== droneMotion.contact.surfaceId &&
+					drone.orbitSideSwitchCooldown <= 0
+				) {
+					drone.orbitSide = drone.orbitSide === 1 ? -1 : 1
+					drone.orbitContactSurfaceId = droneMotion.contact.surfaceId
+					drone.orbitSideSwitchCooldown =
+						BULLY_ORBIT_SIDE_SWITCH_COOLDOWN_SECONDS
+				}
+			} else this.#clearBullyOrbitContact(drone)
+		} else if (drone.orbitContactSurfaceId !== null) {
+			drone.orbitContactClearSeconds += delta
+			if (drone.orbitContactClearSeconds >= BULLY_ORBIT_CONTACT_RELEASE_SECONDS)
+				this.#clearBullyOrbitContact(drone)
 		}
 		const hoverHeight =
 			arenaHeightAt(this.#seed, drone.position.x, drone.position.z) +
@@ -1107,8 +1162,12 @@ export class ArenaSimulation {
 			hoverHeight,
 			Math.min(1, delta * 4),
 		)
-		if (desired.lengthSq() > 0.01) {
-			const targetYaw = Math.atan2(-desired.x, -desired.z)
+		const facingDirection =
+			targetPosition !== null && drone.personality === "bully"
+				? direction
+				: desired
+		if (facingDirection.lengthSq() > 0.01) {
+			const targetYaw = Math.atan2(-facingDirection.x, -facingDirection.z)
 			drone.yaw = this.#lerpAngle(
 				drone.yaw,
 				targetYaw,
@@ -1140,15 +1199,58 @@ export class ArenaSimulation {
 		return nearest === undefined ? null : new THREE.Vector3(...nearest.position)
 	}
 
-	#rangeKeepingDirection(
+	#beginBullyEngagement(
+		drone: DroneState,
+		targetPlayerId: string | null,
+	): void {
+		drone.orbiting = false
+		this.#clearBullyOrbitContact(drone)
+		drone.orbitSideSwitchCooldown = 0
+		drone.orbitTargetPlayerId = targetPlayerId
+		if (targetPlayerId === null) return
+		let targetHash = 0
+		for (const character of targetPlayerId)
+			targetHash = (targetHash * 31 + character.charCodeAt(0)) | 0
+		drone.orbitSide = ((targetHash ^ drone.id) & 1) === 0 ? -1 : 1
+	}
+
+	#clearBullyOrbitContact(drone: DroneState): void {
+		drone.orbitContactClearSeconds = 0
+		drone.orbitContactSurfaceId = null
+	}
+
+	#bullySteeringDirection(
+		drone: DroneState,
 		direction: THREE.Vector3,
 		distance: number,
-		minimum: number,
-		maximum: number,
 	): THREE.Vector3 {
-		if (distance < minimum) return direction.clone().multiplyScalar(-1)
-		if (distance > maximum) return direction.clone()
-		return new THREE.Vector3(-direction.z, 0, direction.x).multiplyScalar(0.45)
+		if (drone.orbitTargetPlayerId !== drone.targetPlayerId)
+			this.#beginBullyEngagement(drone, drone.targetPlayerId)
+		if (drone.orbiting) {
+			if (distance > BULLY_ORBIT_EXIT_DISTANCE) drone.orbiting = false
+		} else if (distance <= BULLY_ORBIT_ENTRY_DISTANCE) {
+			drone.orbiting = true
+		}
+		if (!drone.orbiting) return direction.clone()
+
+		const orbitMidpoint =
+			(BULLY_ORBIT_MIN_DISTANCE + BULLY_ORBIT_MAX_DISTANCE) * 0.5
+		const orbitHalfWidth =
+			(BULLY_ORBIT_MAX_DISTANCE - BULLY_ORBIT_MIN_DISTANCE) * 0.5
+		const radialCorrection = THREE.MathUtils.clamp(
+			(distance - orbitMidpoint) / orbitHalfWidth,
+			-1,
+			1,
+		)
+		const tangent = new THREE.Vector3(
+			-direction.z,
+			0,
+			direction.x,
+		).multiplyScalar(drone.orbitSide)
+		return tangent.addScaledVector(
+			direction,
+			radialCorrection * BULLY_ORBIT_RADIAL_CORRECTION,
+		)
 	}
 
 	#updateBullyWeapon(drone: DroneState, targetPosition: THREE.Vector3): void {
@@ -1616,6 +1718,12 @@ export class ArenaSimulation {
 				id: this.#nextDroneId++,
 				mood: "idle",
 				ownerId: payload.ownerId,
+				orbitContactClearSeconds: 0,
+				orbitContactSurfaceId: null,
+				orbiting: false,
+				orbitSide: 1,
+				orbitSideSwitchCooldown: 0,
+				orbitTargetPlayerId: null,
 				personality: payload.personality,
 				position,
 				stationary: false,
