@@ -67,6 +67,12 @@ import {
 import { GameAudio } from "./audio/GameAudio.ts"
 import type { GameAudioDefinition } from "./audio/GameAudioDefinitions.ts"
 import { BubbleVisualField } from "./BubbleVisualField.ts"
+import {
+	CAMERA_BASE_FOV_DEGREES,
+	stepCameraFov,
+	stepCameraRoll,
+	wallCameraRollTarget,
+} from "./CameraFeedback.ts"
 import { DamageParticleBurst } from "./DamageParticles.ts"
 import { FistContactParticleBurst } from "./FistContactParticles.ts"
 import { DroneBotSystem } from "./DroneBotSystem.ts"
@@ -418,7 +424,12 @@ export class ArenaGame {
 	>()
 	readonly #audio: GameAudio
 	readonly #canvas: HTMLCanvasElement
-	readonly #camera = new THREE.PerspectiveCamera(76, 1, 0.08, 620)
+	readonly #camera = new THREE.PerspectiveCamera(
+		CAMERA_BASE_FOV_DEGREES,
+		1,
+		0.08,
+		620,
+	)
 	readonly #drones: DroneBotSystem
 	readonly #droneSalvage: DroneSalvageSystem
 	readonly #damageEffects = new BoundedDamageEffects<DamageParticleBurst>()
@@ -509,6 +520,7 @@ export class ArenaGame {
 	#lockedTargetId: SmartTargetRef | null = null
 	#lockToggleQueued = false
 	#lookGamepad = new THREE.Vector2()
+	#cameraWallRoll = 0
 	#cameraAngularVelocity = new THREE.Vector2()
 	#mouseLookDelta = new THREE.Vector2()
 	#mouseLookDragging = false
@@ -870,6 +882,9 @@ export class ArenaGame {
 		this.#disposeLocalDeathRagdoll()
 		this.#cancelReloadPresentation()
 		this.#resetTransientState()
+		this.#cameraWallRoll = 0
+		this.#camera.fov = CAMERA_BASE_FOV_DEGREES
+		this.#camera.updateProjectionMatrix()
 		this.#camera.position.copy(this.#player.position)
 		this.#camera.rotation.set(this.#player.pitch, this.#player.yaw, 0, "YXZ")
 		this.#localDamageTracker = initialDamageFeedbackTracker(
@@ -3024,13 +3039,15 @@ export class ArenaGame {
 			this.#slideHeading,
 		)
 		const slideTilt = slideTravelTilt(this.#slideHeading, 0.055)
-		const wallSide =
-			this.#wallTraversal.normal[0] * Math.cos(this.#player.yaw) -
-			this.#wallTraversal.normal[2] * Math.sin(this.#player.yaw)
-		const wallRoll =
-			this.#wallTraversal.mode === "none"
-				? 0
-				: wallSide * (this.#wallTraversal.mode === "run" ? 0.11 : 0.065)
+		this.#cameraWallRoll = stepCameraRoll(
+			this.#cameraWallRoll,
+			wallCameraRollTarget(
+				this.#wallTraversal.mode,
+				this.#wallTraversal.normal,
+				this.#player.yaw,
+			),
+			delta,
+		)
 		if (localDeathRig === null) {
 			this.#camera.position.y -= deathProgress * 0.82
 			this.#camera.rotation.set(
@@ -3039,7 +3056,9 @@ export class ArenaGame {
 					slideSurface.inclinationRadians * 0.16 * this.#slidePoseWeight +
 					slideTilt.x * this.#slidePoseWeight,
 				this.#player.yaw,
-				deathProgress * 0.2 + slideTilt.z * this.#slidePoseWeight + wallRoll,
+				deathProgress * 0.2 +
+					slideTilt.z * this.#slidePoseWeight +
+					this.#cameraWallRoll,
 				"YXZ",
 			)
 		} else {
@@ -3097,12 +3116,7 @@ export class ArenaGame {
 				this.#slidePoseWeight * 0.09,
 			delta * 9,
 		)
-		const targetFov = speed > 10 ? 83 : 76
-		this.#camera.fov = THREE.MathUtils.lerp(
-			this.#camera.fov,
-			targetFov,
-			delta * 4,
-		)
+		this.#camera.fov = stepCameraFov(this.#camera.fov, speed, delta)
 		this.#camera.updateProjectionMatrix()
 		this.#camera.updateMatrixWorld()
 	}
