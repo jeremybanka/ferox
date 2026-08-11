@@ -173,6 +173,7 @@ describe("authoritative wall movement", () => {
 	test("accepts the inclusive coyote boundary but rejects the next packet", () => {
 		const atBoundary = reconcileAuthoritativeMovement({
 			contact: null,
+			coyoteDelta: 0.05,
 			crouching: false,
 			delta: 0.05,
 			grounded: false,
@@ -190,8 +191,9 @@ describe("authoritative wall movement", () => {
 		})
 		const expired = reconcileAuthoritativeMovement({
 			contact: null,
+			coyoteDelta: 0.050_001,
 			crouching: false,
-			delta: 0.050_001,
+			delta: 0.05,
 			grounded: false,
 			jump: 1,
 			jumpImpulse: 1,
@@ -211,7 +213,38 @@ describe("authoritative wall movement", () => {
 		expect(atBoundary.velocity[1]).toBe(10.6)
 		expect(expired.jump).toBe(1)
 		expect(expired.coyoteRemaining).toBeNull()
-		expect(expired.velocity[1]).toBeCloseTo(-1 - 23 * 0.050_001)
+		expect(expired.velocity[1]).toBeCloseTo(-1 - 23 * 0.05)
+	})
+
+	test("expires coyote across an arbitrarily long legal-sequence packet gap", () => {
+		const jumpSignal = consumeAuthoritativeJumpSignal(7, {
+			direction: null,
+			impulse: 1,
+			sequence: 8,
+		})
+		const state = reconcileAuthoritativeMovement({
+			contact: null,
+			coyoteDelta: 60,
+			crouching: false,
+			delta: 0.1,
+			grounded: false,
+			jump: 1,
+			jumpImpulse: jumpSignal.impulse,
+			previousCoyoteRemaining: 0.1,
+			previousGrounded: false,
+			previousJump: 1,
+			previousVelocity: [0, -1, 0],
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			sliding: false,
+			velocity: [0, 1_000, 0],
+			viewDirection: [0, 0, 1],
+		})
+
+		expect(jumpSignal).toEqual({ direction: null, impulse: 1, sequence: 8 })
+		expect(state.coyoteRemaining).toBeNull()
+		expect(state.jump).toBe(1)
+		expect(state.velocity[1]).toBeCloseTo(-1 - 23 * 0.1)
 	})
 
 	test("owns a validated mantle path and suppresses simultaneous wall state", () => {

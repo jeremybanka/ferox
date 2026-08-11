@@ -508,7 +508,8 @@ realtime(
 				authoritativeSurfaceSliding = false
 				lastMoveAt = moveAt
 			}
-			const delta = Math.min(Math.max((moveAt - lastMoveAt) / 1_000, 0), 0.1)
+			const timerDelta = Math.max((moveAt - lastMoveAt) / 1_000, 0)
+			const delta = Math.min(timerDelta, 0.1)
 			lastMoveAt = moveAt
 			const requestedPosition = limitAuthoritativeTraversalDestination(
 				current.position,
@@ -561,6 +562,7 @@ realtime(
 					})
 			const authoritativeMovement = reconcileAuthoritativeMovement({
 				contact: resolvedMotion.contact,
+				coyoteDelta: timerDelta,
 				crouching: payload.crouching,
 				delta,
 				grounded,

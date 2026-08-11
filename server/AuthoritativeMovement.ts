@@ -135,6 +135,7 @@ export function limitAuthoritativeDesiredVelocity(
 
 export type AuthoritativeMovementInput = Readonly<{
 	contact: ArenaSurfaceContact | null
+	coyoteDelta?: number
 	crouching: boolean
 	delta: number
 	grounded: boolean
@@ -325,7 +326,7 @@ export function reconcileAuthoritativeMovement(
 		coyoteRemaining = JUMP_PHYSICS.coyoteTimeSeconds
 		jump = 1
 	} else if (input.previousGrounded === false && coyoteRemaining !== null) {
-		coyoteRemaining -= Math.max(0, input.delta)
+		coyoteRemaining -= Math.max(0, input.coyoteDelta ?? input.delta)
 		if (coyoteRemaining < 0) coyoteRemaining = null
 	}
 	const impulse = input.jumpImpulse ?? null
