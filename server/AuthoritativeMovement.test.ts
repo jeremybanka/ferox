@@ -185,8 +185,9 @@ describe("authoritative wall movement", () => {
 			previousVelocity: [5, -1, 0],
 			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
 			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			resolvedPosition: [0.25, 5.4725, 0],
 			sliding: false,
-			velocity: [5, 8, 0],
+			velocity: [5, 9.45, 0],
 			viewDirection: [0, 0, 1],
 		})
 		const expired = reconcileAuthoritativeMovement({
@@ -210,7 +211,8 @@ describe("authoritative wall movement", () => {
 
 		expect(atBoundary.jump).toBe(1)
 		expect(atBoundary.coyoteRemaining).toBeNull()
-		expect(atBoundary.velocity[1]).toBe(10.6)
+		expect(atBoundary.resolvedPosition).toEqual([0.25, 5.4725, 0])
+		expect(atBoundary.velocity[1]).toBeCloseTo(9.45)
 		expect(expired.jump).toBe(1)
 		expect(expired.coyoteRemaining).toBeNull()
 		expect(expired.velocity[1]).toBeCloseTo(-1 - 23 * 0.05)
@@ -592,7 +594,7 @@ describe("authoritative movement packet envelopes", () => {
 		expect(first.jump).toBe(1)
 		expect(first.velocity[1]).toBe(10.6)
 		expect(second.jump).toBe(2)
-		expect(second.velocity[1]).toBe(9.4)
+		expect(second.velocity[1]).toBeCloseTo(8.25)
 		expect(second.velocity[2]).toBe(-3.2)
 	})
 
@@ -618,7 +620,7 @@ describe("authoritative movement packet envelopes", () => {
 
 		expect(state.velocity).toEqual([
 			4 + 3.2 * direction[0],
-			9.4,
+			8.25,
 			2 + 3.2 * direction[1],
 		])
 	})
@@ -627,34 +629,34 @@ describe("authoritative movement packet envelopes", () => {
 		{
 			clientVelocity: [3.2, 1_000, 0] as const,
 			direction: [1, 0] as const,
-			expectedVelocity: [3.2, 9.4, 0] as const,
+			expectedVelocity: [3.2, 8.25, 0] as const,
 			label: "cardinal",
 			previousVelocity: [0, -2, 0] as const,
-			resolvedPosition: [0, 5, 0] as const,
+			resolvedPosition: [0, 5.4125, 0] as const,
 		},
 		{
 			clientVelocity: [3.2 * Math.SQRT1_2, 1_000, 3.2 * Math.SQRT1_2] as const,
 			direction: [Math.SQRT1_2, Math.SQRT1_2] as const,
-			expectedVelocity: [3.2 * Math.SQRT1_2, 9.4, 3.2 * Math.SQRT1_2] as const,
+			expectedVelocity: [3.2 * Math.SQRT1_2, 8.25, 3.2 * Math.SQRT1_2] as const,
 			label: "diagonal",
 			previousVelocity: [0, -2, 0] as const,
-			resolvedPosition: [0, 5, 0] as const,
+			resolvedPosition: [0, 5.4125, 0] as const,
 		},
 		{
 			clientVelocity: [0.8, 1_000, 0] as const,
 			direction: [-1, 0] as const,
-			expectedVelocity: [0.8, 9.4, 0] as const,
+			expectedVelocity: [0.8, 8.25, 0] as const,
 			label: "opposite",
 			previousVelocity: [4, -2, 0] as const,
-			resolvedPosition: [0.2, 5, 0] as const,
+			resolvedPosition: [0.2, 5.4125, 0] as const,
 		},
 		{
 			clientVelocity: [2, 1_000, 1] as const,
 			direction: [0, 0] as const,
-			expectedVelocity: [2, 9.4, 1] as const,
+			expectedVelocity: [2, 8.25, 1] as const,
 			label: "zero",
 			previousVelocity: [2, -2, 1] as const,
-			resolvedPosition: [0.1, 5, 0.05] as const,
+			resolvedPosition: [0.1, 5.4125, 0.05] as const,
 		},
 	])(
 		"applies $label double-jump velocity after planar position integration",

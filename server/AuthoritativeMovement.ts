@@ -330,12 +330,18 @@ export function reconcileAuthoritativeMovement(
 		if (coyoteRemaining < 0) coyoteRemaining = null
 	}
 	const impulse = input.jumpImpulse ?? null
-	const acceptsFirstJump =
+	const acceptsSupportedFirstJump =
 		impulse === 1 &&
 		mode === "none" &&
-		((input.previousGrounded === true &&
-			(input.previousJump ?? input.jump) === 0) ||
-			(coyoteRemaining !== null && (input.previousJump ?? input.jump) === 1))
+		input.previousGrounded === true &&
+		(input.previousJump ?? input.jump) === 0
+	const acceptsCoyoteFirstJump =
+		impulse === 1 &&
+		mode === "none" &&
+		input.previousGrounded === false &&
+		coyoteRemaining !== null &&
+		(input.previousJump ?? input.jump) === 1
+	const acceptsFirstJump = acceptsSupportedFirstJump || acceptsCoyoteFirstJump
 	const acceptsDoubleJump =
 		impulse === 2 &&
 		mode === "none" &&
@@ -344,7 +350,12 @@ export function reconcileAuthoritativeMovement(
 	if (acceptsFirstJump) {
 		jump = 1
 		coyoteRemaining = null
-		velocity = [velocity[0], JUMP_PHYSICS.jumpVelocity, velocity[2]]
+		velocity = [
+			velocity[0],
+			JUMP_PHYSICS.jumpVelocity -
+				(acceptsCoyoteFirstJump ? JUMP_PHYSICS.gravity * input.delta : 0),
+			velocity[2],
+		]
 	} else if (acceptsDoubleJump) {
 		jump = 2
 		coyoteRemaining = null
@@ -355,7 +366,7 @@ export function reconcileAuthoritativeMovement(
 		)
 		velocity = [
 			directionalVelocity.x,
-			JUMP_PHYSICS.doubleJumpVelocity,
+			JUMP_PHYSICS.doubleJumpVelocity - JUMP_PHYSICS.gravity * input.delta,
 			directionalVelocity.z,
 		]
 	}
