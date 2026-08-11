@@ -30,7 +30,10 @@ export const BULLY_ORBIT_MAX_DISTANCE = 16
 export const BULLY_ORBIT_ENTRY_DISTANCE = 16
 export const BULLY_ORBIT_EXIT_DISTANCE = BULLY_WEAPON_EFFECTIVE_RANGE
 export const BULLY_ORBIT_RADIAL_CORRECTION = 0.65
-export const BULLY_ORBIT_OBSTRUCTION_SWITCH_SECONDS = 0.6
+// Reverse on meaningful contact, then keep the surface latched through tiny
+// solver gaps so sustained contact cannot flip the orbit every frame.
+export const BULLY_ORBIT_CONTACT_INWARD_SPEED = 0.01
+export const BULLY_ORBIT_CONTACT_RELEASE_SECONDS = 0.2
 export const BULLY_ORBIT_SIDE_SWITCH_COOLDOWN_SECONDS = 2
 
 export const PLAYER_PROJECTILE_DAMAGE = 20

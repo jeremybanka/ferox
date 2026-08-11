@@ -44,11 +44,12 @@ import {
 	BUBBLE_RADIUS,
 	BUBBLE_SPEED,
 	BUBBLES_PER_SHOT,
+	BULLY_ORBIT_CONTACT_INWARD_SPEED,
+	BULLY_ORBIT_CONTACT_RELEASE_SECONDS,
 	BULLY_ORBIT_ENTRY_DISTANCE,
 	BULLY_ORBIT_EXIT_DISTANCE,
 	BULLY_ORBIT_MAX_DISTANCE,
 	BULLY_ORBIT_MIN_DISTANCE,
-	BULLY_ORBIT_OBSTRUCTION_SWITCH_SECONDS,
 	BULLY_ORBIT_RADIAL_CORRECTION,
 	BULLY_ORBIT_SIDE_SWITCH_COOLDOWN_SECONDS,
 	BULLY_WEAPON_EFFECTIVE_RANGE,
@@ -144,7 +145,8 @@ type DroneState = {
 	id: number
 	mood: DroneMood
 	ownerId: string | null
-	orbitContactSeconds: number
+	orbitContactClearSeconds: number
+	orbitContactSurfaceId: string | null
 	orbiting: boolean
 	orbitSide: -1 | 1
 	orbitSideSwitchCooldown: number
@@ -369,7 +371,8 @@ export class ArenaSimulation {
 				id: seed.id,
 				mood: "idle",
 				ownerId: seed.ownerId ?? null,
-				orbitContactSeconds: 0,
+				orbitContactClearSeconds: 0,
+				orbitContactSurfaceId: null,
 				orbiting: false,
 				orbitSide: 1,
 				orbitSideSwitchCooldown: 0,
@@ -904,7 +907,8 @@ export class ArenaSimulation {
 			id: this.#nextDroneId,
 			mood: "idle",
 			ownerId: null,
-			orbitContactSeconds: 0,
+			orbitContactClearSeconds: 0,
+			orbitContactSurfaceId: null,
 			orbiting: false,
 			orbitSide: 1,
 			orbitSideSwitchCooldown: 0,
@@ -1065,7 +1069,7 @@ export class ArenaSimulation {
 
 		if (returnToAnchor) {
 			drone.orbiting = false
-			drone.orbitContactSeconds = 0
+			this.#clearBullyOrbitContact(drone)
 			speed = DRONE_RETURN_SPEED
 			desired.copy(anchor).sub(drone.position)
 		} else if (targetPosition === null) {
@@ -1132,22 +1136,22 @@ export class ArenaSimulation {
 			drone.velocity.x -= normalX * inward
 			drone.velocity.z -= normalZ * inward
 			if (drone.orbiting) {
-				drone.orbitContactSeconds += delta
+				drone.orbitContactClearSeconds = 0
 				if (
-					drone.orbitContactSeconds >= BULLY_ORBIT_OBSTRUCTION_SWITCH_SECONDS &&
+					inward < -BULLY_ORBIT_CONTACT_INWARD_SPEED &&
+					drone.orbitContactSurfaceId !== droneMotion.contact.surfaceId &&
 					drone.orbitSideSwitchCooldown <= 0
 				) {
 					drone.orbitSide = drone.orbitSide === 1 ? -1 : 1
-					drone.orbitContactSeconds = 0
+					drone.orbitContactSurfaceId = droneMotion.contact.surfaceId
 					drone.orbitSideSwitchCooldown =
 						BULLY_ORBIT_SIDE_SWITCH_COOLDOWN_SECONDS
 				}
-			}
-		} else {
-			drone.orbitContactSeconds = Math.max(
-				0,
-				drone.orbitContactSeconds - delta * 2,
-			)
+			} else this.#clearBullyOrbitContact(drone)
+		} else if (drone.orbitContactSurfaceId !== null) {
+			drone.orbitContactClearSeconds += delta
+			if (drone.orbitContactClearSeconds >= BULLY_ORBIT_CONTACT_RELEASE_SECONDS)
+				this.#clearBullyOrbitContact(drone)
 		}
 		const hoverHeight =
 			arenaHeightAt(this.#seed, drone.position.x, drone.position.z) +
@@ -1200,7 +1204,7 @@ export class ArenaSimulation {
 		targetPlayerId: string | null,
 	): void {
 		drone.orbiting = false
-		drone.orbitContactSeconds = 0
+		this.#clearBullyOrbitContact(drone)
 		drone.orbitSideSwitchCooldown = 0
 		drone.orbitTargetPlayerId = targetPlayerId
 		if (targetPlayerId === null) return
@@ -1208,6 +1212,11 @@ export class ArenaSimulation {
 		for (const character of targetPlayerId)
 			targetHash = (targetHash * 31 + character.charCodeAt(0)) | 0
 		drone.orbitSide = ((targetHash ^ drone.id) & 1) === 0 ? -1 : 1
+	}
+
+	#clearBullyOrbitContact(drone: DroneState): void {
+		drone.orbitContactClearSeconds = 0
+		drone.orbitContactSurfaceId = null
 	}
 
 	#bullySteeringDirection(
@@ -1709,7 +1718,8 @@ export class ArenaSimulation {
 				id: this.#nextDroneId++,
 				mood: "idle",
 				ownerId: payload.ownerId,
-				orbitContactSeconds: 0,
+				orbitContactClearSeconds: 0,
+				orbitContactSurfaceId: null,
 				orbiting: false,
 				orbitSide: 1,
 				orbitSideSwitchCooldown: 0,

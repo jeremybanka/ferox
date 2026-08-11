@@ -1273,7 +1273,7 @@ test("a deployed Bully keeps owner-safe targeting and leash recovery above orbit
 	expect(drone.velocity[0]).toBeLessThan(0)
 })
 
-test("an orbiting Bully slides along a channel wall without tunneling or pinning", () => {
+test("an orbiting Bully reverses once on wall contact and escapes without chatter", () => {
 	const players: SimulationPlayer[] = [
 		{
 			crouching: false,
@@ -1285,22 +1285,70 @@ test("an orbiting Bully slides along a channel wall without tunneling or pinning
 	const simulation = makeDroneFeatureSimulation(players, [
 		{ id: 105, position: [0, 3.2, -20], stationary: false },
 	])
-	const positions: Array<readonly [number, number, number]> = []
-	for (let step = 0; step < 240; step += 1) {
+	const samples: Array<{
+		position: readonly [number, number, number]
+		tangentialSpeed: number
+		time: number
+	}> = []
+	for (let step = 0; step < 160; step += 1) {
 		simulation.update(0.05)
 		const drone = simulation
 			.snapshot()
 			.drones.find((candidate) => candidate.id === 105)!
-		if (step >= 60) positions.push(drone.position)
+		const inward = new THREE.Vector3(
+			-drone.position[0],
+			0,
+			-44 - drone.position[2],
+		).normalize()
+		const tangent = new THREE.Vector3(-inward.z, 0, inward.x)
+		samples.push({
+			position: drone.position,
+			tangentialSpeed: tangent.dot(new THREE.Vector3(...drone.velocity)),
+			time: step * 0.05,
+		})
 	}
-	const xPositions = positions.map((position) => position[0])
-	expect(Math.max(...xPositions) - Math.min(...xPositions)).toBeGreaterThan(18)
-	for (const position of positions) {
+	const wallContact = samples.find((sample) => sample.position[2] < -36.75)
+	expect(wallContact).toBeDefined()
+	expect(
+		samples.some(
+			(sample) =>
+				sample.time < wallContact!.time && sample.tangentialSpeed < -5,
+		),
+	).toBe(true)
+	expect(
+		samples.some(
+			(sample) =>
+				sample.time >= wallContact!.time &&
+				sample.time <= wallContact!.time + 0.5 &&
+				sample.tangentialSpeed > 2,
+		),
+	).toBe(true)
+
+	let previousDirection = 0
+	let directionReversals = 0
+	for (const sample of samples) {
+		if (Math.abs(sample.tangentialSpeed) < 1.5) continue
+		const direction = Math.sign(sample.tangentialSpeed)
+		if (previousDirection !== 0 && direction !== previousDirection)
+			directionReversals += 1
+		previousDirection = direction
+	}
+	expect(directionReversals).toBe(1)
+	expect(
+		Math.max(
+			...samples
+				.filter((sample) => sample.time > wallContact!.time)
+				.map((sample) => sample.position[2]),
+		) - wallContact!.position[2],
+	).toBeGreaterThan(6)
+
+	for (const { position, time } of samples) {
 		expect(position.every(Number.isFinite)).toBe(true)
 		expect(position[2]).toBeGreaterThan(-38.5)
-		expect(Math.hypot(position[0], position[2] + 44)).toBeLessThan(
-			BULLY_ORBIT_EXIT_DISTANCE + 0.5,
-		)
+		if (time >= 3)
+			expect(Math.hypot(position[0], position[2] + 44)).toBeLessThan(
+				BULLY_ORBIT_EXIT_DISTANCE + 0.5,
+			)
 	}
 })
 
