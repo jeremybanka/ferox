@@ -1,4 +1,5 @@
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
+import { PARKOUR_TRANSITIONS, parkourWorldPoint } from "./ParkourArena.ts"
 
 export const ARENA_LINEAR_SCALE = 2
 export const ARENA_AREA_SCALE = ARENA_LINEAR_SCALE * ARENA_LINEAR_SCALE
@@ -19,7 +20,12 @@ export type ArenaPillar = Readonly<{
 	yaw: number
 }>
 
-export type ArenaWallRole = "channel" | "connector" | "outer" | "staggered"
+export type ArenaWallRole =
+	| "channel"
+	| "connector"
+	| "outer"
+	| "park"
+	| "staggered"
 
 export type ArenaWall = Readonly<{
 	baseY: number
@@ -342,6 +348,43 @@ const ELEVATED_LANES: readonly WallBlueprint[] = [
 	},
 ]
 
+function parkWallBlueprints(): readonly WallBlueprint[] {
+	return PARKOUR_TRANSITIONS.flatMap((transition) => {
+		if (transition.kind === "half-pipe") {
+			return [-1, 1].map((side) => {
+				const [x, z] = parkourWorldPoint(
+					transition,
+					0,
+					transition.width * 0.5 * side,
+				)
+				return {
+					elevation: 0,
+					height: 8,
+					length: transition.length + 3,
+					role: "park" as const,
+					thickness: 1.2,
+					x,
+					yaw: transition.yaw,
+					z,
+				}
+			})
+		}
+		const [x, z] = parkourWorldPoint(transition, transition.length * 0.5, 0)
+		return [
+			{
+				elevation: 0,
+				height: transition.kind === "quarter-pipe" ? 11 : 6.5,
+				length: transition.width + 3,
+				role: "park" as const,
+				thickness: transition.kind === "bank" ? 1.4 : 1.1,
+				x,
+				yaw: transition.yaw + Math.PI / 2,
+				z,
+			},
+		]
+	})
+}
+
 const pillarCache = new Map<number, readonly ArenaPillar[]>()
 const wallCache = new Map<number, readonly ArenaWall[]>()
 
@@ -429,21 +472,36 @@ export function arenaWalls(seed: number): readonly ArenaWall[] {
 		...OUTER_BLUEPRINTS,
 		...elevatedConnectorBlueprints(),
 		...ELEVATED_LANES,
+		...parkWallBlueprints(),
 	]
 	const walls = blueprints.map((blueprint, index) => {
-		const positionJitter = blueprint.role === "channel" ? 0.8 : 1.8
+		const isParkWall = blueprint.role === "park"
+		const positionJitter = isParkWall
+			? 0
+			: blueprint.role === "channel"
+				? 0.8
+				: 1.8
 		const x = blueprint.x + seededOffset(seed, index, 101) * positionJitter
 		const z = blueprint.z + seededOffset(seed, index, 113) * positionJitter
-		const yaw = blueprint.yaw + seededOffset(seed, index, 127) * (Math.PI / 42)
+		const yaw =
+			blueprint.yaw +
+			seededOffset(seed, index, 127) * (isParkWall ? 0 : Math.PI / 42)
 		const resolved = { ...blueprint, x, yaw, z }
 		const leanDirection = index % 2 === 0 ? 1 : -1
 		return {
 			baseY: wallBaseY(seed, resolved),
-			height: blueprint.height + seededOffset(seed, index, 139) * 3.5,
+			height:
+				blueprint.height +
+				seededOffset(seed, index, 139) * (isParkWall ? 0 : 3.5),
 			id: `wall-${blueprint.role}-${index}`,
 			leanRadians:
-				leanDirection * (0.025 + arenaSeededValue(seed, index, 151) * 0.105),
-			length: blueprint.length + seededOffset(seed, index, 163) * 5,
+				leanDirection *
+				(isParkWall
+					? 0.035
+					: 0.025 + arenaSeededValue(seed, index, 151) * 0.105),
+			length:
+				blueprint.length +
+				seededOffset(seed, index, 163) * (isParkWall ? 0 : 5),
 			role: blueprint.role,
 			thickness: blueprint.thickness,
 			x,

@@ -52,6 +52,7 @@ import {
 	isVisorExpression,
 } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
+import { parkourFeatureInfluenceAt } from "./ParkourArena.ts"
 import {
 	ARENA_GRID_DIVISIONS,
 	ARENA_RENDER_SIZE,
@@ -1607,6 +1608,8 @@ export class ArenaGame {
 		const colors = new Float32Array(positions.count * 3)
 		const low = new THREE.Color("#243936")
 		const high = new THREE.Color("#775c48")
+		const parkLow = new THREE.Color("#245d68")
+		const parkHigh = new THREE.Color("#b64f79")
 		for (let index = 0; index < positions.count; index += 1) {
 			const x = positions.getX(index)
 			const z = positions.getZ(index)
@@ -1615,6 +1618,10 @@ export class ArenaGame {
 			const color = low
 				.clone()
 				.lerp(high, THREE.MathUtils.clamp((y + 6) / 20, 0, 1))
+			const parkColor = parkLow
+				.clone()
+				.lerp(parkHigh, THREE.MathUtils.clamp((y + 2) / 24, 0, 1))
+			color.lerp(parkColor, parkourFeatureInfluenceAt(x, z) * 0.78)
 			const variation = arenaSeededValue(this.#seed, x, z) * 0.08
 			colors[index * 3] = color.r + variation
 			colors[index * 3 + 1] = color.g + variation
@@ -1704,6 +1711,7 @@ export class ArenaGame {
 			channel: new THREE.Color("#476f7c"),
 			connector: new THREE.Color("#8a7652"),
 			outer: new THREE.Color("#405a76"),
+			park: new THREE.Color("#d95f8d"),
 			staggered: new THREE.Color("#76536f"),
 		} as const
 		for (const [index, wall] of walls.entries()) {
