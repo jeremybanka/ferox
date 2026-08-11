@@ -5,7 +5,7 @@ import {
 	applyDirectionalDoubleJump,
 	cameraRelativeMovementDirection,
 	DIRECTIONAL_DOUBLE_JUMP,
-	steerDoubleJumpMomentum,
+	directionalDoubleJumpImpulse,
 } from "./DirectionalJumpPhysics.ts"
 
 const closeTo = (actual: number, expected: number): void =>
@@ -29,33 +29,47 @@ test("camera yaw rotates cardinal and normalized diagonal movement", () => {
 	closeTo(keyboardDiagonal?.z ?? 0, gamepadDiagonal?.z ?? 1)
 })
 
-test("double jump redirects within a named limit and preserves speed", () => {
+test("double jump adds a bounded impulse without normalizing momentum", () => {
 	const incoming = { x: 12, z: 0 }
-	const lateral = steerDoubleJumpMomentum(incoming, { x: 0, z: 1 })
-	const reversed = steerDoubleJumpMomentum(incoming, { x: -1, z: 0 })
+	const aligned = applyDirectionalDoubleJump(incoming, { x: 1, z: 0 }, 2)
+	const lateral = applyDirectionalDoubleJump(incoming, { x: 0, z: 1 }, 2)
+	const opposite = applyDirectionalDoubleJump(incoming, { x: -1, z: 0 }, 2)
+	const impulseSpeed = DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed
 
-	closeTo(Math.hypot(lateral.x, lateral.z), 12)
+	assert.deepEqual(aligned, { x: 12 + impulseSpeed, z: 0 })
+	assert.deepEqual(lateral, { x: 12, z: impulseSpeed })
+	assert.deepEqual(opposite, { x: 12 - impulseSpeed, z: 0 })
+	assert.ok(opposite.x > 0, "opposing input should airbrake, not reverse")
+})
+
+test("diagonal and arbitrary directions receive the same impulse magnitude", () => {
+	const diagonal = directionalDoubleJumpImpulse({ x: 1, z: -1 })
+	const arbitrary = directionalDoubleJumpImpulse({ x: -0.2, z: 0.9 })
+
 	closeTo(
-		Math.atan2(lateral.z, lateral.x),
-		DIRECTIONAL_DOUBLE_JUMP.maximumRedirectRadians,
+		Math.hypot(diagonal.x, diagonal.z),
+		DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed,
 	)
-	closeTo(Math.hypot(reversed.x, reversed.z), 12)
 	closeTo(
-		Math.atan2(reversed.z, reversed.x),
-		DIRECTIONAL_DOUBLE_JUMP.maximumRedirectRadians,
+		Math.hypot(arbitrary.x, arbitrary.z),
+		DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed,
 	)
 })
 
-test("aligned, no-input, and zero-momentum jumps do not invent speed", () => {
+test("no input preserves momentum while input can launch from rest", () => {
 	const incoming = { x: 5, z: -10 }
-	const aligned = steerDoubleJumpMomentum(incoming, incoming)
-	const noInput = steerDoubleJumpMomentum(incoming, null)
-	const stationary = steerDoubleJumpMomentum({ x: 0, z: 0 }, { x: 1, z: 0 })
+	const noInput = applyDirectionalDoubleJump(incoming, null, 2)
+	const stationary = applyDirectionalDoubleJump(
+		{ x: 0, z: 0 },
+		{ x: 1, z: 0 },
+		2,
+	)
 
-	closeTo(aligned.x, incoming.x)
-	closeTo(aligned.z, incoming.z)
 	assert.deepEqual(noInput, incoming)
-	assert.deepEqual(stationary, { x: 0, z: 0 })
+	assert.deepEqual(stationary, {
+		x: DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed,
+		z: 0,
+	})
 	assert.equal(cameraRelativeMovementDirection({ x: 0.1, y: 0 }, 0), null)
 })
 

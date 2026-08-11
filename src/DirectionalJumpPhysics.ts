@@ -3,8 +3,7 @@ import type { PlanarVelocity } from "./SlidePhysics.ts"
 import type { JumpCount } from "./JumpPhysics.ts"
 
 export const DIRECTIONAL_DOUBLE_JUMP = {
-	maximumRedirectRadians: (Math.PI * 5) / 12,
-	minimumMomentumSpeed: 0.001,
+	planarImpulseSpeed: 3.2,
 } as const
 
 export function cameraRelativeMovementDirection(
@@ -25,36 +24,18 @@ export function cameraRelativeMovementDirection(
 	}
 }
 
-/** Turns existing momentum toward input without introducing planar speed. */
-export function steerDoubleJumpMomentum(
-	velocity: PlanarVelocity,
+/** Resolves a bounded horizontal impulse without modifying existing momentum. */
+export function directionalDoubleJumpImpulse(
 	desiredDirection: PlanarVelocity | null,
 ): PlanarVelocity {
-	const speed = Math.hypot(velocity.x, velocity.z)
-	if (
-		speed < DIRECTIONAL_DOUBLE_JUMP.minimumMomentumSpeed ||
-		!desiredDirection
-	) {
-		return velocity
-	}
+	if (!desiredDirection) return { x: 0, z: 0 }
 	const desiredLength = Math.hypot(desiredDirection.x, desiredDirection.z)
-	if (desiredLength === 0) return velocity
-
-	const velocityAngle = Math.atan2(velocity.z, velocity.x)
-	const desiredAngle = Math.atan2(
-		desiredDirection.z / desiredLength,
-		desiredDirection.x / desiredLength,
-	)
-	const signedDifference = Math.atan2(
-		Math.sin(desiredAngle - velocityAngle),
-		Math.cos(desiredAngle - velocityAngle),
-	)
-	const redirect = Math.max(
-		-DIRECTIONAL_DOUBLE_JUMP.maximumRedirectRadians,
-		Math.min(DIRECTIONAL_DOUBLE_JUMP.maximumRedirectRadians, signedDifference),
-	)
-	const resultAngle = velocityAngle + redirect
-	return { x: Math.cos(resultAngle) * speed, z: Math.sin(resultAngle) * speed }
+	if (desiredLength === 0) return { x: 0, z: 0 }
+	const scale = DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed / desiredLength
+	return {
+		x: desiredDirection.x * scale,
+		z: desiredDirection.z * scale,
+	}
 }
 
 export function applyDirectionalDoubleJump(
@@ -62,7 +43,10 @@ export function applyDirectionalDoubleJump(
 	desiredDirection: PlanarVelocity | null,
 	impulse: JumpCount | null,
 ): PlanarVelocity {
-	return impulse === 2
-		? steerDoubleJumpMomentum(velocity, desiredDirection)
-		: velocity
+	if (impulse !== 2 || !desiredDirection) return velocity
+	const planarImpulse = directionalDoubleJumpImpulse(desiredDirection)
+	return {
+		x: velocity.x + planarImpulse.x,
+		z: velocity.z + planarImpulse.z,
+	}
 }
