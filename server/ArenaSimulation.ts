@@ -114,6 +114,7 @@ import {
 	validateMiniMissileDesignation,
 	type MiniMissileSeekerCandidate,
 } from "./MiniMissileSeeker.ts"
+import { findArenaDronePath, isArenaRouteClear } from "./DronePathfinder.ts"
 import { shotgunPelletDirections, shotgunVolleySeed } from "./ShotgunPellets.ts"
 
 export type SimulationPlayer = {
@@ -144,6 +145,7 @@ type DroneState = {
 	health: number
 	id: number
 	mood: DroneMood
+	navigation: DroneNavigationState
 	ownerId: string | null
 	orbitContactClearSeconds: number
 	orbitContactSurfaceId: string | null
@@ -160,6 +162,13 @@ type DroneState = {
 	wanderAngle: number
 	yaw: number
 	expiresAt: number
+}
+
+type DroneNavigationState = {
+	goal: THREE.Vector3
+	nextRepathAt: number
+	waypointIndex: number
+	waypoints: THREE.Vector3[]
 }
 
 type DroneWreckState = {
@@ -370,6 +379,7 @@ export class ArenaSimulation {
 				health: seed.health ?? BODY_HEALTH[personality],
 				id: seed.id,
 				mood: "idle",
+				navigation: this.#newDroneNavigation(),
 				ownerId: seed.ownerId ?? null,
 				orbitContactClearSeconds: 0,
 				orbitContactSurfaceId: null,
@@ -906,6 +916,7 @@ export class ArenaSimulation {
 			health: BODY_HEALTH[personality],
 			id: this.#nextDroneId,
 			mood: "idle",
+			navigation: this.#newDroneNavigation(),
 			ownerId: null,
 			orbitContactClearSeconds: 0,
 			orbitContactSurfaceId: null,
@@ -1047,9 +1058,14 @@ export class ArenaSimulation {
 		const outsideArena =
 			Math.max(Math.abs(drone.position.x), Math.abs(drone.position.z)) >
 			DRONE_ARENA_BOUND
+		const pursuingTarget =
+			drone.ownerId === null &&
+			targetPosition !== null &&
+			drone.mood !== "scared"
 		if (
-			anchorDistance > DRONE_HARD_RECOVERY_DISTANCE ||
-			(outsideArena && anchorDistance > DRONE_HARD_RECOVERY_DISTANCE * 0.75)
+			!pursuingTarget &&
+			(anchorDistance > DRONE_HARD_RECOVERY_DISTANCE ||
+				(outsideArena && anchorDistance > DRONE_HARD_RECOVERY_DISTANCE * 0.75))
 		) {
 			const resetDirection = horizontalPosition
 				.sub(horizontalAnchor)
@@ -1063,15 +1079,17 @@ export class ArenaSimulation {
 			drone.position.y =
 				arenaHeightAt(this.#seed, drone.position.x, drone.position.z) + 3.2
 			drone.velocity.set(0, 0, 0)
+			drone.navigation.nextRepathAt = 0
 		}
 		const returnToAnchor =
-			anchorDistance > DRONE_SOFT_LEASH_DISTANCE || outsideArena
+			!pursuingTarget &&
+			(anchorDistance > DRONE_SOFT_LEASH_DISTANCE || outsideArena)
 
 		if (returnToAnchor) {
 			drone.orbiting = false
 			this.#clearBullyOrbitContact(drone)
 			speed = DRONE_RETURN_SPEED
-			desired.copy(anchor).sub(drone.position)
+			desired.copy(this.#directionAlongPath(drone, anchor))
 		} else if (targetPosition === null) {
 			drone.wanderAngle += delta * (0.25 + (drone.id % 4) * 0.04)
 			desired.set(Math.cos(drone.wanderAngle), 0, Math.sin(drone.wanderAngle))
@@ -1086,8 +1104,17 @@ export class ArenaSimulation {
 			}
 		} else if (drone.mood === "berserk") {
 			speed = 10.2
-			desired.copy(direction)
-			if (distance < 3.3 && target !== undefined) {
+			desired.copy(this.#directionAlongPath(drone, targetPosition))
+			if (
+				distance < 3.3 &&
+				target !== undefined &&
+				isArenaRouteClear(
+					this.#seed,
+					[drone.position.x, drone.position.z],
+					[targetPosition.x, targetPosition.z],
+					0.7,
+				)
+			) {
 				const damage = THREE.MathUtils.lerp(
 					52,
 					34,
@@ -1107,8 +1134,20 @@ export class ArenaSimulation {
 			}
 		} else {
 			speed = 7
-			desired.copy(this.#bullySteeringDirection(drone, direction, distance))
-			if (distance < BULLY_WEAPON_EFFECTIVE_RANGE)
+			const routeClear = isArenaRouteClear(
+				this.#seed,
+				[drone.position.x, drone.position.z],
+				[targetPosition.x, targetPosition.z],
+				0.85,
+			)
+			if (routeClear || drone.orbiting) {
+				desired.copy(this.#bullySteeringDirection(drone, direction, distance))
+			} else {
+				drone.orbiting = false
+				this.#clearBullyOrbitContact(drone)
+				desired.copy(this.#directionAlongPath(drone, targetPosition))
+			}
+			if (routeClear && distance < BULLY_WEAPON_EFFECTIVE_RANGE)
 				this.#updateBullyWeapon(drone, targetPosition)
 		}
 
@@ -1174,6 +1213,53 @@ export class ArenaSimulation {
 				Math.min(1, delta * 4.5),
 			)
 		}
+	}
+
+	#newDroneNavigation(): DroneNavigationState {
+		return {
+			goal: new THREE.Vector3(Number.POSITIVE_INFINITY, 0, 0),
+			nextRepathAt: 0,
+			waypointIndex: 0,
+			waypoints: [],
+		}
+	}
+
+	#directionAlongPath(drone: DroneState, goal: THREE.Vector3): THREE.Vector3 {
+		const horizontalGoal = new THREE.Vector3(goal.x, 0, goal.z)
+		const goalMoved =
+			drone.navigation.goal.distanceToSquared(horizontalGoal) > 16
+		if (goalMoved || this.#elapsed >= drone.navigation.nextRepathAt) {
+			const path = findArenaDronePath(
+				this.#seed,
+				[drone.position.x, drone.position.z],
+				[goal.x, goal.z],
+				0.85,
+			)
+			drone.navigation.goal.copy(horizontalGoal)
+			drone.navigation.nextRepathAt =
+				this.#elapsed + 0.65 + (drone.id % 4) * 0.08
+			drone.navigation.waypointIndex = 0
+			drone.navigation.waypoints = (path ?? [[goal.x, goal.z]]).map(
+				([x, z]) => new THREE.Vector3(x, 0, z),
+			)
+		}
+		const horizontalPosition = new THREE.Vector3(
+			drone.position.x,
+			0,
+			drone.position.z,
+		)
+		while (
+			drone.navigation.waypointIndex < drone.navigation.waypoints.length - 1 &&
+			drone.navigation.waypoints[
+				drone.navigation.waypointIndex
+			]!.distanceToSquared(horizontalPosition) < 2.25
+		) {
+			drone.navigation.waypointIndex += 1
+		}
+		const waypoint =
+			drone.navigation.waypoints[drone.navigation.waypointIndex] ??
+			horizontalGoal
+		return waypoint.clone().sub(horizontalPosition)
 	}
 
 	#droneAnchor(
@@ -1717,6 +1803,7 @@ export class ArenaSimulation {
 				health: BODY_HEALTH[payload.personality],
 				id: this.#nextDroneId++,
 				mood: "idle",
+				navigation: this.#newDroneNavigation(),
 				ownerId: payload.ownerId,
 				orbitContactClearSeconds: 0,
 				orbitContactSurfaceId: null,
