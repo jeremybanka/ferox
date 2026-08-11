@@ -1948,6 +1948,7 @@ export class ArenaSimulation {
 				previous,
 				ballistic.position,
 				1.35,
+				ballistic.ownerId,
 			)
 			const playerHit = this.#nearestPlayerAlongSegment(
 				previous,

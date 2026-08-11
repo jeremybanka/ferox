@@ -6,6 +6,8 @@ import { DroneSalvageSystem } from "./DroneSalvageSystem.ts"
 
 function snapshot(overrides: Partial<ArenaSnapshot> = {}): ArenaSnapshot {
 	return {
+		ballistics: [],
+		bubbles: [],
 		dronePayloads: [],
 		droneWrecks: [],
 		drones: [],
