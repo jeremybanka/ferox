@@ -2,8 +2,18 @@ import { describe, expect, test } from "vitest"
 
 import type { ArenaSurfaceContact } from "../src/ArenaWorld.ts"
 import { SLIDE_PHYSICS } from "../src/SlidePhysics.ts"
-import { INITIAL_WALL_TRAVERSAL_STATE } from "../src/WallTraversal.ts"
-import { reconcileAuthoritativeMovement } from "./AuthoritativeMovement.ts"
+import {
+	INITIAL_WALL_TRAVERSAL_STATE,
+	stepWallTraversal,
+	WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED,
+	type WallTraversalState,
+} from "../src/WallTraversal.ts"
+import {
+	AUTHORITATIVE_TRAVERSAL_TRAVEL_TOLERANCE,
+	consumeAuthoritativeJumpSignal,
+	limitAuthoritativeTraversalDestination,
+	reconcileAuthoritativeMovement,
+} from "./AuthoritativeMovement.ts"
 
 const wallContact: ArenaSurfaceContact = {
 	inclinationRadians: Math.PI / 2,
@@ -52,15 +62,18 @@ describe("authoritative wall movement", () => {
 		expect(state.wallTraversal.mode).toBe("slide")
 	})
 
-	test("rejects an airborne first-jump report after coyote time expires", () => {
+	test("rejects a forged first-jump impulse after coyote time expires", () => {
 		const state = reconcileAuthoritativeMovement({
 			contact: null,
 			crouching: false,
 			delta: 1 / 60,
 			grounded: false,
 			jump: 1,
+			jumpImpulse: 1,
 			previousCoyoteRemaining: null,
 			previousGrounded: false,
+			previousJump: 1,
+			previousVelocity: [0, -2, 0],
 			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
 			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
 			sliding: false,
@@ -68,9 +81,9 @@ describe("authoritative wall movement", () => {
 			viewDirection: [0, 0, 1],
 		})
 
-		expect(state.jump).toBe(2)
+		expect(state.jump).toBe(1)
 		expect(state.coyoteRemaining).toBeNull()
-		expect(state.velocity[1]).toBe(9.4)
+		expect(state.velocity[1]).toBeCloseTo(-2 - 23 / 60)
 	})
 
 	test("opens and advances coyote only for ordinary unsupported departure", () => {
@@ -81,12 +94,14 @@ describe("authoritative wall movement", () => {
 			grounded: false,
 			jump: 1,
 			previousGrounded: true,
+			previousJump: 0,
 			previousSliding: false,
 			previousSurfaceSliding: false,
+			previousVelocity: [5, 0, 0],
 			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
 			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
 			sliding: false,
-			velocity: [5, -1, 0],
+			velocity: [5, 1_000, 0],
 			viewDirection: [0, 0, 1],
 		})
 		const nextPacket = reconcileAuthoritativeMovement({
@@ -97,8 +112,10 @@ describe("authoritative wall movement", () => {
 			jump: 1,
 			previousCoyoteRemaining: departed.coyoteRemaining,
 			previousGrounded: false,
+			previousJump: departed.jump,
 			previousSliding: false,
 			previousSurfaceSliding: false,
+			previousVelocity: departed.velocity,
 			previousWallTraversal: departed.traversalState,
 			reportedWallTraversal: departed.wallTraversal,
 			sliding: false,
@@ -160,8 +177,11 @@ describe("authoritative wall movement", () => {
 			delta: 0.05,
 			grounded: false,
 			jump: 1,
+			jumpImpulse: 1,
 			previousCoyoteRemaining: 0.05,
 			previousGrounded: false,
+			previousJump: 1,
+			previousVelocity: [5, -1, 0],
 			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
 			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
 			sliding: false,
@@ -174,8 +194,11 @@ describe("authoritative wall movement", () => {
 			delta: 0.050_001,
 			grounded: false,
 			jump: 1,
+			jumpImpulse: 1,
 			previousCoyoteRemaining: 0.05,
 			previousGrounded: false,
+			previousJump: 1,
+			previousVelocity: [5, -1, 0],
 			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
 			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
 			sliding: false,
@@ -186,9 +209,9 @@ describe("authoritative wall movement", () => {
 		expect(atBoundary.jump).toBe(1)
 		expect(atBoundary.coyoteRemaining).toBeNull()
 		expect(atBoundary.velocity[1]).toBe(10.6)
-		expect(expired.jump).toBe(2)
+		expect(expired.jump).toBe(1)
 		expect(expired.coyoteRemaining).toBeNull()
-		expect(expired.velocity[1]).toBe(9.4)
+		expect(expired.velocity[1]).toBeCloseTo(-1 - 23 * 0.050_001)
 	})
 
 	test("owns a validated mantle path and suppresses simultaneous wall state", () => {
@@ -263,17 +286,43 @@ describe("authoritative wall movement", () => {
 			delta: 1 / 60,
 			grounded: false,
 			jump: 2,
+			previousJump: 2,
+			previousVelocity: [0, -2, 10],
 			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
 			reportedWallTraversal: { mode: "slide", normal: [1, 0, 0] },
 			sliding: false,
-			velocity: [-80, -500, 40],
+			velocity: [-80, -500, 1_000_000],
 			viewDirection: [-1, 0, 0],
 		})
 
 		expect(state.wallTraversal.mode).toBe("slide")
 		expect(state.velocity[0]).toBe(0)
-		expect(state.velocity[1]).toBe(-2.25)
-		expect(state.velocity[2]).toBeCloseTo(31.2)
+		expect(state.velocity[1]).toBe(-2)
+		expect(state.velocity[2]).toBeCloseTo(7.8)
+	})
+
+	test("bounds forged wall-run tangent speed from prior server velocity", () => {
+		const state = reconcileAuthoritativeMovement({
+			contact: wallContact,
+			crouching: false,
+			delta: 0.05,
+			grounded: false,
+			jump: 2,
+			previousGrounded: false,
+			previousJump: 2,
+			previousVelocity: [0, -1, 10],
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "run", normal: [1, 0, 0] },
+			sliding: false,
+			velocity: [0, 1_000, 1_000_000],
+			viewDirection: [0, 0, 1],
+		})
+
+		expect(state.wallTraversal.mode).toBe("run")
+		expect(
+			Math.hypot(state.velocity[0], state.velocity[2]),
+		).toBeLessThanOrEqual(WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED)
+		expect(state.velocity).toEqual([0, -1, 10])
 	})
 
 	test("crouching selects authoritative regular slide during wall contact", () => {
@@ -320,6 +369,8 @@ describe("authoritative wall movement", () => {
 			delta: 1 / 60,
 			grounded: false,
 			jump: 2,
+			previousJump: acquired.jump,
+			previousVelocity: acquired.velocity,
 			previousWallTraversal: acquired.traversalState,
 			reportedWallTraversal: acquired.wallTraversal,
 			sliding: true,
@@ -331,7 +382,211 @@ describe("authoritative wall movement", () => {
 			SLIDE_PHYSICS.maximumSpeed,
 		)
 		expect(acquired.jump).toBe(1)
-		expect(sustained.jump).toBe(2)
+		expect(sustained.jump).toBe(1)
 		expect(sustained.sliding).toBe(true)
+	})
+
+	test("matches three client crouch-slide frames with one 50ms server step", () => {
+		const priorTraversal = {
+			...INITIAL_WALL_TRAVERSAL_STATE,
+			mode: "run" as const,
+			normal: wallContact.normal,
+			surfaceId: wallContact.surfaceId,
+		}
+		const startVelocity = [0, 0, 10] as const
+		let clientTraversal: WallTraversalState = priorTraversal
+		let clientVelocity: readonly [number, number, number] = startVelocity
+		for (let frame = 0; frame < 3; frame += 1) {
+			const step = stepWallTraversal(clientTraversal, {
+				blocked: false,
+				contact: wallContact,
+				crouching: true,
+				delta: 1 / 60,
+				grounded: false,
+				jumpRequested: false,
+				velocity: clientVelocity,
+				viewDirection: [0, 0, 1],
+			})
+			clientTraversal = step.state
+			clientVelocity = step.velocity
+		}
+
+		const server = reconcileAuthoritativeMovement({
+			contact: wallContact,
+			crouching: true,
+			delta: 0.05,
+			grounded: false,
+			jump: 1,
+			previousGrounded: false,
+			previousJump: 1,
+			previousVelocity: startVelocity,
+			previousWallTraversal: priorTraversal,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			sliding: true,
+			velocity: clientVelocity,
+			viewDirection: [0, 0, 1],
+		})
+
+		for (const index of [0, 1, 2] as const)
+			expect(server.velocity[index]).toBeCloseTo(clientVelocity[index], 10)
+	})
+})
+
+describe("authoritative movement packet envelopes", () => {
+	test("consumes a jump sequence once and discards gaps and replays", () => {
+		expect(
+			consumeAuthoritativeJumpSignal(5, {
+				direction: [1, 0],
+				impulse: 2,
+				sequence: 5,
+			}),
+		).toEqual({ direction: null, impulse: null, sequence: 5 })
+		expect(
+			consumeAuthoritativeJumpSignal(5, {
+				direction: null,
+				impulse: 1,
+				sequence: 4,
+			}),
+		).toEqual({ direction: null, impulse: null, sequence: 5 })
+		expect(
+			consumeAuthoritativeJumpSignal(5, {
+				direction: [0, -1],
+				impulse: 2,
+				sequence: 6,
+			}),
+		).toEqual({ direction: [0, -1], impulse: 2, sequence: 6 })
+		expect(
+			consumeAuthoritativeJumpSignal(6, {
+				direction: null,
+				impulse: 1,
+				sequence: 9,
+			}),
+		).toEqual({ direction: null, impulse: null, sequence: 9 })
+	})
+
+	test("bounds active traversal travel by server elapsed time", () => {
+		const destination = limitAuthoritativeTraversalDestination(
+			[0, 2, 0],
+			[1_000, 2, 0],
+			10,
+			0.05,
+		)
+
+		expect(destination).toEqual([
+			0.5 + AUTHORITATIVE_TRAVERSAL_TRAVEL_TOLERANCE,
+			2,
+			0,
+		])
+	})
+
+	test("never trusts replicated jump count or vertical velocity in air", () => {
+		const first = reconcileAuthoritativeMovement({
+			contact: null,
+			crouching: false,
+			delta: 0.05,
+			grounded: false,
+			jump: 0,
+			jumpImpulse: null,
+			previousGrounded: false,
+			previousJump: 2,
+			previousVelocity: [0, 3, 0],
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			sliding: false,
+			velocity: [0, 1_000, 0],
+			viewDirection: [0, 0, 1],
+		})
+		const replay = reconcileAuthoritativeMovement({
+			contact: null,
+			crouching: false,
+			delta: 0.05,
+			grounded: false,
+			jump: 1,
+			jumpDirection: [1, 0],
+			jumpImpulse: 2,
+			previousGrounded: false,
+			previousJump: first.jump,
+			previousVelocity: first.velocity,
+			previousWallTraversal: first.traversalState,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			sliding: false,
+			velocity: [3.2, 1_000, 0],
+			viewDirection: [0, 0, 1],
+		})
+
+		expect(first.jump).toBe(2)
+		expect(first.velocity[1]).toBeCloseTo(3 - 23 * 0.05)
+		expect(replay.jump).toBe(2)
+		expect(replay.velocity[0]).toBe(0)
+		expect(replay.velocity[1]).toBeCloseTo(3 - 23 * 0.1)
+	})
+
+	test("accepts bounded first and double-jump edges in sequence", () => {
+		const first = reconcileAuthoritativeMovement({
+			contact: null,
+			crouching: false,
+			delta: 0.05,
+			grounded: true,
+			jump: 1,
+			jumpImpulse: 1,
+			previousGrounded: true,
+			previousJump: 0,
+			previousVelocity: [0, 0, 0],
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			sliding: false,
+			velocity: [0, 1_000, 0],
+			viewDirection: [0, 0, 1],
+		})
+		const second = reconcileAuthoritativeMovement({
+			contact: null,
+			crouching: false,
+			delta: 0.05,
+			grounded: false,
+			jump: 2,
+			jumpDirection: [0, -1],
+			jumpImpulse: 2,
+			previousGrounded: false,
+			previousJump: first.jump,
+			previousVelocity: first.velocity,
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			sliding: false,
+			velocity: [0, 1_000, -3.2],
+			viewDirection: [0, 0, 1],
+		})
+
+		expect(first.jump).toBe(1)
+		expect(first.velocity[1]).toBe(10.6)
+		expect(second.jump).toBe(2)
+		expect(second.velocity[1]).toBe(9.4)
+		expect(second.velocity[2]).toBe(-3.2)
+	})
+
+	test("matches the client's canonical directional double-jump impulse", () => {
+		const direction = [0.6, 0.8] as const
+		const state = reconcileAuthoritativeMovement({
+			contact: null,
+			crouching: false,
+			delta: 0.05,
+			grounded: false,
+			jump: 2,
+			jumpDirection: direction,
+			jumpImpulse: 2,
+			previousGrounded: false,
+			previousJump: 1,
+			previousVelocity: [4, -2, 2],
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			sliding: false,
+			velocity: [4 + 3.2 * direction[0], 1_000, 2 + 3.2 * direction[1]],
+			viewDirection: [0, 0, 1],
+		})
+
+		expect(state.velocity).toEqual([
+			4 + 3.2 * direction[0],
+			9.4,
+			2 + 3.2 * direction[1],
+		])
 	})
 })

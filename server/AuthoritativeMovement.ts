@@ -4,18 +4,134 @@ import type {
 } from "../src/arena-protocol.ts"
 import type { ArenaLedge, ArenaSurfaceContact } from "../src/ArenaWorld.ts"
 import {
+	applyDirectionalDoubleJump,
+	directionalDoubleJumpImpulse,
+} from "../src/DirectionalJumpPhysics.ts"
+import { PLAYER_SPRINT_SPEED_LIMIT } from "../src/game-constants.ts"
+import {
 	INITIAL_MANTLE_STATE,
 	stepMantleTraversal,
 	type MantleState,
 } from "../src/MantleTraversal.ts"
-import { stepSlidePhysics, type TerrainGradient } from "../src/SlidePhysics.ts"
+import {
+	SLIDE_PHYSICS,
+	slopeNormalUpDotFromTerrainGradient,
+	stepSlidePhysics,
+	type TerrainGradient,
+} from "../src/SlidePhysics.ts"
 import { JUMP_PHYSICS } from "../src/JumpPhysics.ts"
 import {
 	INITIAL_WALL_TRAVERSAL_STATE,
 	jumpCountAfterWallContact,
 	stepWallTraversal,
+	WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED,
 	type WallTraversalState,
 } from "../src/WallTraversal.ts"
+
+export const AUTHORITATIVE_TRAVERSAL_TRAVEL_TOLERANCE = 0.12
+export const AUTHORITATIVE_PLANAR_ACCELERATION = 31
+export const AUTHORITATIVE_VELOCITY_TOLERANCE = 0.35
+
+export type AuthoritativeJumpSignal = Readonly<{
+	direction: readonly [number, number] | null
+	impulse: 1 | 2 | null
+	sequence: number
+}>
+
+/**
+ * Consumes each strictly newer jump sequence once. A gap is consumed without
+ * applying its impulse so a client cannot skip ahead and later replay it.
+ */
+export function consumeAuthoritativeJumpSignal(
+	previousSequence: number,
+	reported: AuthoritativeJumpSignal,
+): AuthoritativeJumpSignal {
+	if (reported.sequence <= previousSequence)
+		return { direction: null, impulse: null, sequence: previousSequence }
+	const acceptsEdge = reported.sequence === previousSequence + 1
+	return {
+		direction:
+			acceptsEdge && reported.impulse === 2 ? reported.direction : null,
+		impulse: acceptsEdge ? reported.impulse : null,
+		sequence: reported.sequence,
+	}
+}
+
+export function authoritativeTraversalSpeedLimit(
+	options: Readonly<{
+		previousSliding: boolean
+		previousSurfaceSliding: boolean
+		previousWallTraversal: WallTraversalState
+	}>,
+): number | null {
+	if (
+		options.previousSliding ||
+		options.previousSurfaceSliding ||
+		options.previousWallTraversal.mode === "crouch-slide"
+	)
+		return SLIDE_PHYSICS.maximumSpeed
+	if (options.previousWallTraversal.mode !== "none")
+		return WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED
+	return null
+}
+
+/** Bounds a traversal packet's requested displacement to elapsed server time. */
+export function limitAuthoritativeTraversalDestination(
+	start: readonly [number, number, number],
+	desired: readonly [number, number, number],
+	maximumSpeed: number | null,
+	delta: number,
+): readonly [number, number, number] {
+	if (maximumSpeed === null) return desired
+	const displacement = [
+		desired[0] - start[0],
+		desired[1] - start[1],
+		desired[2] - start[2],
+	] as const
+	const distance = Math.hypot(...displacement)
+	const maximumDistance =
+		maximumSpeed * Math.max(0, delta) + AUTHORITATIVE_TRAVERSAL_TRAVEL_TOLERANCE
+	if (distance <= maximumDistance || distance <= 1e-9) return desired
+	const scale = maximumDistance / distance
+	return [
+		start[0] + displacement[0] * scale,
+		start[1] + displacement[1] * scale,
+		start[2] + displacement[2] * scale,
+	]
+}
+
+/**
+ * Treats replicated ordinary locomotion velocity as desired input, not state.
+ * Traversal itself uses the prior server-owned velocity and bypasses this path.
+ */
+export function limitAuthoritativeDesiredVelocity(
+	previous: readonly [number, number, number],
+	desired: readonly [number, number, number],
+	delta: number,
+): readonly [number, number, number] {
+	const previousSpeed = Math.hypot(previous[0], previous[2])
+	const desiredSpeed = Math.hypot(desired[0], desired[2])
+	const maximumSpeed = Math.max(previousSpeed, PLAYER_SPRINT_SPEED_LIMIT)
+	const speedScale =
+		desiredSpeed > maximumSpeed ? maximumSpeed / desiredSpeed : 1
+	const desiredX = desired[0] * speedScale
+	const desiredZ = desired[2] * speedScale
+	const differenceX = desiredX - previous[0]
+	const differenceZ = desiredZ - previous[2]
+	const difference = Math.hypot(differenceX, differenceZ)
+	const maximumDifference =
+		AUTHORITATIVE_PLANAR_ACCELERATION * Math.max(0, delta) +
+		AUTHORITATIVE_VELOCITY_TOLERANCE
+	const scale =
+		difference > maximumDifference && difference > 1e-9
+			? maximumDifference / difference
+			: 1
+	return [
+		previous[0] + differenceX * scale,
+		desired[1],
+		previous[2] + differenceZ * scale,
+	]
+}
 
 export type AuthoritativeMovementInput = Readonly<{
 	contact: ArenaSurfaceContact | null
@@ -23,13 +139,17 @@ export type AuthoritativeMovementInput = Readonly<{
 	delta: number
 	grounded: boolean
 	jump: 0 | 1 | 2
+	jumpDirection?: readonly [number, number] | null
+	jumpImpulse?: 1 | 2 | null
 	mantleCandidate?: ArenaLedge | null
 	position?: readonly [number, number, number]
 	previousCoyoteRemaining?: number | null
 	previousGrounded?: boolean
+	previousJump?: 0 | 1 | 2
 	previousMantle?: MantleState
 	previousSliding?: boolean
 	previousSurfaceSliding?: boolean
+	previousVelocity?: readonly [number, number, number]
 	previousWallTraversal: WallTraversalState
 	reportedWallTraversal: WallTraversalSnapshot
 	sliding: boolean
@@ -66,7 +186,7 @@ export function reconcileAuthoritativeMovement(
 	if (mantleStep.handled && mantleStep.position !== null) {
 		return {
 			coyoteRemaining: null,
-			jump: input.jump,
+			jump: input.previousJump ?? input.jump,
 			mantle:
 				mantleStep.state.mode === "mantle"
 					? {
@@ -84,6 +204,43 @@ export function reconcileAuthoritativeMovement(
 			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 		}
 	}
+	const previousAuthoritativeMode =
+		input.previousWallTraversal.mode !== "none" ||
+		input.previousSliding === true ||
+		input.previousSurfaceSliding === true
+	const currentSteepContact =
+		input.contact !== null &&
+		input.contact.inclinationRadians > SLIDE_PHYSICS.steepSurfaceRadians + 1e-12
+	const currentSteepTerrain =
+		input.terrainGradient !== undefined &&
+		slopeNormalUpDotFromTerrainGradient(input.terrainGradient) <
+			Math.cos(SLIDE_PHYSICS.steepSurfaceRadians) - 1e-12
+	const serverOwnsTraversalVelocity =
+		input.previousVelocity !== undefined &&
+		(previousAuthoritativeMode || currentSteepContact || currentSteepTerrain)
+	const reportedJumpDirection =
+		input.jumpDirection === null || input.jumpDirection === undefined
+			? null
+			: { x: input.jumpDirection[0], z: input.jumpDirection[1] }
+	const reportedPlanarJumpImpulse =
+		input.jumpImpulse === 2
+			? directionalDoubleJumpImpulse(reportedJumpDirection)
+			: { x: 0, z: 0 }
+	const desiredWithoutJumpImpulse = [
+		input.velocity[0] - reportedPlanarJumpImpulse.x,
+		input.velocity[1],
+		input.velocity[2] - reportedPlanarJumpImpulse.z,
+	] as const
+	const desiredVelocity =
+		input.previousVelocity === undefined
+			? desiredWithoutJumpImpulse
+			: serverOwnsTraversalVelocity
+				? input.previousVelocity
+				: limitAuthoritativeDesiredVelocity(
+						input.previousVelocity,
+						desiredWithoutJumpImpulse,
+						input.delta,
+					)
 	const traversal = stepWallTraversal(input.previousWallTraversal, {
 		blocked: false,
 		contact: input.contact,
@@ -91,10 +248,12 @@ export function reconcileAuthoritativeMovement(
 		delta: input.delta,
 		grounded: input.grounded,
 		jumpRequested: false,
-		velocity: input.velocity,
+		velocity: desiredVelocity,
 		viewDirection: input.viewDirection,
 	})
 	const mode = traversal.state.mode
+	const serverOwnsVelocity = input.previousVelocity !== undefined
+	const terrainVelocity = desiredVelocity
 	const terrainSlide =
 		input.terrainGradient === undefined
 			? null
@@ -102,12 +261,12 @@ export function reconcileAuthoritativeMovement(
 					{
 						sliding: input.previousSliding ?? false,
 						surfaceSliding: false,
-						x: input.velocity[0],
-						z: input.velocity[2],
+						x: terrainVelocity[0],
+						z: terrainVelocity[2],
 					},
 					{
 						crouching: input.crouching,
-						delta: 0,
+						delta: serverOwnsVelocity ? input.delta : 0,
 						grounded: input.grounded,
 						terrainGradient: input.terrainGradient,
 					},
@@ -131,17 +290,27 @@ export function reconcileAuthoritativeMovement(
 	let coyoteRemaining = input.previousCoyoteRemaining ?? null
 	let jump = jumpCountAfterWallContact(
 		traversal.resetJumpAvailability,
-		input.jump,
+		input.previousJump ?? input.jump,
 	)
 	let velocity: readonly [number, number, number] =
 		mode === "none" && terrainSlide !== null
-			? [terrainSlide.x, input.velocity[1], terrainSlide.z]
+			? [terrainSlide.x, terrainVelocity[1], terrainSlide.z]
 			: traversal.velocity
+	if (serverOwnsVelocity && mode === "none") {
+		velocity = [
+			velocity[0],
+			input.grounded
+				? 0
+				: input.previousVelocity![1] - JUMP_PHYSICS.gravity * input.delta,
+			velocity[2],
+		]
+	}
 	if (input.grounded || mode !== "none") {
 		coyoteRemaining = null
 	} else if (
 		input.previousGrounded === true &&
-		input.velocity[1] <= 0 &&
+		(input.jumpImpulse ?? null) === null &&
+		(input.previousVelocity?.[1] ?? terrainVelocity[1]) <= 0 &&
 		input.previousSliding !== true &&
 		input.previousSurfaceSliding !== true &&
 		input.previousWallTraversal.mode === "none" &&
@@ -151,23 +320,42 @@ export function reconcileAuthoritativeMovement(
 		!surfaceSliding
 	) {
 		coyoteRemaining = JUMP_PHYSICS.coyoteTimeSeconds
+		jump = 1
 	} else if (input.previousGrounded === false && coyoteRemaining !== null) {
 		coyoteRemaining -= Math.max(0, input.delta)
 		if (coyoteRemaining < 0) coyoteRemaining = null
 	}
-	if (
+	const impulse = input.jumpImpulse ?? null
+	const acceptsFirstJump =
+		impulse === 1 &&
+		mode === "none" &&
+		((input.previousGrounded === true &&
+			(input.previousJump ?? input.jump) === 0) ||
+			(coyoteRemaining !== null && (input.previousJump ?? input.jump) === 1))
+	const acceptsDoubleJump =
+		impulse === 2 &&
+		mode === "none" &&
 		input.previousGrounded === false &&
-		input.velocity[1] > 0 &&
-		input.jump === 1
-	) {
-		if (coyoteRemaining !== null) {
-			coyoteRemaining = null
-			velocity = [velocity[0], JUMP_PHYSICS.jumpVelocity, velocity[2]]
-		} else {
-			jump = 2
-			velocity = [velocity[0], JUMP_PHYSICS.doubleJumpVelocity, velocity[2]]
-		}
+		(input.previousJump ?? input.jump) === 1
+	if (acceptsFirstJump) {
+		jump = 1
+		coyoteRemaining = null
+		velocity = [velocity[0], JUMP_PHYSICS.jumpVelocity, velocity[2]]
+	} else if (acceptsDoubleJump) {
+		jump = 2
+		coyoteRemaining = null
+		const directionalVelocity = applyDirectionalDoubleJump(
+			{ x: velocity[0], z: velocity[2] },
+			reportedJumpDirection,
+			2,
+		)
+		velocity = [
+			directionalVelocity.x,
+			JUMP_PHYSICS.doubleJumpVelocity,
+			directionalVelocity.z,
+		]
 	}
+	if (input.grounded && impulse === null) jump = 0
 	return {
 		coyoteRemaining,
 		jump,

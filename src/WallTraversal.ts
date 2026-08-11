@@ -1,4 +1,5 @@
 import type { ArenaSurfaceContact } from "./ArenaWorld.ts"
+import { PLAYER_SPRINT_SPEED_LIMIT } from "./game-constants.ts"
 import { SLIDE_PHYSICS, stepContactSlidePhysics } from "./SlidePhysics.ts"
 
 export const WALL_MINIMUM_INCLINATION_RADIANS = (80 * Math.PI) / 180
@@ -9,9 +10,12 @@ export const WALL_SLIDE_VIEW_COSINE = Math.cos(WALL_SLIDE_VIEW_ANGLE_RADIANS)
 export const WALL_RUN_MAXIMUM_SECONDS = 1.65
 export const WALL_RUN_DOWNWARD_SPEED = 1.25
 export const WALL_SLIDE_DOWNWARD_SPEED = 2.25
+export const WALL_SLIDE_TANGENTIAL_DAMPING_PER_SECOND = -Math.log(0.78) * 60
 export const WALL_JUMP_OUTWARD_SPEED = 6.8
 export const WALL_JUMP_UPWARD_SPEED = 7.6
 export const WALL_RECONTACT_SECONDS = 0.22
+export const WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED =
+	PLAYER_SPRINT_SPEED_LIMIT * 1.25
 
 export type WallTraversalMode = "crouch-slide" | "none" | "run" | "slide"
 
@@ -111,6 +115,15 @@ function runVelocityAlongWall(
 	]
 }
 
+function limitWallPlanarVelocity(
+	velocity: readonly [number, number, number],
+): readonly [number, number, number] {
+	const speed = Math.hypot(velocity[0], velocity[2])
+	if (speed <= WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED) return velocity
+	const scale = WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED / speed
+	return [velocity[0] * scale, velocity[1], velocity[2] * scale]
+}
+
 export function stepWallTraversal(
 	state: WallTraversalState,
 	input: WallTraversalInput,
@@ -169,7 +182,10 @@ export function stepWallTraversal(
 		}
 	}
 	const [normalX, , normalZ] = contact.normal
-	const [velocityX, velocityY, velocityZ] = input.velocity
+	const contactVelocity = input.crouching
+		? input.velocity
+		: limitWallPlanarVelocity(input.velocity)
+	const [velocityX, velocityY, velocityZ] = contactVelocity
 	const normalSpeed = velocityX * normalX + velocityZ * normalZ
 	const tangentX = velocityX - normalX * normalSpeed
 	const tangentZ = velocityZ - normalZ * normalSpeed
@@ -177,7 +193,7 @@ export function stepWallTraversal(
 		const continuingRegularSlide =
 			state.mode === "crouch-slide" && state.surfaceId === contact.surfaceId
 		const regularSlide = stepContactSlidePhysics(
-			{ sliding: continuingRegularSlide, velocity: input.velocity },
+			{ sliding: continuingRegularSlide, velocity: contactVelocity },
 			{
 				delta,
 				surfaceNormal: contact.surfaceNormal ?? contact.normal,
@@ -204,7 +220,7 @@ export function stepWallTraversal(
 	}
 	if (input.jumpRequested) {
 		const [tangentX, tangentZ] = runVelocityAlongWall(
-			input.velocity,
+			contactVelocity,
 			input.viewDirection,
 			contact.normal,
 		)
@@ -226,7 +242,7 @@ export function stepWallTraversal(
 	}
 	const planarSpeed = Math.hypot(velocityX, velocityZ)
 	const [runVelocityX, runVelocityZ] = runVelocityAlongWall(
-		input.velocity,
+		contactVelocity,
 		input.viewDirection,
 		contact.normal,
 	)
@@ -254,6 +270,9 @@ export function stepWallTraversal(
 		state.surfaceId === contact.surfaceId ? state.elapsed + delta : 0
 	const acquiredSurface =
 		state.mode === "none" || state.surfaceId !== contact.surfaceId
+	const slideDamping = Math.exp(
+		-WALL_SLIDE_TANGENTIAL_DAMPING_PER_SECOND * delta,
+	)
 	return {
 		consumedJump: false,
 		detachedByCrouch: false,
@@ -274,9 +293,9 @@ export function stepWallTraversal(
 						runVelocityZ,
 					]
 				: [
-						tangentX * 0.78,
+						tangentX * slideDamping,
 						Math.max(velocityY, -WALL_SLIDE_DOWNWARD_SPEED),
-						tangentZ * 0.78,
+						tangentZ * slideDamping,
 					],
 	}
 }

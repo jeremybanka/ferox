@@ -107,6 +107,9 @@ export type PlayerSnapshot = {
 	weaponsFree: boolean
 }
 
+export type JumpImpulse = 1 | 2 | null
+export type JumpDirection = [number, number] | null
+
 export type PlayerMoveSnapshot = Omit<
 	PlayerSnapshot,
 	| "dead"
@@ -122,7 +125,44 @@ export type PlayerMoveSnapshot = Omit<
 	| "respawnAt"
 	| "punchSequence"
 	| "punchStartedAt"
->
+> & {
+	/** One-shot edge; null also covers non-impulse ledge departure. */
+	jumpImpulse: JumpImpulse
+	/** World-space [x,z] direction, present only for a double-jump edge. */
+	jumpDirection: JumpDirection
+	/** Monotonic per-connection sequence; incremented only for a new impulse. */
+	jumpSequence: number
+}
+
+export function isJumpImpulse(value: unknown): value is JumpImpulse {
+	return value === null || value === 1 || value === 2
+}
+
+export function isJumpDirection(value: unknown): value is JumpDirection {
+	return (
+		value === null ||
+		(Array.isArray(value) &&
+			value.length === 2 &&
+			value.every(Number.isFinite) &&
+			Math.hypot(value[0] as number, value[1] as number) <= 1 + 1e-6)
+	)
+}
+
+export function isJumpDirectionForImpulse(
+	direction: unknown,
+	impulse: unknown,
+): direction is JumpDirection {
+	return (
+		isJumpImpulse(impulse) &&
+		isJumpDirection(direction) &&
+		((impulse === 2 && direction !== null) ||
+			(impulse !== 2 && direction === null))
+	)
+}
+
+export function isJumpSequence(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) >= 0
+}
 
 export const GESTURE_ACTIONS = ["wave", "salute", "fistbump", "punch"] as const
 export type GestureAction = (typeof GESTURE_ACTIONS)[number]

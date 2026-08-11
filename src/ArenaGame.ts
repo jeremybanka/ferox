@@ -529,6 +529,9 @@ export class ArenaGame {
 	#incomingStandardLocks = 0
 	#hudElapsed = 0
 	#jumpQueued = false
+	#jumpSequence = 0
+	#pendingJumpDirection: [number, number] | null = null
+	#pendingJumpImpulse: 1 | 2 | null = null
 	#coyoteRemaining: number | null = null
 	#lastFrame = performance.now()
 	#leftBumperDuration = 0
@@ -850,6 +853,9 @@ export class ArenaGame {
 		this.#mantle = INITIAL_MANTLE_STATE
 		this.#mantleProgress = 0
 		this.#coyoteRemaining = null
+		this.#jumpSequence = 0
+		this.#pendingJumpDirection = null
+		this.#pendingJumpImpulse = null
 		this.#slide = false
 		this.#surfaceSlide = false
 		this.#disposeLocalDeathRagdoll()
@@ -924,6 +930,9 @@ export class ArenaGame {
 			crouching: false,
 			freeAim: false,
 			jump: 0,
+			jumpDirection: null,
+			jumpImpulse: null,
+			jumpSequence: 0,
 			mantle: { active: false, progress: 0, surfaceId: null },
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
@@ -1972,6 +1981,9 @@ export class ArenaGame {
 		this.#shotHeld = false
 		this.#grenadeHeld = false
 		this.#jumpQueued = false
+		this.#jumpSequence = 0
+		this.#pendingJumpDirection = null
+		this.#pendingJumpImpulse = null
 		this.#weaponsFreeUntil = 0
 		this.#activeEmoteUntil = 0
 		this.#punchUntil = 0
@@ -2422,10 +2434,22 @@ export class ArenaGame {
 			this.#jumpQueued = false
 			this.#coyoteRemaining = jumpStep.coyoteRemaining
 			this.#player.jumps = jumpStep.jumpCount
+			const doubleJumpDirection =
+				jumpStep.impulse === 2
+					? cameraRelativeMovementDirection(physicalInput, this.#player.yaw)
+					: null
+			if (jumpStep.impulse === 1 || jumpStep.impulse === 2) {
+				this.#jumpSequence += 1
+				this.#pendingJumpDirection =
+					jumpStep.impulse === 2
+						? [doubleJumpDirection?.x ?? 0, doubleJumpDirection?.z ?? 0]
+						: null
+				this.#pendingJumpImpulse = jumpStep.impulse
+			}
 			if (jumpStep.impulse === 2) {
 				const steeredMomentum = applyDirectionalDoubleJump(
 					{ x: this.#player.velocity.x, z: this.#player.velocity.z },
-					cameraRelativeMovementDirection(physicalInput, this.#player.yaw),
+					doubleJumpDirection,
 					jumpStep.impulse,
 				)
 				this.#player.velocity.x = steeredMomentum.x
@@ -3866,7 +3890,12 @@ export class ArenaGame {
 
 	#sendSnapshot(delta: number): void {
 		this.#snapshotElapsed += delta
-		if (!this.#connected || this.#dead || this.#snapshotElapsed < 0.05) return
+		if (
+			!this.#connected ||
+			this.#dead ||
+			(this.#snapshotElapsed < 0.05 && this.#pendingJumpImpulse === null)
+		)
+			return
 		this.#snapshotElapsed = 0
 		const now = performance.now() / 1_000
 		const emoteActive = now < this.#activeEmoteUntil
@@ -3895,6 +3924,9 @@ export class ArenaGame {
 			crouching: this.#crouching,
 			freeAim: this.#freeAim,
 			jump: this.#player.jumps,
+			jumpDirection: this.#pendingJumpDirection,
+			jumpImpulse: this.#pendingJumpImpulse,
+			jumpSequence: this.#jumpSequence,
 			mantle: this.#replicatedMantle(),
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
@@ -3906,6 +3938,8 @@ export class ArenaGame {
 			visorStartedAt: this.#visorStartedAt,
 			weaponsFree: now < this.#weaponsFreeUntil,
 		} satisfies PlayerMoveSnapshot)
+		this.#pendingJumpDirection = null
+		this.#pendingJumpImpulse = null
 	}
 
 	#emitHud(delta: number): void {
