@@ -28,6 +28,7 @@ import {
 	type PlayerSnapshot,
 } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
+import { arenaGravityScaleAtStepStart } from "../src/ArenaZones.ts"
 import {
 	ARENA_PLAYABLE_HALF_EXTENT,
 	arenaMovementGroundAt,
@@ -81,6 +82,7 @@ import {
 	reconcileAuthoritativeGrappleJump,
 } from "./AuthoritativeGrappleJump.ts"
 import {
+	applyAuthoritativeExternalImpulse,
 	authoritativeTraversalSpeedLimit,
 	limitAuthoritativeTraversalDestination,
 	reconcileAuthoritativeMovement,
@@ -163,6 +165,19 @@ const applyPlayerDamage = (
 	if (result === "ignored") return result
 	const lifecycle = playerLifecycle.get(playerId)
 	if (lifecycle === undefined) return "ignored"
+	const player = players.get(playerId)
+	if (
+		result === "damaged" &&
+		player !== undefined &&
+		impact.impulse !== undefined &&
+		impact.impulse.length === 3 &&
+		impact.impulse.every(Number.isFinite) &&
+		impact.source === "ballistic"
+	) {
+		player.velocity = [
+			...applyAuthoritativeExternalImpulse(player.velocity, impact.impulse),
+		]
+	}
 	const sequence = (playerDamageSequences.get(playerId) ?? 0) + 1
 	playerDamageSequences.set(playerId, sequence)
 	io.emit("arena:player-damaged", {
@@ -174,7 +189,6 @@ const applyPlayerDamage = (
 		serverTime: nowMs / 1_000,
 	} satisfies PlayerDamageSnapshot)
 	if (result === "died") {
-		const player = players.get(playerId)
 		cancelPlayerReload(playerId)
 		if (player !== undefined) {
 			Object.assign(player, {
@@ -218,6 +232,16 @@ const applyPlayerDamage = (
 	}
 	io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
 	return result
+}
+
+const applySimulationPlayerDamage = (
+	playerId: string,
+	damage: number,
+	impact: PlayerDamageImpact,
+): number => {
+	const before = playerLifecycle.get(playerId)?.health ?? 0
+	applyPlayerDamage(playerId, damage, impact)
+	return Math.max(0, before - (playerLifecycle.get(playerId)?.health ?? before))
 }
 
 const emitMissileLockUpdates = (updates: readonly LockUpdate[]): void => {
@@ -327,8 +351,7 @@ const simulation = new ArenaSimulation({
 	onLockChanged: (attackerId, targetId, locked) => {
 		emitMissileLockUpdates(armory.setLock(attackerId, targetId, locked))
 	},
-	onPlayerDamage: (playerId, damage, impact) =>
-		applyPlayerDamage(playerId, damage, impact),
+	onPlayerDamage: applySimulationPlayerDamage,
 	seed: ARENA_SEED,
 })
 
@@ -558,6 +581,10 @@ realtime(
 				? PILOT_CROUCH_EYE_HEIGHT
 				: PILOT_STANDING_EYE_HEIGHT
 			const grappleState = grapple.state()
+			const pilotGravityScale = arenaGravityScaleAtStepStart(
+				"pilot",
+				current.position,
+			)
 			const grappleAttached =
 				grappleState.phase === "attached" &&
 				grappleState.ownerId === socketId &&
@@ -659,7 +686,7 @@ realtime(
 									z: grappleAnchor[2],
 								},
 								delta,
-								gravity: JUMP_PHYSICS.gravity,
+								gravity: JUMP_PHYSICS.gravity * pilotGravityScale,
 								instantaneousVerticalVelocity:
 									grappleJump.instantaneousVerticalVelocity ??
 									JUMP_PHYSICS.doubleJumpVelocity,
@@ -698,7 +725,7 @@ realtime(
 							},
 							applyGravity,
 							delta,
-							gravity: JUMP_PHYSICS.gravity,
+							gravity: JUMP_PHYSICS.gravity * pilotGravityScale,
 							instantaneousVerticalVelocity:
 								grappleJump.instantaneousVerticalVelocity,
 							maximumInputAcceleration: groundedBefore
@@ -871,6 +898,7 @@ realtime(
 					coyoteDelta: timerDelta,
 					crouching: payload.crouching,
 					delta,
+					gravityScale: pilotGravityScale,
 					grounded,
 					jump: payload.jump,
 					jumpDirection: jumpSignal.direction,

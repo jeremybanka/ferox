@@ -33,6 +33,7 @@ import type {
 } from "../src/arena-protocol.ts"
 import { isMiniMissileTargetRef } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
+import { arenaGravityScaleAtStepStart } from "../src/ArenaZones.ts"
 import {
 	ARENA_PLAYABLE_HALF_EXTENT,
 	resolveArenaMotion,
@@ -81,6 +82,8 @@ import {
 	RAIL_DAMAGE_MIN,
 	RAIL_GRAVITY_MAX,
 	RAIL_GRAVITY_MIN,
+	RAIL_KNOCKBACK_MAX,
+	RAIL_KNOCKBACK_MIN,
 	RAIL_SPEED_MAX,
 	RAIL_SPEED_MIN,
 	SHOTGUN_MAX_ACTIVE_PELLETS,
@@ -251,6 +254,7 @@ type BallisticState = {
 	gravity: number
 	id: number
 	life: number
+	knockback: number
 	ownerId: string
 	position: THREE.Vector3
 	velocity: THREE.Vector3
@@ -280,7 +284,7 @@ type ArenaSimulationOptions = {
 		playerId: string,
 		damage: number,
 		impact: PlayerDamageImpact,
-	) => void
+	) => number | void
 	seed: number
 }
 
@@ -624,6 +628,11 @@ export class ArenaSimulation {
 				fraction,
 			),
 			id: this.#nextBallisticId++,
+			knockback: THREE.MathUtils.lerp(
+				RAIL_KNOCKBACK_MIN,
+				RAIL_KNOCKBACK_MAX,
+				fraction,
+			),
 			life: 5,
 			ownerId: playerId,
 			position: validated.origin,
@@ -1455,9 +1464,14 @@ export class ArenaSimulation {
 					this.#setMissileTarget(missile, null)
 				}
 			}
-			if (missile.phase === "falling") {
-				missile.velocity.y -= MINI_MISSILE_GRAVITY * delta
-			}
+			if (missile.phase === "falling")
+				missile.velocity.y -=
+					MINI_MISSILE_GRAVITY *
+					delta *
+					arenaGravityScaleAtStepStart(
+						"falling-mini-missile",
+						missile.position.toArray(),
+					)
 			missile.position.addScaledVector(missile.velocity, delta)
 
 			const bubbleHit = this.#nearestBubbleAlongSegment(
@@ -1718,7 +1732,10 @@ export class ArenaSimulation {
 			const grenade = this.#grenades[index]
 			if (grenade === undefined) continue
 			grenade.life -= delta
-			grenade.velocity.y -= GRENADE_GRAVITY * delta
+			grenade.velocity.y -=
+				GRENADE_GRAVITY *
+				delta *
+				arenaGravityScaleAtStepStart("grenade", grenade.position.toArray())
 			const previousX = grenade.position.x
 			const previousZ = grenade.position.z
 			grenade.position.addScaledVector(grenade.velocity, delta)
@@ -2132,7 +2149,13 @@ export class ArenaSimulation {
 			if (ballistic === undefined) continue
 			ballistic.life -= delta
 			const previous = ballistic.position.clone()
-			ballistic.velocity.y -= ballistic.gravity * delta
+			ballistic.velocity.y -=
+				ballistic.gravity *
+				delta *
+				arenaGravityScaleAtStepStart(
+					"rail-ballistic",
+					ballistic.position.toArray(),
+				)
 			ballistic.position.addScaledVector(ballistic.velocity, delta)
 			let hit = false
 			const bubbleHit = this.#nearestBubbleAlongSegment(
@@ -2171,19 +2194,29 @@ export class ArenaSimulation {
 				)
 				hit = true
 			} else if (playerHit !== undefined) {
-				this.#onPlayerDamage(playerHit.target.id, ballistic.damage, {
-					direction: ballistic.velocity.clone().normalize().toArray(),
-					position: previous
-						.clone()
-						.lerp(ballistic.position, playerHit.travelFraction)
-						.toArray(),
-					source: "ballistic",
-				})
+				const direction = ballistic.velocity.clone().normalize()
+				const damage =
+					playerHit.classification === "headshot"
+						? ballistic.damage * PLAYER_HEADSHOT_MULTIPLIER
+						: ballistic.damage
+				const appliedDamage = this.#onPlayerDamage(
+					playerHit.target.id,
+					damage,
+					{
+						direction: direction.toArray(),
+						impulse: direction.multiplyScalar(ballistic.knockback).toArray(),
+						position: previous
+							.clone()
+							.lerp(ballistic.position, playerHit.travelFraction)
+							.toArray(),
+						source: "ballistic",
+					},
+				)
 				this.#directHit(
 					ballistic.ownerId,
 					ballistic.clientShotId,
 					ballistic.id,
-					ballistic.damage,
+					typeof appliedDamage === "number" ? appliedDamage : damage,
 					playerHit.target.id,
 					"player",
 					playerHit.classification,

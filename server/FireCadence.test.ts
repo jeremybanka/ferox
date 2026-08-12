@@ -25,4 +25,13 @@ describe("server fire cadence", () => {
 		expect(isFireCadenceReady(5_000, 5_719, interval)).toBe(false)
 		expect(isFireCadenceReady(5_000, 5_720, interval)).toBe(true)
 	})
+
+	test("enforces the faster rail semi-auto release cadence", () => {
+		const rail = gunDefinition("rail-gun").fire
+		expect(rail.serverMinimumIntervalMs).toBe(450)
+		expect(rail.clientCooldownSeconds).toBe(0.45)
+		expect(isFireCadenceReady(undefined, 8_000, 450)).toBe(true)
+		expect(isFireCadenceReady(8_000, 8_449, 450)).toBe(false)
+		expect(isFireCadenceReady(8_000, 8_450, 450)).toBe(true)
+	})
 })

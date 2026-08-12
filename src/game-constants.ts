@@ -63,13 +63,18 @@ export const BUBBLE_SPEED = 6.5
 export const BUBBLE_SERVER_MINIMUM_INTERVAL_MS = 520
 export const RAIL_GUN_MAGAZINE_SIZE = 4
 export const RAIL_CHARGE_MAX_MS = 1_800
-export const RAIL_DAMAGE_MIN = 34
-export const RAIL_DAMAGE_MAX = 120
-export const RAIL_GRAVITY_MIN = 4
-export const RAIL_GRAVITY_MAX = 22
-export const RAIL_SPEED_MIN = 24
-export const RAIL_SPEED_MAX = 76
-export const RAIL_SERVER_MINIMUM_INTERVAL_MS = 1_050
+// Seventy is the explicit full-charge body target. The buff is concentrated in
+// partial-shot utility, cadence, a flatter/faster trajectory, and kinetic force
+// instead of preserving the previous accidental 120-damage body maximum.
+export const RAIL_DAMAGE_MIN = 45
+export const RAIL_DAMAGE_MAX = 70
+export const RAIL_GRAVITY_MIN = 2.5
+export const RAIL_GRAVITY_MAX = 10
+export const RAIL_SPEED_MIN = 56
+export const RAIL_SPEED_MAX = 110
+export const RAIL_KNOCKBACK_MIN = 8
+export const RAIL_KNOCKBACK_MAX = 30
+export const RAIL_SERVER_MINIMUM_INTERVAL_MS = 450
 
 // Mid-arena armory pads are shared by the three standard weapon pickups. Their
 // initial pad indices are distinct and every return advances to the next pad
@@ -180,6 +185,7 @@ export const PLAYER_RESPAWN_DELAY_MS = 5_000
 export const PLAYER_CROUCH_BASE_SPEED_LIMIT = 4.3
 export const PLAYER_RUN_SPEED_LIMIT = 9.2
 export const PLAYER_SPRINT_SPEED_LIMIT = 14.8
+export const PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT = 40
 export const PLAYER_SLIDE_DUST_CADENCE_SECONDS = 0.14
 export const PLAYER_SLIDE_DUST_LIFETIME_SECONDS = 0.52
 export const PLAYER_SLIDE_DUST_BUDGET = 24
