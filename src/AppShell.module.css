@@ -359,7 +359,8 @@ app-shell.class {
 		}
 
 		> pickup-prompt,
-		> drone-recovery-prompt {
+		> drone-recovery-prompt,
+		> vehicle-action-prompt {
 			position: absolute;
 			bottom: clamp(8rem, 18vh, 11rem);
 			left: 50%;
@@ -421,6 +422,13 @@ app-shell.class {
 			border-color: rgb(215 135 255 / 0.72);
 			background: rgb(30 12 40 / 0.78);
 			color: #dfa2ff;
+		}
+
+		> vehicle-action-prompt {
+			border-color: rgb(75 238 220 / 0.74);
+			background: rgb(7 35 36 / 0.82);
+			color: #86fff0;
+			box-shadow: 0 0 1.2rem rgb(38 220 198 / 0.16);
 		}
 
 		> pickup-status-board {

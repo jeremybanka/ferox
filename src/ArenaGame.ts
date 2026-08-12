@@ -47,6 +47,9 @@ import type {
 	PilotEmote,
 	VisorExpression,
 	WeaponKind,
+	VehicleControlIntent,
+	VehicleSeatIntent,
+	VehicleTurretIntent,
 } from "./arena-protocol.ts"
 import {
 	activeEquipmentSlot,
@@ -182,6 +185,7 @@ import {
 	type RecoilSpreadState,
 } from "./RecoilSpread.ts"
 import { ShotgunPelletField } from "./ShotgunPelletField.ts"
+import { VehicleVisualSystem } from "./VehicleVisualSystem.ts"
 import {
 	BoundedDamageEffects,
 	damageFlinchAnimationLayer,
@@ -301,6 +305,7 @@ import {
 	saluteAnimationLayer,
 } from "./pilot/SaluteAnimation.ts"
 import { weaponsFreeLayer } from "./pilot/WeaponsFreePose.ts"
+import { vehicleMountedLayer } from "./pilot/VehicleMountedPose.ts"
 import {
 	pilotSmartTargetCandidateFromRoot,
 	INITIAL_SMART_TARGET_LEAD,
@@ -505,6 +510,7 @@ export class ArenaGame {
 	readonly #scene = new THREE.Scene()
 	readonly #seed: number
 	readonly #socket: Socket
+	readonly #vehicles: VehicleVisualSystem
 	readonly #weapon = new THREE.Group()
 	#gunModel: GunModel | null = null
 	#weaponMuzzle = new THREE.Group()
@@ -631,6 +637,11 @@ export class ArenaGame {
 	#visorStartedAt = Date.now() / 1_000
 	#weaponsFreeUntil = 0
 	#weaponKind: WeaponKind = DEFAULT_GUN_ID
+	#vehicleActionSequence = 0
+	#vehicleControlElapsed = 0
+	#vehicleControlSequence = 0
+	#vehicleTurretSequence = 0
+	#vehicleMouseFire = false
 	#activeSlot: WeaponSlotIndex = 0
 	#equipmentRevision = -1
 	#equipmentSlots: EquipmentSlots = [
@@ -667,6 +678,7 @@ export class ArenaGame {
 			scene: this.#scene,
 		})
 		this.#droneSalvage = new DroneSalvageSystem(this.#scene)
+		this.#vehicles = new VehicleVisualSystem(this.#scene)
 		this.#bindEvents()
 		this.#player.position.y = this.#heightAt(0, 13) + PILOT_STANDING_EYE_HEIGHT
 		this.#connected = this.#socket.connected
@@ -739,6 +751,7 @@ export class ArenaGame {
 		this.#socket.off("arena:snapshot", this.#onSnapshot)
 		this.#drones.dispose()
 		this.#droneSalvage.dispose()
+		this.#vehicles.dispose()
 		this.#damageEffects.clear()
 		this.#fistContactEffects.clear()
 		for (const structure of this.#structureMeshes) {
@@ -814,6 +827,12 @@ export class ArenaGame {
 	readonly #onKeyDown = (event: KeyboardEvent): void => {
 		if (this.#dead) return
 		this.#keys.add(event.code)
+		if (
+			!event.repeat &&
+			(event.code === "ShiftLeft" || event.code === "ShiftRight")
+		)
+			this.#sendVehicleDriverControl()
+		if (!event.repeat && event.code === "KeyF") this.#sendVehicleTurret(true)
 		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
 		if ((event.code === "CapsLock" || event.code === "KeyV") && !event.repeat)
 			this.#movementToggleQueued = true
@@ -822,7 +841,9 @@ export class ArenaGame {
 			this.#requestSwitch(1)
 		if (isGrenadeSwitchKeyboardInput(event.code, event.repeat))
 			this.#requestGrenadeCycle()
-		if (event.code === "KeyE" && !event.repeat) this.#requestDroneRecovery()
+		if (event.code === "KeyE" && !event.repeat) {
+			if (!this.#requestVehicleAction()) this.#requestDroneRecovery()
+		}
 		if (event.code === "KeyX" && !event.repeat) this.#requestDrop()
 		const gesture = keyboardGestureInput(event.code, event.repeat)
 		if (gesture !== null) this.#requestGesture(gesture)
@@ -868,6 +889,14 @@ export class ArenaGame {
 			this.start()
 		}
 		if (event.target === this.#canvas) this.#mouseLookDragging = true
+		const vehicleSeat = this.#vehicles.localSeat(this.#socket.id)
+		if (vehicleSeat !== null) {
+			if (event.button === 0 && vehicleSeat.seatId === "turret") {
+				this.#vehicleMouseFire = true
+				this.#sendVehicleTurret(true)
+			}
+			return
+		}
 		if (event.button === 0) {
 			if (this.#weaponKind === "rail-gun") this.#beginRailCharge()
 			else this.#fire()
@@ -877,6 +906,7 @@ export class ArenaGame {
 
 	readonly #onMouseUp = (event: MouseEvent): void => {
 		this.#mouseLookDragging = false
+		if (event.button === 0) this.#vehicleMouseFire = false
 		if (event.button === 0) this.#releaseRailCharge()
 	}
 
@@ -1644,6 +1674,10 @@ export class ArenaGame {
 	}
 
 	readonly #onSnapshot = (snapshot: ArenaSnapshot): void => {
+		this.#vehicles.reconcile(
+			snapshot.vehicles ?? [],
+			snapshot.napalmHazards ?? [],
+		)
 		this.#drones.applySnapshot(snapshot)
 		this.#droneSalvage.applySnapshot(snapshot)
 		const activeMissiles = new Set<number>()
@@ -2251,6 +2285,7 @@ export class ArenaGame {
 			this.#coyoteRemaining = null
 		}
 		this.#gamepadConnected = gamepad.connected
+		if (this.#updateVehicleControl(gamepad, delta)) return
 		const switchEdge = inputEdge(gamepad.switchWeapon, this.#switchHeld)
 		this.#switchHeld = switchEdge.held
 		if (switchEdge.triggered) this.#requestSwitch(1)
@@ -2757,6 +2792,123 @@ export class ArenaGame {
 	#nextDroneActionId(): number {
 		this.#droneActionSequence += 1
 		return this.#droneActionSequence
+	}
+
+	#requestVehicleAction(): boolean {
+		if (!this.#connected || this.#dead) return false
+		const occupied = this.#vehicles.localSeat(this.#socket.id)
+		this.#vehicleActionSequence += 1
+		if (occupied !== null) {
+			this.#socket.emit("arena:vehicle-seat", {
+				clientActionId: this.#vehicleActionSequence,
+				type: "exit",
+			} satisfies VehicleSeatIntent)
+			return true
+		}
+		const nearby = this.#vehicles.nearestAvailableSeat(this.#player.position)
+		if (nearby === null) {
+			this.#vehicleActionSequence -= 1
+			return false
+		}
+		this.#socket.emit("arena:vehicle-seat", {
+			clientActionId: this.#vehicleActionSequence,
+			seatId: nearby.seatId,
+			type: "enter",
+			vehicleId: nearby.vehicleId,
+		} satisfies VehicleSeatIntent)
+		return true
+	}
+
+	#updateVehicleControl(
+		gamepad: Readonly<{
+			fire: boolean
+			jump: boolean
+			sprint: boolean
+			x: number
+			y: number
+		}>,
+		delta: number,
+	): boolean {
+		const seat = this.#vehicles.localSeat(this.#socket.id)
+		this.#weapon.visible = seat === null
+		if (seat === null) return false
+		this.#slide = false
+		this.#surfaceSlide = false
+		this.#sprinting = false
+		this.#crouching = false
+		this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+		this.#mantle = INITIAL_MANTLE_STATE
+		this.#player.jumps = 0
+		this.#player.yaw -= this.#lookGamepad.x * delta * 2.4
+		this.#player.pitch = THREE.MathUtils.clamp(
+			this.#player.pitch - this.#lookGamepad.y * delta * 2.1,
+			-1.15,
+			1.15,
+		)
+		const vehiclePosition = this.#vehicles.vehiclePosition(seat.vehicleId)
+		const vehicleVelocity = this.#vehicles.vehicleVelocity(seat.vehicleId)
+		if (vehiclePosition !== null) {
+			this.#player.position.copy(vehiclePosition)
+			this.#player.position.y += seat.seatId === "turret" ? 2.4 : 1.8
+		}
+		if (vehicleVelocity !== null) this.#player.velocity.copy(vehicleVelocity)
+		this.#vehicleControlElapsed += delta
+		if (this.#vehicleControlElapsed < 0.05) return true
+		this.#vehicleControlElapsed = 0
+		if (seat.seatId === "rider" || seat.seatId === "driver") {
+			this.#sendVehicleDriverControl(gamepad)
+		}
+		if (seat.seatId === "turret") {
+			this.#sendVehicleTurret(
+				this.#vehicleMouseFire || gamepad.fire || this.#keys.has("KeyF"),
+			)
+		}
+		return true
+	}
+
+	#sendVehicleDriverControl(
+		gamepad: Readonly<{
+			jump: boolean
+			sprint: boolean
+			x: number
+			y: number
+		}> = { jump: false, sprint: false, x: 0, y: 0 },
+	): void {
+		const seat = this.#vehicles.localSeat(this.#socket.id)
+		if (seat === null || (seat.seatId !== "rider" && seat.seatId !== "driver"))
+			return
+		const keyboardSteering =
+			Number(this.#keys.has("KeyD")) - Number(this.#keys.has("KeyA"))
+		const keyboardThrottle =
+			Number(this.#keys.has("KeyW")) - Number(this.#keys.has("KeyS"))
+		this.#vehicleControlSequence += 1
+		this.#socket.emit("arena:vehicle-control", {
+			afterburner:
+				seat.kind === "bike" &&
+				(this.#keys.has("ShiftLeft") ||
+					this.#keys.has("ShiftRight") ||
+					gamepad.sprint),
+			brake: this.#keys.has("Space") || gamepad.jump,
+			clientInputId: this.#vehicleControlSequence,
+			steering: THREE.MathUtils.clamp(keyboardSteering + gamepad.x, -1, 1),
+			throttle: THREE.MathUtils.clamp(keyboardThrottle - gamepad.y, -1, 1),
+			vehicleId: seat.vehicleId,
+		} satisfies VehicleControlIntent)
+	}
+
+	#sendVehicleTurret(fire: boolean): void {
+		const seat = this.#vehicles.localSeat(this.#socket.id)
+		if (seat?.seatId !== "turret") return
+		this.#vehicleTurretSequence += 1
+		const direction = new THREE.Vector3(0, 0, -1).applyEuler(
+			new THREE.Euler(this.#player.pitch, this.#player.yaw, 0, "YXZ"),
+		)
+		this.#socket.emit("arena:vehicle-turret", {
+			clientInputId: this.#vehicleTurretSequence,
+			direction: direction.toArray(),
+			fire,
+			vehicleId: seat.vehicleId,
+		} satisfies VehicleTurretIntent)
 	}
 
 	#requestGrenadeCycle(): void {
@@ -3900,7 +4052,8 @@ export class ArenaGame {
 	}
 
 	#updateRemotePlayers(delta: number): void {
-		for (const model of this.#remotePlayers.values()) {
+		for (const [playerId, model] of this.#remotePlayers) {
+			const mountedSeat = this.#vehicles.localSeat(playerId)
 			model.damageTracker = {
 				...model.damageTracker,
 				state: stepDamageFlinch(model.damageTracker.state, delta),
@@ -3926,6 +4079,8 @@ export class ArenaGame {
 					)
 					if (authoredDeath !== null) layers.push(authoredDeath)
 				}
+			} else if (mountedSeat !== null) {
+				layers.push(vehicleMountedLayer(mountedSeat.seatId))
 			} else if (model.mantle.active) {
 				layers.push(
 					risingFallingAnimationLayer({
@@ -4089,7 +4244,12 @@ export class ArenaGame {
 							weaponsFreeTarget,
 							model.weaponsFreeWeight - weaponsFreeStep,
 						)
-			if (model.weaponsFree && model.reload === null && !model.dead) {
+			if (
+				mountedSeat === null &&
+				model.weaponsFree &&
+				model.reload === null &&
+				!model.dead
+			) {
 				layers.push(
 					weaponsFreeLayer(pointingDirection.pitch, pointingDirection.yaw),
 				)
@@ -4189,6 +4349,7 @@ export class ArenaGame {
 	}
 
 	#sendSnapshot(delta: number): void {
+		if (this.#vehicles.localSeat(this.#socket.id) !== null) return
 		this.#snapshotElapsed += delta
 		if (
 			!this.#connected ||
@@ -4247,6 +4408,10 @@ export class ArenaGame {
 		if (this.#hudElapsed < 0.09) return
 		this.#hudElapsed = 0
 		const nearbyPickup = this.#nearbyPickupWeapon()
+		const vehicleSeat = this.#vehicles.localSeat(this.#socket.id)
+		const nearbyVehicle = this.#vehicles.nearestAvailableSeat(
+			this.#player.position,
+		)
 		const pickupNearby = nearbyPickup !== null
 		this.#onHud({
 			ammo: this.#ammo,
@@ -4341,6 +4506,9 @@ export class ArenaGame {
 			targeting: this.#targetingState,
 			wallTraversal: this.#replicatedWallTraversal().mode,
 			weapon: this.#weaponKind,
+			vehicleKind: vehicleSeat?.kind ?? nearbyVehicle?.kind ?? null,
+			vehicleNearby: vehicleSeat === null && nearbyVehicle !== null,
+			vehicleSeat: vehicleSeat?.seatId ?? null,
 			weaponSlots: [
 				{ ...this.#equipmentSlots[0] },
 				this.#equipmentSlots[1] === null
@@ -4407,6 +4575,7 @@ export class ArenaGame {
 		this.#noiseTimer = Math.max(0, this.#noiseTimer - delta)
 		this.#drones.update(delta)
 		this.#droneSalvage.update(delta)
+		this.#vehicles.update(delta)
 		this.#updateMuzzleFlashes(delta)
 		this.#damageEffects.update(delta)
 		this.#fistContactEffects.update(delta)

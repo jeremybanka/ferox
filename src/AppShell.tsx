@@ -169,6 +169,23 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					</span>
 				</drone-recovery-prompt>
 
+				<vehicle-action-prompt
+					data-active={hud.vehicleNearby || hud.vehicleSeat !== null}
+					aria-hidden={!hud.vehicleNearby && hud.vehicleSeat === null}
+				>
+					<strong>
+						{hud.vehicleSeat === null
+							? `${hud.vehicleKind?.toUpperCase() ?? "VEHICLE"} READY`
+							: `${hud.vehicleKind?.toUpperCase()} • ${hud.vehicleSeat.toUpperCase()} SEAT`}
+					</strong>
+					<span>
+						<kbd>E</kbd>
+						{hud.vehicleSeat === null ? " ENTER" : " DISMOUNT"}
+						{hud.vehicleSeat === "rider" ? " • SHIFT AFTERBURNER" : null}
+						{hud.vehicleSeat === "turret" ? " • FIRE TURRET" : null}
+					</span>
+				</vehicle-action-prompt>
+
 				<pickup-status-board aria-label="Arena weapon pickup status">
 					<pickup-status data-status={hud.grapplePickupStatus}>
 						<strong>GRAPPLE</strong>
