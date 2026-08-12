@@ -27,12 +27,15 @@ import type {
 	GrenadeSnapshot,
 	IncomingLockSnapshot,
 	IncomingStandardLockSnapshot,
+	HitscanBeamSnapshot,
 	InventoryActionIntent,
 	MiniMissileEndedSnapshot,
 	MiniMissileExplodedSnapshot,
 	MiniMissileIntent,
 	MiniMissilePickupSnapshot,
 	MiniMissileSnapshot,
+	LockChargeIntent,
+	LockChargeSnapshot,
 	MeleeHitResult,
 	PlayerMoveSnapshot,
 	PlayerDamageSnapshot,
@@ -100,6 +103,7 @@ import {
 	GRENADE_RESTITUTION,
 	GRAPPLE_MAX_RANGE,
 	HIT_MARKER_DURATION_SECONDS,
+	HITSCAN_BEAM_LIFETIME_SECONDS,
 	MINI_MISSILE_PICKUP_POSITION,
 	MINI_MISSILE_PICKUP_RADIUS,
 	PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT,
@@ -353,7 +357,12 @@ type ArenaPickupVisual = {
 	model: GunModel
 	ownerId: string | null
 	position: THREE.Vector3
-	weapon: "bubble-gun" | "rail-gun" | "shotgun"
+	weapon: Exclude<WeaponKind, "arc-blaster" | "mini-missile">
+}
+
+type HitscanBeamVisual = {
+	life: number
+	line: THREE.Line
 }
 
 type MiniMissileVisual = {
@@ -480,6 +489,7 @@ export class ArenaGame {
 	readonly #dustParticles: DustParticle[] = []
 	readonly #grenadeExplosions: GrenadeExplosion[] = []
 	readonly #grenades: Grenade[] = []
+	readonly #hitscanBeams: HitscanBeamVisual[] = []
 	readonly #grappleTetherMaterial = new THREE.LineBasicMaterial({
 		color: "#73f5ff",
 		depthTest: true,
@@ -539,6 +549,7 @@ export class ArenaGame {
 	#fireCooldown = 0
 	#railCharging = false
 	#railChargeStartedAt = 0
+	#lockCharge: LockChargeSnapshot | null = null
 	#triggerHeld = false
 	#freeAim = false
 	#grenadeCooldown = 0
@@ -738,6 +749,8 @@ export class ArenaGame {
 		this.#socket.off("arena:bubble-popped", this.#onBubblePopped)
 		this.#socket.off("arena:ballistic", this.#onBallistic)
 		this.#socket.off("arena:ballistic-ended", this.#onBallisticEnded)
+		this.#socket.off("arena:lock-charge", this.#onLockCharge)
+		this.#socket.off("arena:hitscan-beam", this.#onHitscanBeam)
 		this.#socket.off("arena:shotgun-pellets", this.#onShotgunPellets)
 		this.#socket.off(
 			"arena:shotgun-pellet-suspended",
@@ -800,6 +813,12 @@ export class ArenaGame {
 			;(visual.mesh.material as THREE.Material).dispose()
 		}
 		this.#ballistics.clear()
+		for (const beam of this.#hitscanBeams) {
+			this.#scene.remove(beam.line)
+			beam.line.geometry.dispose()
+			;(beam.line.material as THREE.Material).dispose()
+		}
+		this.#hitscanBeams.length = 0
 		for (const model of this.#remotePlayers.values()) {
 			model.ragdoll?.dispose()
 			this.#scene.remove(model.rig.root)
@@ -826,7 +845,10 @@ export class ArenaGame {
 			this.#requestSwitch(1)
 		if (isGrenadeSwitchKeyboardInput(event.code, event.repeat))
 			this.#requestGrenadeCycle()
-		if (event.code === "KeyE" && !event.repeat) this.#requestDroneRecovery()
+		if (event.code === "KeyE" && !event.repeat) {
+			this.#requestDroneRecovery()
+			this.#requestPickup()
+		}
 		if (event.code === "KeyX" && !event.repeat) this.#requestDrop()
 		const gesture = keyboardGestureInput(event.code, event.repeat)
 		if (gesture !== null) this.#requestGesture(gesture)
@@ -835,7 +857,10 @@ export class ArenaGame {
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
 		this.#keys.delete(event.code)
 		if (this.#gameplayInputSuppressed) return
-		if (event.code === "KeyF") this.#releaseRailCharge()
+		if (event.code === "KeyF") {
+			this.#releaseRailCharge()
+			this.#releaseLockCharge()
+		}
 	}
 
 	readonly #onMouseMove = (event: MouseEvent): void => {
@@ -877,6 +902,8 @@ export class ArenaGame {
 		if (event.target === this.#canvas) this.#mouseLookDragging = true
 		if (event.button === 0) {
 			if (this.#weaponKind === "rail-gun") this.#beginRailCharge()
+			else if (gunDefinition(this.#weaponKind).fire.type === "hitscan")
+				this.#beginLockCharge()
 			else this.#fire()
 		}
 		if (event.button === 2) this.#throwGrenade()
@@ -885,7 +912,10 @@ export class ArenaGame {
 	readonly #onMouseUp = (event: MouseEvent): void => {
 		this.#mouseLookDragging = false
 		if (this.#gameplayInputSuppressed) return
-		if (event.button === 0) this.#releaseRailCharge()
+		if (event.button === 0) {
+			this.#releaseRailCharge()
+			this.#releaseLockCharge()
+		}
 	}
 
 	readonly #onContextMenu = (event: MouseEvent): void => {
@@ -923,6 +953,7 @@ export class ArenaGame {
 		this.#pickupProgress = 0
 		this.#equipmentRevision = -1
 		this.#cancelReloadPresentation()
+		this.#lockCharge = null
 		this.#drones.reset()
 		this.#droneSalvage.dispose()
 		this.#droneGrenades = 0
@@ -1423,6 +1454,7 @@ export class ArenaGame {
 		]
 		this.#weaponKind = active.weapon
 		if (active.weapon !== "rail-gun") this.#railCharging = false
+		if (active.weapon !== this.#lockCharge?.weapon) this.#lockCharge = null
 		this.#ammo = active.ammo
 		this.#setLocalGunModel(active.weapon)
 		if (previousRevision >= 0) {
@@ -1604,6 +1636,67 @@ export class ArenaGame {
 		)
 	}
 
+	readonly #onLockCharge = (snapshot: LockChargeSnapshot): void => {
+		if (
+			snapshot.ownerId !== this.#socket.id ||
+			(snapshot.weapon !== "ion-beam-rifle" &&
+				snapshot.weapon !== "heavy-laser") ||
+			!Number.isSafeInteger(snapshot.chargeId)
+		)
+			return
+		this.#lockCharge = snapshot.phase === "charging" ? snapshot : null
+	}
+
+	readonly #onHitscanBeam = (snapshot: HitscanBeamSnapshot): void => {
+		if (
+			!Array.isArray(snapshot.start) ||
+			!Array.isArray(snapshot.end) ||
+			snapshot.start.length !== 3 ||
+			snapshot.end.length !== 3 ||
+			![...snapshot.start, ...snapshot.end].every(Number.isFinite)
+		)
+			return
+		const geometry = new THREE.BufferGeometry().setFromPoints([
+			new THREE.Vector3(...snapshot.start),
+			new THREE.Vector3(...snapshot.end),
+		])
+		const material = new THREE.LineBasicMaterial({
+			color: snapshot.color,
+			depthWrite: false,
+			opacity: 0.96,
+			transparent: true,
+		})
+		const line = new THREE.Line(geometry, material)
+		line.name = `${snapshot.weapon} authoritative beam ${snapshot.beamId}`
+		line.frustumCulled = false
+		this.#scene.add(line)
+		this.#hitscanBeams.push({ life: HITSCAN_BEAM_LIFETIME_SECONDS, line })
+		this.#spawnMuzzleFlash(
+			new THREE.Vector3(...snapshot.start),
+			new THREE.Vector3(...snapshot.end)
+				.sub(new THREE.Vector3(...snapshot.start))
+				.normalize(),
+			snapshot.color,
+		)
+		if (snapshot.ownerId !== this.#socket.id)
+			this.#audio.playWeapon(snapshot.weapon)
+	}
+
+	#updateHitscanBeams(delta: number): void {
+		for (let index = this.#hitscanBeams.length - 1; index >= 0; index -= 1) {
+			const beam = this.#hitscanBeams[index]
+			if (beam === undefined) continue
+			beam.life -= delta
+			const material = beam.line.material as THREE.LineBasicMaterial
+			material.opacity = Math.max(0, beam.life / HITSCAN_BEAM_LIFETIME_SECONDS)
+			if (beam.life > 0) continue
+			this.#scene.remove(beam.line)
+			beam.line.geometry.dispose()
+			material.dispose()
+			this.#hitscanBeams.splice(index, 1)
+		}
+	}
+
 	readonly #onShotgunPellets = (snapshots: ShotgunPelletSnapshot[]): void => {
 		if (!Array.isArray(snapshots)) return
 		this.#shotgunPellets.reconcile(
@@ -1725,6 +1818,8 @@ export class ArenaGame {
 		this.#socket.on("arena:bubble-popped", this.#onBubblePopped)
 		this.#socket.on("arena:ballistic", this.#onBallistic)
 		this.#socket.on("arena:ballistic-ended", this.#onBallisticEnded)
+		this.#socket.on("arena:lock-charge", this.#onLockCharge)
+		this.#socket.on("arena:hitscan-beam", this.#onHitscanBeam)
 		this.#socket.on("arena:shotgun-pellets", this.#onShotgunPellets)
 		this.#socket.on(
 			"arena:shotgun-pellet-suspended",
@@ -2008,10 +2103,18 @@ export class ArenaGame {
 
 		const arenaPickupColors = {
 			"bubble-gun": "#f58bdf",
+			"heavy-laser": "#ff6d47",
+			"ion-beam-rifle": "#ffe55c",
 			"rail-gun": "#ffc15c",
 			shotgun: "#ff7657",
 		} as const
-		for (const weapon of ["shotgun", "bubble-gun", "rail-gun"] as const) {
+		for (const weapon of [
+			"shotgun",
+			"bubble-gun",
+			"rail-gun",
+			"ion-beam-rifle",
+			"heavy-laser",
+		] as const) {
 			const color = arenaPickupColors[weapon]
 			const group = new THREE.Group()
 			group.name = `${weapon} world pickup`
@@ -2736,6 +2839,9 @@ export class ArenaGame {
 		if (this.#weaponKind === "rail-gun") {
 			if (trigger && !this.#triggerHeld) this.#beginRailCharge()
 			if (!trigger && this.#triggerHeld) this.#releaseRailCharge()
+		} else if (gunDefinition(this.#weaponKind).fire.type === "hitscan") {
+			if (trigger && !this.#triggerHeld) this.#beginLockCharge()
+			if (!trigger && this.#triggerHeld) this.#releaseLockCharge()
 		} else if (trigger && this.#fireCooldown <= 0) this.#fire()
 		this.#triggerHeld = trigger
 		const bombPressed = gamepad.bomb
@@ -3028,6 +3134,49 @@ export class ArenaGame {
 		this.#fireCooldown = gunDefinition("rail-gun").fire.clientCooldownSeconds
 		this.#recoilState = addRecoilShot(this.#recoilState)
 		this.#recoilPulse += 1
+	}
+
+	#beginLockCharge(): void {
+		const gun = gunDefinition(this.#weaponKind)
+		if (
+			gun.fire.type !== "hitscan" ||
+			(gun.id !== "ion-beam-rifle" && gun.id !== "heavy-laser") ||
+			this.#lockCharge !== null ||
+			this.#dead ||
+			this.#reload !== null ||
+			this.#ammo === 0 ||
+			this.#fireCooldown > 0 ||
+			this.#sprinting ||
+			this.#targetingState !== "locked" ||
+			this.#lockedTargetId?.kind !== "pilot"
+		)
+			return
+		const tuning = gun.tuning
+		if (tuning.kind !== "hitscan") return
+		this.#shotSequence += 1
+		const now = Date.now()
+		this.#lockCharge = {
+			chargeId: this.#shotSequence,
+			completesAt: now + tuning.chargeMs,
+			ownerId: this.#socket.id ?? "local",
+			phase: "charging",
+			startedAt: now,
+			weapon: gun.id,
+		}
+		this.#socket.emit("arena:lock-charge", {
+			clientChargeId: this.#shotSequence,
+			type: "start",
+		} satisfies LockChargeIntent)
+	}
+
+	#releaseLockCharge(): void {
+		const charge = this.#lockCharge
+		if (charge === null) return
+		this.#lockCharge = null
+		this.#socket.emit("arena:lock-charge", {
+			clientChargeId: charge.chargeId,
+			type: "release",
+		} satisfies LockChargeIntent)
 	}
 
 	#throwGrenade(): void {
@@ -3645,7 +3794,13 @@ export class ArenaGame {
 				this.#slidePoseWeight * 0.09,
 			delta * 9,
 		)
-		this.#camera.fov = stepCameraFov(this.#camera.fov, speed, delta)
+		this.#camera.fov = stepCameraFov(
+			this.#camera.fov,
+			speed,
+			delta,
+			gunDefinition(this.#weaponKind).lockOptics,
+			this.#targetingState === "locked" && !this.#dead && !this.#sprinting,
+		)
 		this.#camera.updateProjectionMatrix()
 		this.#camera.updateMatrixWorld()
 	}
@@ -3759,7 +3914,7 @@ export class ArenaGame {
 		const gun = gunDefinition(this.#weaponKind)
 		const active =
 			this.#connected &&
-			gun.fire.type === "projectile" &&
+			(gun.fire.type === "projectile" || gun.capabilities.requiresLock) &&
 			this.#targetingState === "locked" &&
 			this.#lockedTargetId?.kind === "pilot"
 		if (active === this.#standardLockReported) return
@@ -4267,13 +4422,20 @@ export class ArenaGame {
 		const grappleState = this.#grappleStates.get(this.#socket.id ?? "")
 		this.#onHud({
 			ammo: this.#ammo,
-			chargeProgress: this.#railCharging
-				? Math.min(
-						1,
-						(performance.now() - this.#railChargeStartedAt) /
-							RAIL_CHARGE_MAX_MS,
-					)
-				: 0,
+			chargeProgress:
+				this.#lockCharge !== null
+					? Math.min(
+							1,
+							(Date.now() - this.#lockCharge.startedAt) /
+								(this.#lockCharge.completesAt - this.#lockCharge.startedAt),
+						)
+					: this.#railCharging
+						? Math.min(
+								1,
+								(performance.now() - this.#railChargeStartedAt) /
+									RAIL_CHARGE_MAX_MS,
+							)
+						: 0,
 			activeSlot: this.#activeSlot,
 			connection: this.#connected
 				? "online"
@@ -4407,6 +4569,7 @@ export class ArenaGame {
 		this.#drones.update(delta)
 		this.#droneSalvage.update(delta)
 		this.#updateMuzzleFlashes(delta)
+		this.#updateHitscanBeams(delta)
 		this.#damageEffects.update(delta)
 		this.#fistContactEffects.update(delta)
 		this.#updateProjectiles(delta)

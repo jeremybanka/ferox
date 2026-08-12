@@ -1049,6 +1049,8 @@ export const DEFAULT_GAME_AUDIO = defineGameAudio({
 	weapons: {
 		"arc-blaster": arcBlaster,
 		"bubble-gun": bubbleGun,
+		"heavy-laser": railGun,
+		"ion-beam-rifle": arcBlaster,
 		"mini-missile": miniMissile,
 		"rail-gun": railGun,
 		shotgun,
