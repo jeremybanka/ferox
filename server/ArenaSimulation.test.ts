@@ -117,6 +117,47 @@ test("player projectiles damage another pilot across a simulation tick", () => {
 	expect(endedProjectiles).toEqual([{ id: 1 }])
 })
 
+test("locked hitscan resolves and reports one instantaneous pilot hit", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 8, 13],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 8, 9],
+			velocity: [0, 0, 0],
+		},
+	]
+	const damage: Array<{
+		amount: number
+		impact: PlayerDamageImpact
+		playerId: string
+	}> = []
+	const directHits: Array<{ playerId: string; result: DirectHitResult }> = []
+	const simulation = makeSimulation(
+		players,
+		(playerId, amount, impact) => damage.push({ amount, impact, playerId }),
+		[],
+		directHits,
+	)
+	const result = simulation.fireLockedHitscan("shooter", 7, "target", 40)
+	expect(result).not.toBeNull()
+	expect(result?.damage).toBe(40)
+	expect(damage).toMatchObject([
+		{ amount: 40, impact: { source: "hitscan" }, playerId: "target" },
+	])
+	expect(directHits).toMatchObject([
+		{
+			playerId: "shooter",
+			result: { clientShotId: 7, damage: 40, targetId: "target" },
+		},
+	])
+})
+
 test("player projectile intent IDs reject replay before spawning", () => {
 	const players: SimulationPlayer[] = [
 		{
