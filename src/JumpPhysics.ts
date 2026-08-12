@@ -1,4 +1,5 @@
 export const JUMP_PHYSICS = {
+	coyoteTimeSeconds: 0.1,
 	doubleJumpVelocity: 9.4,
 	gravity: 23,
 	groundContactTolerance: 0.12,
@@ -11,12 +12,14 @@ export const JUMP_PHYSICS = {
 export type JumpCount = 0 | 1 | 2
 
 export type JumpVerticalState = {
+	coyoteRemaining?: number | null
 	jumpCount: JumpCount
 	positionY: number
 	velocityY: number
 }
 
 export type JumpPhysicsStep = JumpVerticalState & {
+	coyoteRemaining: number | null
 	departedGround: boolean
 	groundedBefore: boolean
 	impulse: JumpCount | null
@@ -67,10 +70,13 @@ export function stepJumpPhysics(
 		groundAfter: number
 		groundBefore: number
 		groundMidpoint?: number
+		gravityScale?: number
 		jumpRequested: boolean
+		ledgeCoyoteEligible?: boolean
 		momentumDepartureVelocityY?: number
 	},
 ): JumpPhysicsStep {
+	let coyoteRemaining = state.coyoteRemaining ?? null
 	let jumpCount = state.jumpCount
 	let positionY = state.positionY
 	let velocityY = state.velocityY
@@ -82,6 +88,7 @@ export function stepJumpPhysics(
 		positionY = options.groundBefore
 		velocityY = Math.max(velocityY, 0)
 		jumpCount = 0
+		coyoteRemaining = null
 	}
 
 	let impulse: JumpCount | null = null
@@ -90,6 +97,11 @@ export function stepJumpPhysics(
 			velocityY = JUMP_PHYSICS.jumpVelocity
 			jumpCount = 1
 			impulse = 1
+		} else if (coyoteRemaining !== null) {
+			velocityY = JUMP_PHYSICS.jumpVelocity
+			jumpCount = 1
+			impulse = 1
+			coyoteRemaining = null
 		} else if (jumpCount < 2) {
 			velocityY = JUMP_PHYSICS.doubleJumpVelocity
 			jumpCount = 2
@@ -117,11 +129,23 @@ export function stepJumpPhysics(
 		groundedBefore && impulse === null && (momentumDeparture || !followsGround)
 	if (departedGround) {
 		jumpCount = 1
-		if (momentumDeparture) velocityY = momentumDepartureVelocityY
+		if (momentumDeparture) {
+			velocityY = momentumDepartureVelocityY
+			coyoteRemaining = null
+		} else if (options.ledgeCoyoteEligible !== false) {
+			coyoteRemaining = JUMP_PHYSICS.coyoteTimeSeconds
+		}
+	}
+	if (!groundedBefore && impulse === null && coyoteRemaining !== null) {
+		coyoteRemaining -= options.delta
+		if (coyoteRemaining < 0) coyoteRemaining = null
 	}
 
 	if (!groundedBefore || departedGround) {
-		velocityY -= JUMP_PHYSICS.gravity * options.delta
+		velocityY -=
+			JUMP_PHYSICS.gravity *
+			options.delta *
+			Math.max(0, options.gravityScale ?? 1)
 	}
 	if (followsGround) {
 		positionY = options.groundAfter
@@ -140,6 +164,7 @@ export function stepJumpPhysics(
 	}
 
 	return {
+		coyoteRemaining,
 		departedGround,
 		groundedBefore,
 		impactVelocity,

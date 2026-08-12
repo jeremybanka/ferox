@@ -1,4 +1,6 @@
 import type { ArenaSurfaceContact } from "./ArenaWorld.ts"
+import { PLAYER_SPRINT_SPEED_LIMIT } from "./game-constants.ts"
+import { SLIDE_PHYSICS, stepContactSlidePhysics } from "./SlidePhysics.ts"
 
 export const WALL_MINIMUM_INCLINATION_RADIANS = (80 * Math.PI) / 180
 export const WALL_RUN_ENTRY_SPEED = 7.2
@@ -8,11 +10,14 @@ export const WALL_SLIDE_VIEW_COSINE = Math.cos(WALL_SLIDE_VIEW_ANGLE_RADIANS)
 export const WALL_RUN_MAXIMUM_SECONDS = 1.65
 export const WALL_RUN_DOWNWARD_SPEED = 1.25
 export const WALL_SLIDE_DOWNWARD_SPEED = 2.25
+export const WALL_SLIDE_TANGENTIAL_DAMPING_PER_SECOND = -Math.log(0.78) * 60
 export const WALL_JUMP_OUTWARD_SPEED = 6.8
 export const WALL_JUMP_UPWARD_SPEED = 7.6
 export const WALL_RECONTACT_SECONDS = 0.22
+export const WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED =
+	PLAYER_SPRINT_SPEED_LIMIT * 1.25
 
-export type WallTraversalMode = "none" | "run" | "slide"
+export type WallTraversalMode = "crouch-slide" | "none" | "run" | "slide"
 
 export type WallTraversalState = Readonly<{
 	elapsed: number
@@ -110,6 +115,15 @@ function runVelocityAlongWall(
 	]
 }
 
+function limitWallPlanarVelocity(
+	velocity: readonly [number, number, number],
+): readonly [number, number, number] {
+	const speed = Math.hypot(velocity[0], velocity[2])
+	if (speed <= WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED) return velocity
+	const scale = WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED / speed
+	return [velocity[0] * scale, velocity[1], velocity[2] * scale]
+}
+
 export function stepWallTraversal(
 	state: WallTraversalState,
 	input: WallTraversalInput,
@@ -134,23 +148,6 @@ export function stepWallTraversal(
 			velocity: input.velocity,
 		}
 	}
-	if (input.crouching) {
-		const detachedByCrouch = state.mode !== "none"
-		return {
-			consumedJump: false,
-			detachedByCrouch,
-			resetJumpAvailability: false,
-			state: {
-				...INITIAL_WALL_TRAVERSAL_STATE,
-				recontactRemaining: detachedByCrouch
-					? WALL_RECONTACT_SECONDS
-					: cooldown,
-				requiresContactRelease: detachedByCrouch && input.contact !== null,
-				surfaceId: detachedByCrouch ? state.surfaceId : null,
-			},
-			velocity: input.velocity,
-		}
-	}
 	if (input.blocked || input.grounded || input.contact === null) {
 		const next = resetWithCooldown({ ...state, recontactRemaining: cooldown })
 		return {
@@ -162,7 +159,7 @@ export function stepWallTraversal(
 		}
 	}
 	const contact = input.contact
-	if (contact.inclinationRadians < WALL_MINIMUM_INCLINATION_RADIANS) {
+	if (contact.inclinationRadians <= SLIDE_PHYSICS.steepSurfaceRadians + 1e-12) {
 		return {
 			consumedJump: false,
 			detachedByCrouch: false,
@@ -185,9 +182,45 @@ export function stepWallTraversal(
 		}
 	}
 	const [normalX, , normalZ] = contact.normal
+	const contactVelocity = input.crouching
+		? input.velocity
+		: limitWallPlanarVelocity(input.velocity)
+	const [velocityX, velocityY, velocityZ] = contactVelocity
+	const normalSpeed = velocityX * normalX + velocityZ * normalZ
+	const tangentX = velocityX - normalX * normalSpeed
+	const tangentZ = velocityZ - normalZ * normalSpeed
+	if (input.crouching) {
+		const continuingRegularSlide =
+			state.mode === "crouch-slide" && state.surfaceId === contact.surfaceId
+		const regularSlide = stepContactSlidePhysics(
+			{ sliding: continuingRegularSlide, velocity: contactVelocity },
+			{
+				delta,
+				surfaceNormal: contact.surfaceNormal ?? contact.normal,
+			},
+		)
+		return {
+			consumedJump: false,
+			detachedByCrouch: false,
+			resetJumpAvailability:
+				state.mode === "none" || state.surfaceId !== contact.surfaceId,
+			state: {
+				elapsed:
+					state.mode === "crouch-slide" && state.surfaceId === contact.surfaceId
+						? state.elapsed + delta
+						: 0,
+				mode: "crouch-slide",
+				normal: contact.normal,
+				recontactRemaining: 0,
+				requiresContactRelease: false,
+				surfaceId: contact.surfaceId,
+			},
+			velocity: regularSlide.velocity,
+		}
+	}
 	if (input.jumpRequested) {
 		const [tangentX, tangentZ] = runVelocityAlongWall(
-			input.velocity,
+			contactVelocity,
 			input.viewDirection,
 			contact.normal,
 		)
@@ -207,13 +240,9 @@ export function stepWallTraversal(
 			],
 		}
 	}
-	const [velocityX, velocityY, velocityZ] = input.velocity
 	const planarSpeed = Math.hypot(velocityX, velocityZ)
-	const normalSpeed = velocityX * normalX + velocityZ * normalZ
-	const tangentX = velocityX - normalX * normalSpeed
-	const tangentZ = velocityZ - normalZ * normalSpeed
 	const [runVelocityX, runVelocityZ] = runVelocityAlongWall(
-		input.velocity,
+		contactVelocity,
 		input.viewDirection,
 		contact.normal,
 	)
@@ -231,14 +260,23 @@ export function stepWallTraversal(
 		planarSpeed >= WALL_RUN_ENTRY_SPEED &&
 		(state.surfaceId !== contact.surfaceId ||
 			state.elapsed < WALL_RUN_MAXIMUM_SECONDS)
+	const runEligible =
+		contact.inclinationRadians >= WALL_MINIMUM_INCLINATION_RADIANS
 	const mode: WallTraversalMode =
-		!lookingIntoWall && (continuingRun || enteringRun) ? "run" : "slide"
+		runEligible && !lookingIntoWall && (continuingRun || enteringRun)
+			? "run"
+			: "slide"
 	const elapsed =
 		state.surfaceId === contact.surfaceId ? state.elapsed + delta : 0
+	const acquiredSurface =
+		state.mode === "none" || state.surfaceId !== contact.surfaceId
+	const slideDamping = Math.exp(
+		-WALL_SLIDE_TANGENTIAL_DAMPING_PER_SECOND * delta,
+	)
 	return {
 		consumedJump: false,
 		detachedByCrouch: false,
-		resetJumpAvailability: true,
+		resetJumpAvailability: acquiredSurface,
 		state: {
 			elapsed,
 			mode,
@@ -255,9 +293,9 @@ export function stepWallTraversal(
 						runVelocityZ,
 					]
 				: [
-						tangentX * 0.78,
+						tangentX * slideDamping,
 						Math.max(velocityY, -WALL_SLIDE_DOWNWARD_SPEED),
-						tangentZ * 0.78,
+						tangentZ * slideDamping,
 					],
 	}
 }

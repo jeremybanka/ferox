@@ -9,6 +9,9 @@ import {
 	isNewInventoryActionIntent,
 	isDroneRecoveryIntent,
 	isGrenadeSelectionIntent,
+	isJumpDirectionForImpulse,
+	isJumpSequence,
+	isMantleSnapshot,
 	isVisorExpression,
 	isWallTraversalSnapshot,
 	nextAcceptedRecoilSignal,
@@ -24,7 +27,11 @@ import {
 	type PlayerSnapshot,
 } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
-import { resolveArenaMotion } from "../src/ArenaWorld.ts"
+import {
+	arenaMovementGroundAt,
+	queryArenaLedge,
+	resolveArenaMotion,
+} from "../src/ArenaWorld.ts"
 import {
 	ARENA_SEED,
 	ARENA_WEAPON_PICKUP_PADS,
@@ -35,6 +42,12 @@ import {
 } from "../src/game-constants.ts"
 import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
 import { isJumpGrounded } from "../src/JumpPhysics.ts"
+import {
+	INITIAL_MANTLE_STATE,
+	MANTLE_MAXIMUM_RISE,
+	type MantleState,
+} from "../src/MantleTraversal.ts"
+import { sampleTerrainGradient } from "../src/SlidePhysics.ts"
 import {
 	PILOT_CROUCH_EYE_HEIGHT,
 	PILOT_STANDING_EYE_HEIGHT,
@@ -50,7 +63,12 @@ import {
 	type WallTraversalState,
 } from "../src/WallTraversal.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
-import { reconcileAuthoritativeMovement } from "./AuthoritativeMovement.ts"
+import {
+	authoritativeTraversalSpeedLimit,
+	consumeAuthoritativeJumpSignal,
+	limitAuthoritativeTraversalDestination,
+	reconcileAuthoritativeMovement,
+} from "./AuthoritativeMovement.ts"
 import { MeleeCombat } from "./MeleeCombat.ts"
 import { isFireCadenceReady } from "./FireCadence.ts"
 import { MiniMissileArmory, type LockUpdate } from "./MiniMissileArmory.ts"
@@ -137,6 +155,7 @@ const applyPlayerDamage = (
 				emote: null,
 				freeAim: false,
 				jump: 0,
+				mantle: { active: false, progress: 0, surfaceId: null },
 				lifeSequence: player.lifeSequence + 1,
 				punchStartedAt: 0,
 				reload: null,
@@ -357,6 +376,13 @@ realtime(
 		let authoritativeLifeSequence = 0
 		let authoritativeWallTraversal: WallTraversalState =
 			INITIAL_WALL_TRAVERSAL_STATE
+		let authoritativeMantle: MantleState = INITIAL_MANTLE_STATE
+		let authoritativeCoyoteRemaining: number | null = null
+		let authoritativeGrounded = true
+		let authoritativeJump: 0 | 1 | 2 = 0
+		let authoritativeJumpSequence = 0
+		let authoritativeSliding = false
+		let authoritativeSurfaceSliding = false
 		let lastMoveAt = performance.now()
 		const occupiedSlots = new Set(playerSpawnSlots.values())
 		const availableSlot = PLAYER_SPAWN_ORDER.find(
@@ -386,6 +412,7 @@ realtime(
 			freeAim: false,
 			id: socketId,
 			jump: 0,
+			mantle: { active: false, progress: 0, surfaceId: null },
 			lifeSequence: 0,
 			position: [spawnX, 8, spawnZ],
 			punchSequence: 0,
@@ -444,8 +471,14 @@ realtime(
 				typeof payload.sliding !== "boolean" ||
 				typeof payload.sprinting !== "boolean" ||
 				!isWallTraversalSnapshot(payload.wallTraversal) ||
+				(payload.mantle !== undefined && !isMantleSnapshot(payload.mantle)) ||
 				typeof payload.weaponsFree !== "boolean" ||
 				(payload.jump !== 0 && payload.jump !== 1 && payload.jump !== 2) ||
+				!isJumpDirectionForImpulse(
+					payload.jumpDirection,
+					payload.jumpImpulse,
+				) ||
+				!isJumpSequence(payload.jumpSequence) ||
 				payload.aimDirection.length !== 3 ||
 				payload.position.length !== 3 ||
 				payload.rotation.length !== 2 ||
@@ -466,45 +499,130 @@ realtime(
 			if (current.lifeSequence !== authoritativeLifeSequence) {
 				authoritativeLifeSequence = current.lifeSequence
 				authoritativeWallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+				authoritativeMantle = INITIAL_MANTLE_STATE
+				authoritativeCoyoteRemaining = null
+				authoritativeGrounded = true
+				authoritativeJump = 0
+				authoritativeJumpSequence = 0
+				authoritativeSliding = false
+				authoritativeSurfaceSliding = false
 				lastMoveAt = moveAt
 			}
-			const delta = Math.min(Math.max((moveAt - lastMoveAt) / 1_000, 0), 0.1)
+			const timerDelta = Math.max((moveAt - lastMoveAt) / 1_000, 0)
+			const delta = Math.min(timerDelta, 0.1)
 			lastMoveAt = moveAt
+			const requestedPosition = limitAuthoritativeTraversalDestination(
+				current.position,
+				payload.position,
+				authoritativeTraversalSpeedLimit({
+					previousSliding: authoritativeSliding,
+					previousSurfaceSliding: authoritativeSurfaceSliding,
+					previousWallTraversal: authoritativeWallTraversal,
+				}),
+				delta,
+			)
 			const resolvedMotion = resolveArenaMotion(
 				ARENA_SEED,
 				[current.position[0], current.position[2]],
-				[payload.position[0], payload.position[2]],
-				payload.position[1] - 0.86,
+				[requestedPosition[0], requestedPosition[2]],
+				requestedPosition[1] - 0.86,
 			)
 			const eyeHeight = payload.crouching
 				? PILOT_CROUCH_EYE_HEIGHT
 				: PILOT_STANDING_EYE_HEIGHT
+			const rootY = requestedPosition[1] - eyeHeight
+			const movementGround = arenaMovementGroundAt(
+				ARENA_SEED,
+				resolvedMotion.x,
+				resolvedMotion.z,
+				rootY + 0.45,
+			).height
 			const grounded = isJumpGrounded(
-				{ positionY: payload.position[1], velocityY: payload.velocity[1] },
-				arenaHeightAt(ARENA_SEED, resolvedMotion.x, resolvedMotion.z) +
-					eyeHeight,
+				{ positionY: requestedPosition[1], velocityY: current.velocity[1] },
+				movementGround + eyeHeight,
 			)
 			const yaw = payload.rotation[0]
+			const jumpSignal = consumeAuthoritativeJumpSignal(
+				authoritativeJumpSequence,
+				{
+					direction: payload.jumpDirection,
+					impulse: payload.jumpImpulse,
+					sequence: payload.jumpSequence,
+				},
+			)
+			authoritativeJumpSequence = jumpSignal.sequence
+			const mantleCandidate = payload.crouching
+				? null
+				: queryArenaLedge(ARENA_SEED, {
+						contact: resolvedMotion.contact,
+						eyeHeight,
+						maximumRise: MANTLE_MAXIMUM_RISE,
+						position: current.position,
+						velocity: payload.velocity,
+					})
 			const authoritativeMovement = reconcileAuthoritativeMovement({
 				contact: resolvedMotion.contact,
+				coyoteDelta: timerDelta,
 				crouching: payload.crouching,
 				delta,
 				grounded,
 				jump: payload.jump,
+				jumpDirection: jumpSignal.direction,
+				jumpImpulse: jumpSignal.impulse,
+				mantleCandidate,
+				position: current.position,
+				previousCoyoteRemaining: authoritativeCoyoteRemaining,
+				previousGrounded: authoritativeGrounded,
+				previousJump: authoritativeJump,
+				previousMantle: authoritativeMantle,
+				previousSliding: authoritativeSliding,
+				previousSurfaceSliding: authoritativeSurfaceSliding,
+				previousVelocity: current.velocity,
 				previousWallTraversal: authoritativeWallTraversal,
 				reportedWallTraversal: payload.wallTraversal,
+				resolvedPosition: [
+					resolvedMotion.x,
+					requestedPosition[1],
+					resolvedMotion.z,
+				],
 				sliding: payload.sliding,
+				terrainGradient: sampleTerrainGradient(
+					(x, z) => arenaHeightAt(ARENA_SEED, x, z),
+					resolvedMotion.x,
+					resolvedMotion.z,
+				),
 				velocity: payload.velocity,
 				viewDirection: horizontalViewDirectionFromYaw(yaw),
 			})
 			authoritativeWallTraversal = authoritativeMovement.traversalState
+			authoritativeMantle = authoritativeMovement.mantleState
+			authoritativeCoyoteRemaining = authoritativeMovement.coyoteRemaining
+			authoritativeGrounded = grounded && authoritativeMovement.velocity[1] <= 0
+			authoritativeJump = authoritativeMovement.jump
+			authoritativeSliding = authoritativeMovement.sliding
+			authoritativeSurfaceSliding = authoritativeMovement.surfaceSliding
+			const authoritativePosition = authoritativeMovement.mantlePosition ??
+				authoritativeMovement.resolvedPosition ?? [
+					resolvedMotion.x,
+					requestedPosition[1],
+					resolvedMotion.z,
+				]
 			players.set(socketId, {
 				...current,
-				...payload,
+				aimDirection: payload.aimDirection,
+				crouching: payload.crouching,
+				freeAim: payload.freeAim,
 				jump: authoritativeMovement.jump,
-				position: [resolvedMotion.x, payload.position[1], resolvedMotion.z],
+				mantle: authoritativeMovement.mantle,
+				position: [...authoritativePosition],
+				rotation: payload.rotation,
 				sliding: authoritativeMovement.sliding,
+				sprinting: payload.sprinting,
+				velocity: [...authoritativeMovement.velocity],
 				wallTraversal: authoritativeMovement.wallTraversal,
+				visorExpression: payload.visorExpression,
+				visorStartedAt: payload.visorStartedAt,
+				weaponsFree: payload.weaponsFree,
 				equippedWeapon: armory.activeWeapon(socketId),
 				dead: false,
 				deathStartedAt: null,
@@ -833,6 +951,7 @@ setInterval(() => {
 			emote: null,
 			freeAim: false,
 			jump: 0,
+			mantle: { active: false, progress: 0, surfaceId: null },
 			position: [
 				spawnX,
 				arenaHeightAt(ARENA_SEED, spawnX, spawnZ) + 1.72,

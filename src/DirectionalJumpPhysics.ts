@@ -1,4 +1,5 @@
 import { MOVEMENT_INPUT_DEADZONE } from "./MovementCore.ts"
+import { JUMP_DIRECTION_MINIMUM_MAGNITUDE } from "./arena-protocol.ts"
 import type { PlanarVelocity } from "./SlidePhysics.ts"
 import type { JumpCount } from "./JumpPhysics.ts"
 
@@ -30,7 +31,7 @@ export function directionalDoubleJumpImpulse(
 ): PlanarVelocity {
 	if (!desiredDirection) return { x: 0, z: 0 }
 	const desiredLength = Math.hypot(desiredDirection.x, desiredDirection.z)
-	if (desiredLength === 0) return { x: 0, z: 0 }
+	if (desiredLength < JUMP_DIRECTION_MINIMUM_MAGNITUDE) return { x: 0, z: 0 }
 	const scale = DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed / desiredLength
 	return {
 		x: desiredDirection.x * scale,

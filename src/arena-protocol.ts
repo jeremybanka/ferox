@@ -7,6 +7,32 @@ export type WallTraversalSnapshot = Readonly<{
 	normal: Vector3Tuple
 }>
 
+export type MantleSnapshot = Readonly<{
+	active: boolean
+	progress: number
+	surfaceId: string | null
+}>
+
+export const NO_MANTLE_SNAPSHOT: MantleSnapshot = {
+	active: false,
+	progress: 0,
+	surfaceId: null,
+}
+
+export function isMantleSnapshot(value: unknown): value is MantleSnapshot {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 3 &&
+		typeof record["active"] === "boolean" &&
+		typeof record["progress"] === "number" &&
+		Number.isFinite(record["progress"]) &&
+		(record["progress"] as number) >= 0 &&
+		(record["progress"] as number) <= 1 &&
+		(record["surfaceId"] === null || typeof record["surfaceId"] === "string")
+	)
+}
+
 export function isWallTraversalSnapshot(
 	value: unknown,
 ): value is WallTraversalSnapshot {
@@ -62,6 +88,7 @@ export type PlayerSnapshot = {
 	freeAim: boolean
 	id: string
 	jump: 0 | 1 | 2
+	mantle?: MantleSnapshot
 	lifeSequence: number
 	position: Vector3Tuple
 	punchSequence: number
@@ -80,6 +107,10 @@ export type PlayerSnapshot = {
 	weaponsFree: boolean
 }
 
+export type JumpImpulse = 1 | 2 | null
+export type JumpDirection = [number, number] | null
+export const JUMP_DIRECTION_MINIMUM_MAGNITUDE = 1e-6
+
 export type PlayerMoveSnapshot = Omit<
 	PlayerSnapshot,
 	| "dead"
@@ -95,7 +126,49 @@ export type PlayerMoveSnapshot = Omit<
 	| "respawnAt"
 	| "punchSequence"
 	| "punchStartedAt"
->
+> & {
+	/** One-shot edge; null also covers non-impulse ledge departure. */
+	jumpImpulse: JumpImpulse
+	/** World-space [x,z] direction, present only for a double-jump edge. */
+	jumpDirection: JumpDirection
+	/** Monotonic per-connection sequence; incremented only for a new impulse. */
+	jumpSequence: number
+}
+
+export function isJumpImpulse(value: unknown): value is JumpImpulse {
+	return value === null || value === 1 || value === 2
+}
+
+export function isJumpDirection(value: unknown): value is JumpDirection {
+	if (value === null) return true
+	if (
+		!Array.isArray(value) ||
+		value.length !== 2 ||
+		!value.every(Number.isFinite)
+	)
+		return false
+	const magnitude = Math.hypot(value[0] as number, value[1] as number)
+	return (
+		magnitude === 0 ||
+		(magnitude >= JUMP_DIRECTION_MINIMUM_MAGNITUDE && magnitude <= 1 + 1e-6)
+	)
+}
+
+export function isJumpDirectionForImpulse(
+	direction: unknown,
+	impulse: unknown,
+): direction is JumpDirection {
+	return (
+		isJumpImpulse(impulse) &&
+		isJumpDirection(direction) &&
+		((impulse === 2 && direction !== null) ||
+			(impulse !== 2 && direction === null))
+	)
+}
+
+export function isJumpSequence(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) >= 0
+}
 
 export const GESTURE_ACTIONS = ["wave", "salute", "fistbump", "punch"] as const
 export type GestureAction = (typeof GESTURE_ACTIONS)[number]

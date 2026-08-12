@@ -57,10 +57,12 @@ import {
 	ARENA_GRID_DIVISIONS,
 	ARENA_RENDER_SIZE,
 	ARENA_TERRAIN_SEGMENTS,
+	arenaMovementGroundAt,
 	arenaPillars,
 	arenaWalls,
 	pillarAxis,
 	resolveArenaMotion,
+	queryArenaLedge,
 	wallCenterAtY,
 	wallNormal,
 	wallTangent,
@@ -134,6 +136,12 @@ import {
 	stepMovementCore,
 	type MovementCoreState,
 } from "./MovementCore.ts"
+import {
+	INITIAL_MANTLE_STATE,
+	MANTLE_MAXIMUM_RISE,
+	stepMantleTraversal,
+	type MantleState,
+} from "./MantleTraversal.ts"
 import {
 	DEFAULT_GUN_ID,
 	gunDefinition,
@@ -388,6 +396,7 @@ type RemotePilot = {
 	emoteStartedAt: number
 	freeAim: boolean
 	jump: 0 | 1 | 2
+	mantle: NonNullable<PlayerSnapshot["mantle"]>
 	landingImpactVelocity: number
 	landingStartedAt: number
 	lifeSequence: number
@@ -520,6 +529,10 @@ export class ArenaGame {
 	#incomingStandardLocks = 0
 	#hudElapsed = 0
 	#jumpQueued = false
+	#jumpSequence = 0
+	#pendingJumpDirection: [number, number] | null = null
+	#pendingJumpImpulse: 1 | 2 | null = null
+	#coyoteRemaining: number | null = null
 	#lastFrame = performance.now()
 	#leftBumperDuration = 0
 	#leftBumperHeld = false
@@ -555,6 +568,7 @@ export class ArenaGame {
 	#lastWheelEventAt: number | null = null
 	#shotHeld = false
 	#slide = false
+	#surfaceSlide = false
 	#slideDustElapsed = 0
 	#slideHeading = initialSlideHeading()
 	#slidePoseWeight = 0
@@ -565,6 +579,8 @@ export class ArenaGame {
 	#movementToggleQueued = false
 	#gamepadConnected = false
 	#wallTraversal: WallTraversalState = INITIAL_WALL_TRAVERSAL_STATE
+	#mantle: MantleState = INITIAL_MANTLE_STATE
+	#mantleProgress = 0
 	#standardLockReported = false
 	#standardLockSequence = 0
 	#targetEscapeRemaining = TARGET_ESCAPE_DURATION_MS
@@ -628,6 +644,8 @@ export class ArenaGame {
 		this.#disposed = true
 		this.#movementCore = resetMovementCore()
 		this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+		this.#mantle = INITIAL_MANTLE_STATE
+		this.#coyoteRemaining = null
 		this.#disposeLocalDeathRagdoll()
 		this.#reload = cancelReload(this.#reload)
 		this.#audio.dispose()
@@ -832,6 +850,14 @@ export class ArenaGame {
 		this.#connected = false
 		this.#movementCore = resetMovementCore()
 		this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+		this.#mantle = INITIAL_MANTLE_STATE
+		this.#mantleProgress = 0
+		this.#coyoteRemaining = null
+		this.#jumpSequence = 0
+		this.#pendingJumpDirection = null
+		this.#pendingJumpImpulse = null
+		this.#slide = false
+		this.#surfaceSlide = false
 		this.#disposeLocalDeathRagdoll()
 		this.#pickupHoldState = IDLE_HOLD_INPUT_STATE
 		this.#pickupProgress = 0
@@ -904,6 +930,10 @@ export class ArenaGame {
 			crouching: false,
 			freeAim: false,
 			jump: 0,
+			jumpDirection: null,
+			jumpImpulse: null,
+			jumpSequence: 0,
+			mantle: { active: false, progress: 0, surfaceId: null },
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
 			sliding: false,
@@ -953,6 +983,7 @@ export class ArenaGame {
 					emoteStartedAt: -Infinity,
 					freeAim: false,
 					jump: 0,
+					mantle: { active: false, progress: 0, surfaceId: null },
 					landingImpactVelocity: 0,
 					landingStartedAt: -Infinity,
 					lifeSequence: Number.isSafeInteger(snapshot.lifeSequence)
@@ -1070,6 +1101,11 @@ export class ArenaGame {
 			model.recoilSequence = recoil.sequence
 			model.recoilState = recoil.state
 			model.jump = snapshot.jump
+			model.mantle = snapshot.mantle ?? {
+				active: false,
+				progress: 0,
+				surfaceId: null,
+			}
 			if (model.jump > 0 && previousJump === 0) {
 				model.landingStartedAt = -Infinity
 			}
@@ -1583,6 +1619,51 @@ export class ArenaGame {
 		return arenaHeightAt(this.#seed, x, z)
 	}
 
+	#movementGroundAt(x: number, z: number, eyeHeight: number): number {
+		const rootY = this.#player.position.y - eyeHeight
+		return arenaMovementGroundAt(
+			this.#seed,
+			x,
+			z,
+			rootY + JUMP_PHYSICS.maximumGroundSnapDownPerSample,
+		).height
+	}
+
+	#replicatedWallTraversal(): PlayerSnapshot["wallTraversal"] {
+		if (this.#surfaceSlide) {
+			const gradient = sampleTerrainGradient(
+				(x, z) => this.#heightAt(x, z),
+				this.#player.position.x,
+				this.#player.position.z,
+			)
+			const length = Math.hypot(gradient.x, 1, gradient.z)
+			return {
+				mode: "slide",
+				normal: [-gradient.x / length, 1 / length, -gradient.z / length],
+			}
+		}
+		if (
+			this.#wallTraversal.mode === "run" ||
+			this.#wallTraversal.mode === "slide"
+		) {
+			return {
+				mode: this.#wallTraversal.mode,
+				normal: [...this.#wallTraversal.normal],
+			}
+		}
+		return { mode: "none", normal: [0, 0, 0] }
+	}
+
+	#replicatedMantle(): NonNullable<PlayerSnapshot["mantle"]> {
+		return this.#mantle.mode === "mantle"
+			? {
+					active: true,
+					progress: this.#mantleProgress,
+					surfaceId: this.#mantle.surfaceId,
+				}
+			: { active: false, progress: 0, surfaceId: null }
+	}
+
 	#clearDamageEffects(playerId: string | undefined): void {
 		if (playerId === undefined) return
 		this.#damageEffects.remove((effect) => effect.playerId === playerId)
@@ -1882,6 +1963,7 @@ export class ArenaGame {
 		this.#player.jumps = 0
 		this.#crouching = false
 		this.#slide = false
+		this.#surfaceSlide = false
 		this.#slideHeading = initialSlideHeading()
 		this.#slidePoseWeight = 0
 		this.#wasSliding = false
@@ -1890,12 +1972,18 @@ export class ArenaGame {
 		this.#movementCore = resetMovementCore()
 		this.#movementToggleQueued = false
 		this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+		this.#mantle = INITIAL_MANTLE_STATE
+		this.#mantleProgress = 0
+		this.#coyoteRemaining = null
 		this.#freeAim = false
 		this.#leftBumperHeld = false
 		this.#rightBumperHeld = false
 		this.#shotHeld = false
 		this.#grenadeHeld = false
 		this.#jumpQueued = false
+		this.#jumpSequence = 0
+		this.#pendingJumpDirection = null
+		this.#pendingJumpImpulse = null
 		this.#weaponsFreeUntil = 0
 		this.#activeEmoteUntil = 0
 		this.#punchUntil = 0
@@ -2010,6 +2098,9 @@ export class ArenaGame {
 		if (!gamepad.connected && this.#gamepadConnected) {
 			this.#movementCore = resetMovementCore()
 			this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+			this.#mantle = INITIAL_MANTLE_STATE
+			this.#mantleProgress = 0
+			this.#coyoteRemaining = null
 		}
 		this.#gamepadConnected = gamepad.connected
 		const switchEdge = inputEdge(gamepad.switchWeapon, this.#switchHeld)
@@ -2091,9 +2182,10 @@ export class ArenaGame {
 		const previousEye = this.#crouching
 			? PILOT_CROUCH_EYE_HEIGHT
 			: PILOT_STANDING_EYE_HEIGHT
-		const terrainHeight = this.#heightAt(
+		const terrainHeight = this.#movementGroundAt(
 			this.#player.position.x,
 			this.#player.position.z,
+			previousEye,
 		)
 		const wasGrounded = isJumpGrounded(
 			{
@@ -2115,8 +2207,8 @@ export class ArenaGame {
 			},
 			ground,
 		)
-		const wallCrouchDetach = crouch && this.#wallTraversal.mode !== "none"
-		const wasPhysicsSliding = this.#slide
+		const wallRegularSliding = this.#wallTraversal.mode === "crouch-slide"
+		const wasPhysicsSliding = this.#slide && !wallRegularSliding
 		const terrainGradient = sampleTerrainGradient(
 			(x, z) => this.#heightAt(x, z),
 			this.#player.position.x,
@@ -2124,12 +2216,13 @@ export class ArenaGame {
 		)
 		const slideStep = stepSlidePhysics(
 			{
-				sliding: this.#slide,
+				sliding: wasPhysicsSliding,
+				surfaceSliding: this.#surfaceSlide,
 				x: this.#player.velocity.x,
 				z: this.#player.velocity.z,
 			},
 			{
-				crouching: crouch && !wallCrouchDetach,
+				crouching: crouch,
 				delta,
 				grounded,
 				terrainGradient,
@@ -2138,7 +2231,7 @@ export class ArenaGame {
 		this.#player.velocity.x = slideStep.x
 		this.#player.velocity.z = slideStep.z
 		this.#slide = slideStep.sliding
-		if (wallCrouchDetach) this.#slide = false
+		this.#surfaceSlide = slideStep.surfaceSliding
 		if (this.#slide && !wasPhysicsSliding) {
 			const localSlideVelocity = this.#player.velocity
 				.clone()
@@ -2159,7 +2252,12 @@ export class ArenaGame {
 		)
 		if (physicalInput.length() > 1) physicalInput.normalize()
 		const movementStep = stepMovementCore(this.#movementCore, {
-			canSprint: grounded && !crouch && !this.#slide && !this.#dead,
+			canSprint:
+				grounded &&
+				!crouch &&
+				!this.#slide &&
+				!this.#surfaceSlide &&
+				!this.#dead,
 			leftStickPressed: gamepad.sprint || this.#movementToggleQueued,
 			stick: { x: physicalInput.x, y: physicalInput.y },
 		})
@@ -2174,8 +2272,18 @@ export class ArenaGame {
 			this.#keys.has("ShiftRight") ||
 			this.#movementCore.sprintLatched
 		this.#sprinting =
-			grounded && !crouch && sprint && input.lengthSq() > 0 && !this.#slide
-		if (grounded && input.lengthSq() > 0 && !this.#slide) {
+			grounded &&
+			!crouch &&
+			sprint &&
+			input.lengthSq() > 0 &&
+			!this.#slide &&
+			!this.#surfaceSlide
+		if (
+			grounded &&
+			input.lengthSq() > 0 &&
+			!this.#slide &&
+			!this.#surfaceSlide
+		) {
 			const forward = new THREE.Vector3(
 				-Math.sin(this.#player.yaw),
 				0,
@@ -2194,7 +2302,7 @@ export class ArenaGame {
 			this.#player.velocity.addScaledVector(force, acceleration * delta)
 		}
 		const friction = grounded
-			? this.#slide
+			? this.#slide || this.#surfaceSlide
 				? 0
 				: input.lengthSq() > 0
 					? 1.7
@@ -2208,7 +2316,7 @@ export class ArenaGame {
 			{
 				crouching: crouch,
 				grounded,
-				sliding: this.#slide,
+				sliding: this.#slide || this.#surfaceSlide,
 				sprinting: this.#sprinting,
 			},
 		)
@@ -2227,100 +2335,157 @@ export class ArenaGame {
 			],
 			this.#player.position.y - eye * 0.5,
 		)
-		const nextX = motion.x
-		const nextZ = motion.z
-		const wallStep = stepWallTraversal(this.#wallTraversal, {
-			blocked: this.#slide || this.#dead,
-			contact: motion.contact,
-			crouching: crouch,
+		let nextX = motion.x
+		let nextZ = motion.z
+		const mantleCandidate =
+			!crouch && !this.#slide && !this.#surfaceSlide
+				? queryArenaLedge(this.#seed, {
+						contact: motion.contact,
+						eyeHeight: eye,
+						maximumRise: MANTLE_MAXIMUM_RISE,
+						position: this.#player.position.toArray(),
+						velocity: this.#player.velocity.toArray(),
+					})
+				: null
+		const mantleStep = stepMantleTraversal(this.#mantle, {
+			blocked: this.#dead || crouch,
+			candidate: mantleCandidate,
 			delta,
-			grounded,
-			jumpRequested: this.#jumpQueued,
-			velocity: this.#player.velocity.toArray(),
-			viewDirection: horizontalViewDirectionFromYaw(this.#player.yaw),
+			position: this.#player.position.toArray(),
 		})
-		this.#wallTraversal = wallStep.state
-		this.#player.velocity.set(...wallStep.velocity)
-		this.#player.jumps = jumpCountAfterWallContact(
-			wallStep.resetJumpAvailability,
-			this.#player.jumps,
-		)
-		if (wallStep.detachedByCrouch) this.#slide = false
-		if (wallStep.consumedJump) {
+		this.#mantle = mantleStep.state
+		this.#mantleProgress = mantleStep.progress
+		if (mantleStep.handled && mantleStep.position !== null) {
+			nextX = mantleStep.position[0]
+			nextZ = mantleStep.position[2]
+			this.#player.position.set(...mantleStep.position)
+			this.#player.velocity.set(...mantleStep.velocity)
+			this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+			this.#coyoteRemaining = null
+			this.#slide = false
+			this.#surfaceSlide = false
+			this.#sprinting = false
 			this.#jumpQueued = false
-		}
-		const midpointGround =
-			this.#heightAt(
-				(this.#player.position.x + nextX) * 0.5,
-				(this.#player.position.z + nextZ) * 0.5,
-			) + eye
-		const nextGround = this.#heightAt(nextX, nextZ) + eye
-		const slideSurfaceContact = this.#slide
-			? resolveSlideSurfaceContact({
+			this.#audioJumpImpulse = null
+			this.#audioLandingImpact = 0
+		} else {
+			const wallStep = stepWallTraversal(this.#wallTraversal, {
+				blocked: this.#slide || this.#surfaceSlide || this.#dead,
+				contact: motion.contact,
+				crouching: crouch,
+				delta,
+				grounded,
+				jumpRequested: this.#jumpQueued,
+				velocity: this.#player.velocity.toArray(),
+				viewDirection: horizontalViewDirectionFromYaw(this.#player.yaw),
+			})
+			this.#wallTraversal = wallStep.state
+			this.#player.velocity.set(...wallStep.velocity)
+			this.#player.jumps = jumpCountAfterWallContact(
+				wallStep.resetJumpAvailability,
+				this.#player.jumps,
+			)
+			if (wallStep.state.mode !== "none") this.#coyoteRemaining = null
+			if (wallStep.state.mode === "crouch-slide") this.#slide = true
+			if (wallStep.consumedJump) this.#jumpQueued = false
+			const midpointGround =
+				this.#movementGroundAt(
+					(this.#player.position.x + nextX) * 0.5,
+					(this.#player.position.z + nextZ) * 0.5,
+					eye,
+				) + eye
+			const nextGround = this.#movementGroundAt(nextX, nextZ, eye) + eye
+			const groundSlide = this.#slide && wallStep.state.mode !== "crouch-slide"
+			const slideSurfaceContact = groundSlide
+				? resolveSlideSurfaceContact({
+						delta,
+						groundAfter: nextGround,
+						groundBefore: ground,
+						groundMidpoint: midpointGround,
+						terrainGradient,
+						velocity: {
+							x: this.#player.velocity.x,
+							z: this.#player.velocity.z,
+						},
+					})
+				: null
+			const jumpStep = stepJumpPhysics(
+				{
+					coyoteRemaining: this.#coyoteRemaining,
+					jumpCount: this.#player.jumps,
+					positionY: this.#player.position.y,
+					velocityY: this.#player.velocity.y,
+				},
+				{
 					delta,
+					gravityScale: wallStep.state.mode === "crouch-slide" ? 0 : 1,
 					groundAfter: nextGround,
 					groundBefore: ground,
 					groundMidpoint: midpointGround,
-					terrainGradient,
-					velocity: {
+					jumpRequested: this.#jumpQueued,
+					ledgeCoyoteEligible:
+						motion.contact === null &&
+						wallStep.state.mode === "none" &&
+						!this.#surfaceSlide,
+					momentumDepartureVelocityY:
+						slideSurfaceContact?.verticalVelocity ?? 0,
+				},
+			)
+			this.#jumpQueued = false
+			this.#coyoteRemaining = jumpStep.coyoteRemaining
+			this.#player.jumps = jumpStep.jumpCount
+			const doubleJumpDirection =
+				jumpStep.impulse === 2
+					? cameraRelativeMovementDirection(physicalInput, this.#player.yaw)
+					: null
+			if (jumpStep.impulse === 1 || jumpStep.impulse === 2) {
+				this.#jumpSequence += 1
+				this.#pendingJumpDirection =
+					jumpStep.impulse === 2
+						? [doubleJumpDirection?.x ?? 0, doubleJumpDirection?.z ?? 0]
+						: null
+				this.#pendingJumpImpulse = jumpStep.impulse
+			}
+			if (jumpStep.impulse === 2) {
+				const steeredMomentum = applyDirectionalDoubleJump(
+					{ x: this.#player.velocity.x, z: this.#player.velocity.z },
+					doubleJumpDirection,
+					jumpStep.impulse,
+				)
+				this.#player.velocity.x = steeredMomentum.x
+				this.#player.velocity.z = steeredMomentum.z
+			}
+			if (jumpStep.impulse !== null || jumpStep.departedGround) {
+				this.#slide = false
+				this.#surfaceSlide = false
+			} else if (jumpStep.landed && crouch) {
+				this.#slide = stepSlidePhysics(
+					{
+						sliding: false,
 						x: this.#player.velocity.x,
 						z: this.#player.velocity.z,
 					},
-				})
-			: null
-		const jumpStep = stepJumpPhysics(
-			{
-				jumpCount: this.#player.jumps,
-				positionY: this.#player.position.y,
-				velocityY: this.#player.velocity.y,
-			},
-			{
-				delta,
-				groundAfter: nextGround,
-				groundBefore: ground,
-				groundMidpoint: midpointGround,
-				jumpRequested: this.#jumpQueued,
-				momentumDepartureVelocityY: slideSurfaceContact?.verticalVelocity ?? 0,
-			},
-		)
-		this.#jumpQueued = false
-		this.#player.jumps = jumpStep.jumpCount
-		if (jumpStep.impulse === 2) {
-			const steeredMomentum = applyDirectionalDoubleJump(
-				{ x: this.#player.velocity.x, z: this.#player.velocity.z },
-				cameraRelativeMovementDirection(physicalInput, this.#player.yaw),
-				jumpStep.impulse,
-			)
-			this.#player.velocity.x = steeredMomentum.x
-			this.#player.velocity.z = steeredMomentum.z
-		}
-		if (jumpStep.impulse !== null || jumpStep.departedGround) {
-			this.#slide = false
-		} else if (jumpStep.landed && crouch) {
-			this.#slide = stepSlidePhysics(
-				{
-					sliding: false,
-					x: this.#player.velocity.x,
-					z: this.#player.velocity.z,
-				},
-				{
-					crouching: true,
-					delta: 0,
-					grounded: true,
-					terrainGradient: sampleTerrainGradient(
-						(x, z) => this.#heightAt(x, z),
-						nextX,
-						nextZ,
-					),
-				},
-			).sliding
+					{
+						crouching: true,
+						delta: 0,
+						grounded: true,
+						terrainGradient: sampleTerrainGradient(
+							(x, z) => this.#heightAt(x, z),
+							nextX,
+							nextZ,
+						),
+					},
+				).sliding
+			}
+			this.#player.position.set(nextX, jumpStep.positionY, nextZ)
+			this.#player.velocity.y = jumpStep.velocityY
+			this.#audioJumpImpulse =
+				jumpStep.impulse === 1 || jumpStep.impulse === 2
+					? jumpStep.impulse
+					: null
+			this.#audioLandingImpact = jumpStep.landed ? jumpStep.impactVelocity : 0
 		}
 		this.#updateLocalSlideDust(delta)
-		this.#player.position.set(nextX, jumpStep.positionY, nextZ)
-		this.#player.velocity.y = jumpStep.velocityY
-		this.#audioJumpImpulse =
-			jumpStep.impulse === 1 || jumpStep.impulse === 2 ? jumpStep.impulse : null
-		this.#audioLandingImpact = jumpStep.landed ? jumpStep.impactVelocity : 0
 		const trigger = gamepad.fire || this.#keys.has("KeyF")
 		if (this.#weaponKind === "rail-gun") {
 			if (trigger && !this.#triggerHeld) this.#beginRailCharge()
@@ -3044,6 +3209,7 @@ export class ArenaGame {
 	}
 
 	#updateCamera(delta: number): void {
+		const replicatedWallTraversal = this.#replicatedWallTraversal()
 		if (this.#slide) {
 			const localSlideVelocity = this.#player.velocity
 				.clone()
@@ -3079,8 +3245,8 @@ export class ArenaGame {
 		this.#cameraWallRoll = stepCameraRoll(
 			this.#cameraWallRoll,
 			wallCameraRollTarget(
-				this.#wallTraversal.mode,
-				this.#wallTraversal.normal,
+				replicatedWallTraversal.mode,
+				replicatedWallTraversal.normal,
 				this.#player.yaw,
 			),
 			delta,
@@ -3460,6 +3626,15 @@ export class ArenaGame {
 					)
 					if (authoredDeath !== null) layers.push(authoredDeath)
 				}
+			} else if (model.mantle.active) {
+				layers.push(
+					risingFallingAnimationLayer({
+						jumpCount: 1,
+						localVelocityX: localVelocity.x,
+						localVelocityZ: localVelocity.z,
+						verticalVelocity: Math.max(0.1, model.velocity.y),
+					}),
+				)
 			} else if (model.jump > 0) {
 				const airborneMotion = {
 					jumpCount: model.jump === 2 ? (2 as const) : (1 as const),
@@ -3715,7 +3890,12 @@ export class ArenaGame {
 
 	#sendSnapshot(delta: number): void {
 		this.#snapshotElapsed += delta
-		if (!this.#connected || this.#dead || this.#snapshotElapsed < 0.05) return
+		if (
+			!this.#connected ||
+			this.#dead ||
+			(this.#snapshotElapsed < 0.05 && this.#pendingJumpImpulse === null)
+		)
+			return
 		this.#snapshotElapsed = 0
 		const now = performance.now() / 1_000
 		const emoteActive = now < this.#activeEmoteUntil
@@ -3744,19 +3924,22 @@ export class ArenaGame {
 			crouching: this.#crouching,
 			freeAim: this.#freeAim,
 			jump: this.#player.jumps,
+			jumpDirection: this.#pendingJumpDirection,
+			jumpImpulse: this.#pendingJumpImpulse,
+			jumpSequence: this.#jumpSequence,
+			mantle: this.#replicatedMantle(),
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
 			sliding: this.#slide,
 			sprinting: this.#sprinting,
 			velocity: this.#player.velocity.toArray(),
-			wallTraversal: {
-				mode: this.#wallTraversal.mode,
-				normal: [...this.#wallTraversal.normal],
-			},
+			wallTraversal: this.#replicatedWallTraversal(),
 			visorExpression: this.#visorExpression,
 			visorStartedAt: this.#visorStartedAt,
 			weaponsFree: now < this.#weaponsFreeUntil,
 		} satisfies PlayerMoveSnapshot)
+		this.#pendingJumpDirection = null
+		this.#pendingJumpImpulse = null
 	}
 
 	#emitHud(delta: number): void {
@@ -3837,7 +4020,7 @@ export class ArenaGame {
 				Math.hypot(this.#player.velocity.x, this.#player.velocity.z) * 3.6,
 			),
 			targeting: this.#targetingState,
-			wallTraversal: this.#wallTraversal.mode,
+			wallTraversal: this.#replicatedWallTraversal().mode,
 			weapon: this.#weaponKind,
 			weaponSlots: [
 				{ ...this.#equipmentSlots[0] },

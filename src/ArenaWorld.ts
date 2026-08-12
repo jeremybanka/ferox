@@ -44,6 +44,7 @@ export type ArenaSurfaceContact = Readonly<{
 	inclinationRadians: number
 	normal: readonly [number, number, number]
 	point: readonly [number, number, number]
+	surfaceNormal?: readonly [number, number, number]
 	surfaceId: string
 	time: number
 }>
@@ -538,9 +539,10 @@ export function wallCenterAtY(
 ): readonly [number, number] | null {
 	const cosine = Math.cos(wall.leanRadians)
 	const localY = (y - wall.baseY) / cosine
-	if (localY < 0 || localY > wall.height) return null
+	if (localY < -1e-9 || localY > wall.height + 1e-9) return null
+	const boundedLocalY = Math.max(0, Math.min(wall.height, localY))
 	const [normalX, normalZ] = wallNormal(wall)
-	const lean = Math.sin(wall.leanRadians) * localY
+	const lean = Math.sin(wall.leanRadians) * boundedLocalY
 	return [wall.x + normalX * lean, wall.z + normalZ * lean]
 }
 
@@ -552,6 +554,32 @@ function pillarCenterAtY(
 	if (localY < 0 || localY > pillar.height) return null
 	const [axisX, , axisZ] = pillarAxis(pillar)
 	return [pillar.x + axisX * localY, pillar.z + axisZ * localY]
+}
+
+function pillarSurfaceNormal(
+	pillar: ArenaPillar,
+	normalX: number,
+	normalZ: number,
+): readonly [number, number, number] {
+	const [axisX, axisY, axisZ] = pillarAxis(pillar)
+	const normalY = -(normalX * axisX + normalZ * axisZ) / axisY
+	const length = Math.hypot(normalX, normalY, normalZ)
+	return [normalX / length, normalY / length, normalZ / length]
+}
+
+function wallSurfaceNormal(
+	wall: ArenaWall,
+	normalX: number,
+	normalZ: number,
+): readonly [number, number, number] {
+	const [wallNormalX, wallNormalZ] = wallNormal(wall)
+	const face = normalX * wallNormalX + normalZ * wallNormalZ >= 0 ? 1 : -1
+	const horizontalScale = Math.cos(wall.leanRadians)
+	return [
+		normalX * horizontalScale,
+		-Math.sin(wall.leanRadians) * face,
+		normalZ * horizontalScale,
+	]
 }
 
 function wallLocalPoint(
@@ -582,7 +610,17 @@ export function pointInsideArenaObstacle(
 	point: readonly [number, number, number],
 	padding = 0,
 ): boolean {
+	return pointInsideArenaObstacleExcept(seed, point, padding, null)
+}
+
+function pointInsideArenaObstacleExcept(
+	seed: number,
+	point: readonly [number, number, number],
+	padding: number,
+	ignoredSurfaceId: string | null,
+): boolean {
 	for (const pillar of arenaPillars(seed)) {
+		if (pillar.id === ignoredSurfaceId) continue
 		const center = pillarCenterAtY(pillar, point[1])
 		if (center === null) continue
 		if (
@@ -592,6 +630,7 @@ export function pointInsideArenaObstacle(
 			return true
 	}
 	for (const wall of arenaWalls(seed)) {
+		if (wall.id === ignoredSurfaceId) continue
 		const center = wallCenterAtY(wall, point[1])
 		if (center === null) continue
 		const local = wallLocalPoint(wall, center, [point[0], point[2]])
@@ -601,10 +640,42 @@ export function pointInsideArenaObstacle(
 	return false
 }
 
+function mantleCapsuleIsClear(
+	seed: number,
+	eyePosition: readonly [number, number, number],
+	eyeHeight: number,
+	ignoredSurfaceId: string,
+): boolean {
+	const rootY = eyePosition[1] - eyeHeight
+	for (const height of [0.08, eyeHeight * 0.5, eyeHeight]) {
+		if (
+			pointInsideArenaObstacleExcept(
+				seed,
+				[eyePosition[0], rootY + height, eyePosition[2]],
+				PLAYER_COLLISION_RADIUS + 0.02,
+				ignoredSurfaceId,
+			)
+		)
+			return false
+	}
+	return true
+}
+
 export type ArenaMotionResolution = Readonly<{
 	contact: ArenaSurfaceContact | null
 	x: number
 	z: number
+}>
+
+export type ArenaGroundSupport = Readonly<{
+	height: number
+	surfaceId: string | null
+}>
+
+export type ArenaLedge = Readonly<{
+	rise: number
+	surfaceId: string
+	target: readonly [number, number, number]
 }>
 
 type WallSweepHit = Readonly<{
@@ -820,6 +891,7 @@ export function resolveArenaMotion(
 			inclinationRadians: Math.PI / 2 - pillar.leanRadians,
 			normal: [normalX, 0, normalZ],
 			point: [x - normalX * radius, y, z - normalZ * radius],
+			surfaceNormal: pillarSurfaceNormal(pillar, normalX, normalZ),
 			surfaceId: pillar.id,
 			time: closestTime,
 		}
@@ -836,6 +908,7 @@ export function resolveArenaMotion(
 			inclinationRadians: Math.PI / 2 - Math.abs(wall.leanRadians),
 			normal: [normalX, 0, normalZ],
 			point: [x - normalX * radius, y, z - normalZ * radius],
+			surfaceNormal: wallSurfaceNormal(wall, normalX, normalZ),
 			surfaceId: wall.id,
 			time: resolved.time,
 		}
@@ -849,6 +922,142 @@ export function resolveArenaMotion(
 		Math.min(ARENA_PLAYABLE_HALF_EXTENT, z),
 	)
 	return { contact, x, z }
+}
+
+function obstacleTopY(obstacle: ArenaPillar | ArenaWall): number {
+	return obstacle.baseY + Math.cos(obstacle.leanRadians) * obstacle.height
+}
+
+/**
+ * Returns terrain or an occupiable obstacle top beneath the supplied ceiling.
+ * Obstacle footprints are eroded by the pilot radius so a returned support is
+ * always wide enough for the full collision circle.
+ */
+export function arenaMovementGroundAt(
+	seed: number,
+	x: number,
+	z: number,
+	maximumHeight = Number.POSITIVE_INFINITY,
+): ArenaGroundSupport {
+	let support: ArenaGroundSupport = {
+		height: arenaHeightAt(seed, x, z),
+		surfaceId: null,
+	}
+	for (const pillar of arenaPillars(seed)) {
+		const topY = obstacleTopY(pillar)
+		if (topY > maximumHeight || topY <= support.height) continue
+		const [axisX, , axisZ] = pillarAxis(pillar)
+		const topX = pillar.x + axisX * pillar.height
+		const topZ = pillar.z + axisZ * pillar.height
+		if (
+			Math.hypot(x - topX, z - topZ) <=
+			pillar.radius - PLAYER_COLLISION_RADIUS
+		) {
+			support = { height: topY, surfaceId: pillar.id }
+		}
+	}
+	for (const wall of arenaWalls(seed)) {
+		const topY = obstacleTopY(wall)
+		if (topY > maximumHeight || topY <= support.height) continue
+		const center = wallCenterAtY(wall, topY)
+		if (center === null) continue
+		const local = wallLocalPoint(wall, center, [x, z])
+		const usableHalfLength = wall.length * 0.5 - PLAYER_COLLISION_RADIUS
+		const usableHalfThickness = wall.thickness * 0.5 - PLAYER_COLLISION_RADIUS
+		if (
+			usableHalfLength >= 0 &&
+			usableHalfThickness >= 0 &&
+			Math.abs(local[0]) <= usableHalfLength &&
+			Math.abs(local[1]) <= usableHalfThickness
+		) {
+			support = { height: topY, surfaceId: wall.id }
+		}
+	}
+	return support
+}
+
+/** Finds a short, collision-safe mantle destination for a resolved face hit. */
+export function queryArenaLedge(
+	seed: number,
+	options: Readonly<{
+		contact: ArenaSurfaceContact | null
+		eyeHeight: number
+		maximumRise: number
+		position: readonly [number, number, number]
+		velocity: readonly [number, number, number]
+	}>,
+): ArenaLedge | null {
+	const contact = options.contact
+	if (contact === null || options.maximumRise <= 0) return null
+	const approachSpeed = -(
+		options.velocity[0] * contact.normal[0] +
+		options.velocity[2] * contact.normal[2]
+	)
+	if (approachSpeed < 0.6) return null
+	const rootY = options.position[1] - options.eyeHeight
+	let topY = Number.NaN
+	let targetX = Number.NaN
+	let targetZ = Number.NaN
+	const pillar = arenaPillars(seed).find(
+		(candidate) => candidate.id === contact.surfaceId,
+	)
+	if (pillar !== undefined) {
+		topY = obstacleTopY(pillar)
+		const [axisX, , axisZ] = pillarAxis(pillar)
+		const centerX = pillar.x + axisX * pillar.height
+		const centerZ = pillar.z + axisZ * pillar.height
+		const insetRadius = pillar.radius - PLAYER_COLLISION_RADIUS - 0.08
+		if (insetRadius <= 0) return null
+		targetX = centerX + contact.normal[0] * insetRadius
+		targetZ = centerZ + contact.normal[2] * insetRadius
+	} else {
+		const wall = arenaWalls(seed).find(
+			(candidate) => candidate.id === contact.surfaceId,
+		)
+		if (wall === undefined) return null
+		if (wall.thickness < PLAYER_COLLISION_RADIUS * 2 + 0.08) return null
+		topY = obstacleTopY(wall)
+		const center = wallCenterAtY(wall, topY)
+		if (center === null) return null
+		const [tangentX, tangentZ] = wallTangent(wall)
+		const contactAlong =
+			(contact.point[0] - center[0]) * tangentX +
+			(contact.point[2] - center[1]) * tangentZ
+		const usableHalfLength = wall.length * 0.5 - PLAYER_COLLISION_RADIUS - 0.08
+		if (usableHalfLength <= 0) return null
+		const along = Math.max(
+			-usableHalfLength,
+			Math.min(usableHalfLength, contactAlong),
+		)
+		targetX = center[0] + tangentX * along
+		targetZ = center[1] + tangentZ * along
+	}
+	const rise = topY - rootY
+	if (rise <= 0.04 || rise > options.maximumRise + 1e-9) return null
+	const target: readonly [number, number, number] = [
+		targetX,
+		topY + options.eyeHeight,
+		targetZ,
+	]
+	if (!mantleCapsuleIsClear(seed, target, options.eyeHeight, contact.surfaceId))
+		return null
+	for (const progress of [0.25, 0.5, 0.75]) {
+		const pathPosition = options.position.map(
+			(value, index) => value + (target[index]! - value) * progress,
+		) as [number, number, number]
+		if (
+			!mantleCapsuleIsClear(
+				seed,
+				pathPosition,
+				options.eyeHeight,
+				contact.surfaceId,
+			)
+		)
+			return null
+	}
+	const support = arenaMovementGroundAt(seed, targetX, targetZ, topY + 0.001)
+	if (support.surfaceId !== contact.surfaceId) return null
+	return { rise, surfaceId: contact.surfaceId, target }
 }
 
 export function isSpawnClear(
