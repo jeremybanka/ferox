@@ -348,16 +348,16 @@ describe("arena world", () => {
 		).toBeCloseTo(2, 4)
 
 		const hiddenWall = arenaWalls(ARENA_SEED).find(
-			(wall) => wall.id === "wall-outer-43",
+			(wall) => wall.id === "wall-channel-0",
 		)!
 		const targetY =
 			hiddenWall.baseY +
 			Math.cos(hiddenWall.leanRadians) * hiddenWall.height * 0.5
 		const target = wallCenterAtY(hiddenWall, targetY)!
 		const origin: [number, number, number] = [
-			-120,
-			arenaHeightAt(ARENA_SEED, -120, -110) + 1.72,
-			-110,
+			-40,
+			arenaHeightAt(ARENA_SEED, -40, -80) + 1.72,
+			-80,
 		]
 		const direction: [number, number, number] = [
 			target[0] - origin[0],
