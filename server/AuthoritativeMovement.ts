@@ -7,7 +7,10 @@ import {
 	applyDirectionalDoubleJump,
 	directionalDoubleJumpImpulse,
 } from "../src/DirectionalJumpPhysics.ts"
-import { PLAYER_SPRINT_SPEED_LIMIT } from "../src/game-constants.ts"
+import {
+	PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT,
+	PLAYER_SPRINT_SPEED_LIMIT,
+} from "../src/game-constants.ts"
 import {
 	INITIAL_MANTLE_STATE,
 	stepMantleTraversal,
@@ -31,6 +34,25 @@ import {
 export const AUTHORITATIVE_TRAVERSAL_TRAVEL_TOLERANCE = 0.12
 export const AUTHORITATIVE_PLANAR_ACCELERATION = 31
 export const AUTHORITATIVE_VELOCITY_TOLERANCE = 0.35
+export const AUTHORITATIVE_EXTERNAL_SPEED_LIMIT =
+	PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT
+
+export function applyAuthoritativeExternalImpulse(
+	velocity: readonly [number, number, number],
+	impulse: readonly [number, number, number],
+): readonly [number, number, number] {
+	if (![...velocity, ...impulse].every(Number.isFinite)) return velocity
+	const next = [
+		velocity[0] + impulse[0],
+		velocity[1] + impulse[1],
+		velocity[2] + impulse[2],
+	] as const
+	const speed = Math.hypot(...next)
+	if (speed <= AUTHORITATIVE_EXTERNAL_SPEED_LIMIT || speed <= Number.EPSILON)
+		return next
+	const scale = AUTHORITATIVE_EXTERNAL_SPEED_LIMIT / speed
+	return [next[0] * scale, next[1] * scale, next[2] * scale]
+}
 
 export type AuthoritativeJumpSignal = Readonly<{
 	direction: readonly [number, number] | null
@@ -138,6 +160,7 @@ export type AuthoritativeMovementInput = Readonly<{
 	coyoteDelta?: number
 	crouching: boolean
 	delta: number
+	gravityScale?: number
 	grappleAttached?: boolean
 	grounded: boolean
 	jump: 0 | 1 | 2
@@ -302,11 +325,13 @@ export function reconcileAuthoritativeMovement(
 			? [terrainSlide.x, terrainVelocity[1], terrainSlide.z]
 			: traversal.velocity
 	if (serverOwnsVelocity && mode === "none") {
+		const gravityScale = Math.max(0, input.gravityScale ?? 1)
 		velocity = [
 			velocity[0],
 			input.grounded
 				? 0
-				: input.previousVelocity![1] - JUMP_PHYSICS.gravity * input.delta,
+				: input.previousVelocity![1] -
+					JUMP_PHYSICS.gravity * input.delta * gravityScale,
 			velocity[2],
 		]
 	}
@@ -354,7 +379,11 @@ export function reconcileAuthoritativeMovement(
 		velocity = [
 			velocity[0],
 			JUMP_PHYSICS.jumpVelocity -
-				(acceptsCoyoteFirstJump ? JUMP_PHYSICS.gravity * input.delta : 0),
+				(acceptsCoyoteFirstJump
+					? JUMP_PHYSICS.gravity *
+						input.delta *
+						Math.max(0, input.gravityScale ?? 1)
+					: 0),
 			velocity[2],
 		]
 	} else if (acceptsDoubleJump) {
@@ -367,7 +396,10 @@ export function reconcileAuthoritativeMovement(
 		)
 		velocity = [
 			directionalVelocity.x,
-			JUMP_PHYSICS.doubleJumpVelocity - JUMP_PHYSICS.gravity * input.delta,
+			JUMP_PHYSICS.doubleJumpVelocity -
+				JUMP_PHYSICS.gravity *
+					input.delta *
+					Math.max(0, input.gravityScale ?? 1),
 			directionalVelocity.z,
 		]
 	}

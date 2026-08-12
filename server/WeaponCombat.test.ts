@@ -1,6 +1,7 @@
 import { expect, test } from "vitest"
 import * as THREE from "three"
 
+import { ZERO_GRAVITY_ZONE } from "../src/ArenaZones.ts"
 import type {
 	BallisticEndedSnapshot,
 	BallisticSnapshot,
@@ -24,6 +25,13 @@ import {
 	PLAYER_PROJECTILE_DAMAGE,
 	RAIL_DAMAGE_MAX,
 	RAIL_DAMAGE_MIN,
+	RAIL_GRAVITY_MAX,
+	RAIL_GRAVITY_MIN,
+	RAIL_KNOCKBACK_MAX,
+	RAIL_KNOCKBACK_MIN,
+	RAIL_SERVER_MINIMUM_INTERVAL_MS,
+	RAIL_SPEED_MAX,
+	RAIL_SPEED_MIN,
 	SHOTGUN_CONE_HALF_ANGLE_RADIANS,
 	SHOTGUN_MAX_ACTIVE_PELLETS,
 	SHOTGUN_PELLET_COUNT,
@@ -42,6 +50,7 @@ import { MiniMissileArmory } from "./MiniMissileArmory.ts"
 function simulationHarness(
 	players: SimulationPlayer[],
 	initialDrones: readonly SimulationDroneSeed[] = [],
+	maximumDamagePerPlayer?: number,
 ) {
 	const damage: Array<{
 		amount: number
@@ -80,8 +89,14 @@ function simulationHarness(
 		onDirectHit: (playerId, result) => hits.push({ playerId, result }),
 		onDroneKilled: () => undefined,
 		onLockChanged: () => undefined,
-		onPlayerDamage: (playerId, amount, impact) =>
-			damage.push({ amount, impact, playerId }),
+		onPlayerDamage: (playerId, amount, impact) => {
+			const applied =
+				maximumDamagePerPlayer === undefined
+					? amount
+					: Math.min(amount, maximumDamagePerPlayer)
+			damage.push({ amount: applied, impact, playerId })
+			return maximumDamagePerPlayer === undefined ? undefined : applied
+		},
 		seed: 7_431_905,
 	})
 	return {
@@ -514,7 +529,7 @@ test("shotgun pellets retain exactly six damage against bubbles and end on conta
 	)
 })
 
-test("rail projectiles pop a bubble and emit one authoritative end event", () => {
+test("a 70-damage rail shot stops at a stronger bubble and emits one end event", () => {
 	const players: SimulationPlayer[] = [
 		{
 			crouching: false,
@@ -551,11 +566,12 @@ test("rail projectiles pop a bubble and emit one authoritative end event", () =>
 	)
 	harness.simulation.update(delta)
 
-	expect(harness.bubblesPopped).toHaveLength(1)
+	expect(harness.bubblesPopped).toHaveLength(0)
 	expect(harness.ballisticsEnded).toHaveLength(1)
 	expect(harness.simulation.snapshot().ballistics).toHaveLength(0)
-	expect(harness.simulation.snapshot().bubbles).toHaveLength(
-		BUBBLES_PER_SHOT - 1,
+	expect(harness.simulation.snapshot().bubbles).toHaveLength(BUBBLES_PER_SHOT)
+	expect(bubbleHealth(harness.simulation)).toBe(
+		BUBBLES_PER_SHOT * BUBBLE_HEALTH - RAIL_DAMAGE_MAX,
 	)
 	harness.simulation.update(0.1)
 	expect(harness.damage).toHaveLength(0)
@@ -633,6 +649,123 @@ test("rail charge monotonically increases speed and damage while flattening grav
 		low.simulation.snapshot().ballistics[0]?.position[1] ?? 0,
 	)
 	expect(RAIL_DAMAGE_MAX).toBeGreaterThan(RAIL_DAMAGE_MIN)
+	expect(RAIL_DAMAGE_MIN).toBe(45)
+	expect(RAIL_DAMAGE_MAX).toBe(70)
+	expect(RAIL_SPEED_MIN).toBe(56)
+	expect(RAIL_SPEED_MAX).toBe(110)
+	expect(RAIL_GRAVITY_MIN).toBe(2.5)
+	expect(RAIL_GRAVITY_MAX).toBe(10)
+	expect(RAIL_KNOCKBACK_MIN).toBe(8)
+	expect(RAIL_KNOCKBACK_MAX).toBe(30)
+	expect(RAIL_SERVER_MINIMUM_INTERVAL_MS).toBe(450)
+})
+
+test("rail ballistics keep vertical inertia inside zero gravity", () => {
+	const [x, y, z] = ZERO_GRAVITY_ZONE.center
+	const players: SimulationPlayer[] = [
+		{ crouching: false, id: "rail", position: [x, y, z], velocity: [0, 0, 0] },
+	]
+	const inside = simulationHarness(players)
+	inside.simulation.fireRail(
+		"rail",
+		{ clientShotId: 1, direction: [0, 0, -1], origin: [x, y, z] },
+		1,
+	)
+	inside.simulation.update(0.05)
+	expect(inside.simulation.snapshot().ballistics[0]?.position[1]).toBe(y)
+
+	const outside = simulationHarness([
+		{
+			crouching: false,
+			id: "rail",
+			position: [x + ZERO_GRAVITY_ZONE.radius + 2, y, z],
+			velocity: [0, 0, 0],
+		},
+	])
+	outside.simulation.fireRail(
+		"rail",
+		{
+			clientShotId: 1,
+			direction: [0, 0, -1],
+			origin: [x + ZERO_GRAVITY_ZONE.radius + 2, y, z],
+		},
+		1,
+	)
+	outside.simulation.update(0.05)
+	expect(outside.simulation.snapshot().ballistics[0]?.position[1]).toBeLessThan(
+		y,
+	)
+})
+
+test.each([
+	{ charge: 0, damage: 45, impulse: 8, label: "tap" },
+	{ charge: 0.5, damage: 57.5, impulse: 19, label: "partial" },
+	{ charge: 1, damage: 70, impulse: 30, label: "full" },
+])(
+	"$label rail body hit applies charge-scaled damage and knockback",
+	(shot) => {
+		const players: SimulationPlayer[] = [
+			{
+				crouching: false,
+				id: "rail",
+				position: [0, 50.72, 0],
+				velocity: [0, 0, 0],
+			},
+			{
+				crouching: false,
+				id: "target",
+				position: [0, 50.72, -3],
+				velocity: [0, 0, 0],
+			},
+		]
+		const harness = simulationHarness(players)
+		harness.simulation.fireRail(
+			"rail",
+			{ clientShotId: 1, direction: [0, 0, -1], origin: [0, 49.8, 0] },
+			shot.charge,
+		)
+		harness.simulation.update(0.08)
+
+		expect(harness.damage).toHaveLength(1)
+		expect(harness.damage[0]?.amount).toBe(shot.damage)
+		expect(harness.hits[0]?.result).toMatchObject({
+			classification: "normal",
+			damage: shot.damage,
+		})
+		expect(
+			Math.hypot(...(harness.damage[0]?.impact.impulse ?? [])),
+		).toBeCloseTo(shot.impulse)
+	},
+)
+
+test("a 140-raw-damage full rail headshot reports the lethal 100 removed", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "rail",
+			position: [0, 50.72, 0],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 50.72, -3],
+			velocity: [0, 0, 0],
+		},
+	]
+	const harness = simulationHarness(players, [], 100)
+	harness.simulation.fireRail(
+		"rail",
+		{ clientShotId: 1, direction: [0, 0, -1], origin: [0, 50.868, 0] },
+		1,
+	)
+	harness.simulation.update(0.05)
+
+	expect(harness.damage[0]?.amount).toBe(100)
+	expect(harness.hits[0]?.result).toMatchObject({
+		classification: "headshot",
+		damage: 100,
+	})
 })
 
 test("rail release shares the monotonic shot replay domain with other weapons", () => {

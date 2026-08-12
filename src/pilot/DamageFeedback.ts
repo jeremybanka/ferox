@@ -134,7 +134,8 @@ export function observeDamageFeedback(
 		!Number.isFinite(event.serverTime) ||
 		!Number.isFinite(event.damage) ||
 		event.damage <= 0 ||
-		(event.source !== "grenade" &&
+		(event.source !== "ballistic" &&
+			event.source !== "grenade" &&
 			event.source !== "kamikaze" &&
 			event.source !== "melee" &&
 			event.source !== "mini-missile" &&

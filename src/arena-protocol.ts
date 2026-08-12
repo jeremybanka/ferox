@@ -679,6 +679,8 @@ export type DirectHitResult = {
 
 export type PlayerDamageImpact = {
 	direction: Vector3Tuple
+	/** Server-authored one-shot velocity change, currently used by Rail hits. */
+	impulse?: Vector3Tuple
 	position: Vector3Tuple
 	source:
 		| "ballistic"
