@@ -60,6 +60,9 @@ export type GameHudState = {
 	wallTraversal: "none" | "run" | "slide"
 	weapon: WeaponKind
 	weaponSlots: EquipmentSlots
+	vehicleKind: "bike" | "jeep" | null
+	vehicleNearby: boolean
+	vehicleSeat: "driver" | "rider" | "shotgun" | "turret" | null
 }
 
 export const gameHudStateAtom = atom<GameHudState>({
@@ -105,6 +108,9 @@ export const gameHudStateAtom = atom<GameHudState>({
 		targeting: "idle",
 		wallTraversal: "none",
 		weapon: DEFAULT_GUN_ID,
+		vehicleKind: null,
+		vehicleNearby: false,
+		vehicleSeat: null,
 		weaponSlots: [
 			{
 				ammo: gunDefinition(DEFAULT_GUN_ID).magazineSize,
