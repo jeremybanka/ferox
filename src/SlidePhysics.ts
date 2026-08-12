@@ -39,6 +39,7 @@ export type SlidePhysicsState = PlanarVelocity & {
 
 export type MovementState =
 	| "airborne"
+	| "blocked"
 	| "crouching"
 	| "running"
 	| "sliding"
@@ -273,6 +274,7 @@ export function sampleTerrainGradient(
 export function stepSlidePhysics(
 	state: SlidePhysicsState,
 	options: {
+		blocked?: boolean
 		crouching: boolean
 		delta: number
 		grounded: boolean
@@ -288,6 +290,18 @@ export function stepSlidePhysics(
 		options.terrainGradient,
 	)
 	const slopeAngleRadians = Math.acos(slopeNormalUpDot)
+	if (options.blocked === true) {
+		return {
+			downhillAcceleration: { x: 0, z: 0 },
+			movementState: "blocked",
+			slopeAngleRadians,
+			slopeGrade,
+			sliding: false,
+			surfaceSliding: false,
+			x: state.x,
+			z: state.z,
+		}
+	}
 	const speed = Math.hypot(state.x, state.z)
 	const slopeAffectsMotion =
 		slopeGrade >= SLIDE_PHYSICS.minimumDynamicSlopeGrade

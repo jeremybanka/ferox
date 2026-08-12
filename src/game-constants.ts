@@ -117,6 +117,23 @@ export const GRENADE_RADIUS = 0.18
 export const GRENADE_RESTITUTION = 0.56
 export const GRENADE_THROW_SPEED = 17
 
+// Grapple tuning deliberately favors a readable, momentum-led swing over a
+// winch. The rope is fixed at the acquisition distance; steering is projected
+// onto its tangent and tension only removes velocity that would lengthen it.
+export const GRAPPLE_PICKUP_POSITION: readonly [number, number] = [0, -27]
+export const GRAPPLE_PICKUP_RADIUS = 2.4
+export const GRAPPLE_PICKUP_RESPAWN_MS = 12_000
+export const GRAPPLE_MAX_RANGE = 52
+export const GRAPPLE_MIN_ROPE_LENGTH = 3.5
+export const GRAPPLE_MAX_ATTACH_SECONDS = 8
+export const GRAPPLE_STEERING_ACCELERATION = 8
+export const GRAPPLE_TENSION_ACCELERATION = 18
+export const GRAPPLE_MAX_SPEED = 32
+export const GRAPPLE_AUTHORITY_AIR_ACCELERATION = 10
+export const GRAPPLE_AUTHORITY_GROUND_ACCELERATION = 40
+export const GRAPPLE_TRIGGER_PRESS_THRESHOLD = 0.62
+export const GRAPPLE_TRIGGER_RELEASE_THRESHOLD = 0.38
+
 // Mini-missile defaults are centralized here so playtesting can tune the weapon
 // without changing protocol or simulation behavior. Powered missiles keep a
 // valid designated or acquired pilot/drone target until it disappears. Only

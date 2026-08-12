@@ -15,6 +15,8 @@ import type {
 	DroneRecoveryIntent,
 	EquipmentSlots,
 	FireIntent,
+	GrappleActionIntent,
+	GrappleStateSnapshot,
 	FistContactResult,
 	GestureAction,
 	GestureIntent,
@@ -48,6 +50,8 @@ import type {
 } from "./arena-protocol.ts"
 import {
 	activeEquipmentSlot,
+	isGrapplePickupSnapshot,
+	isGrappleStateSnapshot,
 	isNewEquipmentSnapshot,
 	isVisorExpression,
 } from "./arena-protocol.ts"
@@ -66,6 +70,7 @@ import {
 	wallCenterAtY,
 	wallNormal,
 	wallTangent,
+	queryArenaAnchor,
 } from "./ArenaWorld.ts"
 import { GameAudio } from "./audio/GameAudio.ts"
 import type { GameAudioDefinition } from "./audio/GameAudioDefinitions.ts"
@@ -89,6 +94,9 @@ import {
 	GRENADE_GRAVITY,
 	GRENADE_RADIUS,
 	GRENADE_RESTITUTION,
+	GRAPPLE_PICKUP_POSITION,
+	GRAPPLE_PICKUP_RADIUS,
+	GRAPPLE_MAX_RANGE,
 	HIT_MARKER_DURATION_SECONDS,
 	MINI_MISSILE_PICKUP_POSITION,
 	MINI_MISSILE_PICKUP_RADIUS,
@@ -116,6 +124,9 @@ import {
 	IDLE_HOLD_INPUT_STATE,
 	inputEdge,
 	gamepadGestureInputs,
+	grappleTriggerHeld,
+	GRAPPLE_KEY_CODE,
+	isBombGamepadInput,
 	isGrenadeSwitchGamepadInput,
 	isGrenadeSwitchKeyboardInput,
 	isPickupGamepadInput,
@@ -125,6 +136,7 @@ import {
 	updateHoldInput,
 	type HoldInputState,
 } from "./game-input.ts"
+import { constrainGrappleMotion } from "./GrapplePhysics.ts"
 import type { GameHudState } from "./game-state.ts"
 import {
 	applyDirectionalDoubleJump,
@@ -460,6 +472,18 @@ export class ArenaGame {
 	readonly #dustParticles: DustParticle[] = []
 	readonly #grenadeExplosions: GrenadeExplosion[] = []
 	readonly #grenades: Grenade[] = []
+	readonly #grapplePickup = new THREE.Group()
+	readonly #grappleTetherGeometry = new THREE.BufferGeometry()
+	readonly #grappleTetherMaterial = new THREE.LineBasicMaterial({
+		color: "#73f5ff",
+		depthTest: true,
+		opacity: 0.92,
+		transparent: true,
+	})
+	readonly #grappleTether = new THREE.Line(
+		this.#grappleTetherGeometry,
+		this.#grappleTetherMaterial,
+	)
 	readonly #keys = new Set<string>()
 	readonly #onHud: (state: GameHudState) => void
 	readonly #player = {
@@ -518,6 +542,22 @@ export class ArenaGame {
 	#droneGrenades = 0
 	#droneActionSequence = 0
 	#grenadeSequence = 0
+	#grappleActionSequence = 0
+	#grapplePickupAvailable = false
+	#grapplePickupAvailableAt: number | null = null
+	#grapplePickupOwnerId: string | null = null
+	readonly #grapplePickupPosition = new THREE.Vector3()
+	#grappleState: GrappleStateSnapshot = {
+		anchor: null,
+		attachedAt: null,
+		ownerId: null,
+		phase: "idle",
+		ropeLength: null,
+		sequence: -1,
+		surfaceId: null,
+	}
+	#grappleTriggerHeld = false
+	#grappleInvalidUntil = 0
 	#health = 100
 	#localDamageTracker = initialDamageFeedbackTracker()
 	#localDeathRagdoll: PilotRagdollPresentation | null = null
@@ -682,6 +722,8 @@ export class ArenaGame {
 		this.#socket.off("arena:mini-missile-exploded", this.#onMiniMissileExploded)
 		this.#socket.off("arena:mini-missile-pickup", this.#onMiniMissilePickup)
 		this.#socket.off("arena:weapon-pickups", this.#onArenaWeaponPickups)
+		this.#socket.off("arena:grapple-pickup", this.#onGrapplePickup)
+		this.#socket.off("arena:grapple-state", this.#onGrappleState)
 		this.#socket.off("arena:projectile", this.#onProjectile)
 		this.#socket.off("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.off("arena:bubble", this.#onBubble)
@@ -734,6 +776,16 @@ export class ArenaGame {
 			})
 		}
 		this.#arenaPickupVisuals.clear()
+		this.#scene.remove(this.#grapplePickup, this.#grappleTether)
+		this.#grapplePickup.traverse((child) => {
+			if (!(child instanceof THREE.Mesh)) return
+			child.geometry.dispose()
+			if (Array.isArray(child.material))
+				child.material.forEach((material) => material.dispose())
+			else child.material.dispose()
+		})
+		this.#grappleTetherGeometry.dispose()
+		this.#grappleTetherMaterial.dispose()
 		this.#scene.remove(this.#bubbleField.mesh)
 		this.#bubbleField.dispose()
 		this.#scene.remove(this.#shotgunPellets.mesh)
@@ -889,6 +941,20 @@ export class ArenaGame {
 		this.#incomingMissileLocks = 0
 		this.#incomingStandardLocks = 0
 		this.#standardLockReported = false
+		this.#grapplePickupAvailable = false
+		this.#grapplePickupAvailableAt = null
+		this.#grapplePickupOwnerId = null
+		this.#grapplePickup.visible = false
+		this.#grappleState = {
+			anchor: null,
+			attachedAt: null,
+			ownerId: null,
+			phase: "idle",
+			ropeLength: null,
+			sequence: -1,
+			surfaceId: null,
+		}
+		this.#grappleTriggerHeld = false
 	}
 
 	readonly #onSpawn = (spawn: SpawnSnapshot): void => {
@@ -932,7 +998,7 @@ export class ArenaGame {
 			jump: 0,
 			jumpDirection: null,
 			jumpImpulse: null,
-			jumpSequence: 0,
+			jumpSequence: this.#jumpSequence,
 			mantle: { active: false, progress: 0, surfaceId: null },
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
@@ -951,6 +1017,29 @@ export class ArenaGame {
 		for (const snapshot of players) {
 			if (snapshot.id === this.#socket.id) {
 				this.#reload = snapshot.dead ? null : snapshot.reload
+				if (
+					this.#grappleState.phase === "attached" &&
+					this.#grappleState.ownerId === snapshot.id &&
+					Array.isArray(snapshot.position) &&
+					snapshot.position.length === 3 &&
+					snapshot.position.every(Number.isFinite) &&
+					Array.isArray(snapshot.velocity) &&
+					snapshot.velocity.length === 3 &&
+					snapshot.velocity.every(Number.isFinite)
+				) {
+					const authoritativePosition = new THREE.Vector3(...snapshot.position)
+					const positionError = this.#player.position.distanceTo(
+						authoritativePosition,
+					)
+					this.#player.position.lerp(
+						authoritativePosition,
+						positionError > 2.5 ? 1 : 0.35,
+					)
+					this.#player.velocity.lerp(
+						new THREE.Vector3(...snapshot.velocity),
+						0.35,
+					)
+				}
 				continue
 			}
 			if (!isGunId(snapshot.equippedWeapon)) continue
@@ -1376,6 +1465,27 @@ export class ArenaGame {
 		this.#pickupOwnerId = pickup.ownerId
 	}
 
+	readonly #onGrapplePickup = (pickup: unknown): void => {
+		if (!isGrapplePickupSnapshot(pickup)) return
+		this.#grapplePickupAvailable = pickup.available
+		this.#grapplePickupAvailableAt = pickup.availableAt
+		this.#grapplePickupOwnerId = pickup.ownerId
+		this.#grapplePickupPosition.set(...pickup.position)
+		this.#grapplePickup.position.copy(this.#grapplePickupPosition)
+		this.#grapplePickup.visible = pickup.available
+	}
+
+	readonly #onGrappleState = (state: unknown): void => {
+		if (
+			!isGrappleStateSnapshot(state) ||
+			state.sequence <= this.#grappleState.sequence
+		)
+			return
+		this.#grappleState = state
+		if (state.phase === "attached" && state.ownerId === this.#socket.id)
+			this.#grappleInvalidUntil = 0
+	}
+
 	readonly #onArenaWeaponPickups = (
 		pickups: ArenaWeaponPickupSnapshot[],
 	): void => {
@@ -1599,6 +1709,8 @@ export class ArenaGame {
 		this.#socket.on("arena:mini-missile-exploded", this.#onMiniMissileExploded)
 		this.#socket.on("arena:mini-missile-pickup", this.#onMiniMissilePickup)
 		this.#socket.on("arena:weapon-pickups", this.#onArenaWeaponPickups)
+		this.#socket.on("arena:grapple-pickup", this.#onGrapplePickup)
+		this.#socket.on("arena:grapple-state", this.#onGrappleState)
 		this.#socket.on("arena:projectile", this.#onProjectile)
 		this.#socket.on("arena:projectile-ended", this.#onProjectileEnded)
 		this.#socket.on("arena:bubble", this.#onBubble)
@@ -1870,6 +1982,37 @@ export class ArenaGame {
 		this.#missilePickup.rotation.z = Math.PI / 2
 		this.#scene.add(this.#missilePickup)
 
+		this.#grapplePickup.name = "grappling hook utility pickup"
+		const grappleCore = new THREE.Mesh(
+			new THREE.CylinderGeometry(0.18, 0.26, 1.1, 10),
+			new THREE.MeshStandardMaterial({
+				color: "#243b4a",
+				emissive: "#126d79",
+				emissiveIntensity: 1.1,
+				metalness: 0.78,
+				roughness: 0.24,
+			}),
+		)
+		grappleCore.rotation.z = Math.PI / 2
+		const grappleSpool = new THREE.Mesh(
+			new THREE.TorusGeometry(0.38, 0.075, 8, 24),
+			new THREE.MeshBasicMaterial({ color: "#73f5ff" }),
+		)
+		grappleSpool.rotation.y = Math.PI / 2
+		const grappleLight = new THREE.PointLight("#58eaff", 5.5, 9)
+		this.#grapplePickup.add(grappleCore, grappleSpool, grappleLight)
+		const [grappleX, grappleZ] = GRAPPLE_PICKUP_POSITION
+		this.#grapplePickup.position.set(
+			grappleX,
+			this.#heightAt(grappleX, grappleZ) + 0.82,
+			grappleZ,
+		)
+		this.#grapplePickup.visible = false
+		this.#grappleTether.name = "authoritative grapple tether"
+		this.#grappleTether.frustumCulled = false
+		this.#grappleTether.visible = false
+		this.#scene.add(this.#grapplePickup, this.#grappleTether)
+
 		const arenaPickupColors = {
 			"bubble-gun": "#f58bdf",
 			"rail-gun": "#ffc15c",
@@ -1980,6 +2123,7 @@ export class ArenaGame {
 		this.#rightBumperHeld = false
 		this.#shotHeld = false
 		this.#grenadeHeld = false
+		this.#grappleTriggerHeld = false
 		this.#jumpQueued = false
 		this.#jumpSequence = 0
 		this.#pendingJumpDirection = null
@@ -2002,11 +2146,12 @@ export class ArenaGame {
 	}
 
 	#pollGamepad(): {
+		bomb: boolean
 		connected: boolean
 		crouch: boolean
 		fire: boolean
 		fistbump: boolean
-		grenade: boolean
+		grappleTrigger: number
 		jump: boolean
 		lock: boolean
 		punch: boolean
@@ -2024,11 +2169,12 @@ export class ArenaGame {
 		if (gamepad === undefined || gamepad === null) {
 			this.#lookGamepad.set(0, 0)
 			return {
+				bomb: false,
 				connected: false,
 				crouch: false,
 				fire: false,
 				fistbump: false,
-				grenade: false,
+				grappleTrigger: 0,
 				jump: false,
 				lock: false,
 				punch: false,
@@ -2052,7 +2198,8 @@ export class ArenaGame {
 		const jump = gamepad.buttons[0]?.pressed ?? false
 		const crouch = gamepad.buttons[1]?.pressed ?? false
 		const fire = (gamepad.buttons[7]?.value ?? 0) > 0.25
-		const grenade = (gamepad.buttons[6]?.value ?? 0) > 0.25
+		const grappleTrigger = gamepad.buttons[6]?.value ?? 0
+		const bomb = isBombGamepadInput(gamepad.buttons)
 		const lock = gamepad.buttons[4]?.pressed ?? false
 		const pickup = isPickupGamepadInput(gamepad.buttons)
 		const reload = gamepad.buttons[5]?.pressed ?? false
@@ -2061,11 +2208,12 @@ export class ArenaGame {
 		const gestures = gamepadGestureInputs(gamepad.buttons)
 		const switchGrenade = isGrenadeSwitchGamepadInput(gamepad.buttons)
 		return {
+			bomb,
 			connected: true,
 			crouch,
 			fire,
 			fistbump: gestures.fistbump,
-			grenade,
+			grappleTrigger,
 			jump,
 			lock,
 			punch: gestures.punch,
@@ -2113,7 +2261,9 @@ export class ArenaGame {
 		this.#grenadeSwitchHeld = grenadeSwitchEdge.held
 		if (grenadeSwitchEdge.triggered) this.#requestGrenadeCycle()
 		const droneWreckNearby = this.#isDroneWreckNearby()
-		const pickupNearby = this.#isPickupNearby() && !droneWreckNearby
+		const pickupNearby =
+			(this.#isPickupNearby() || this.#isGrapplePickupNearby()) &&
+			!droneWreckNearby
 		const activeGun = gunDefinition(this.#weaponKind)
 		const rightBumperAction = contextualRightBumperAction(
 			pickupNearby || droneWreckNearby,
@@ -2207,7 +2357,18 @@ export class ArenaGame {
 			},
 			ground,
 		)
-		const wallRegularSliding = this.#wallTraversal.mode === "crouch-slide"
+		const grappleAttached =
+			this.#grappleState.phase === "attached" &&
+			this.#grappleState.ownerId === this.#socket.id &&
+			this.#grappleState.anchor !== null &&
+			this.#grappleState.ropeLength !== null
+		if (grappleAttached) {
+			this.#slide = false
+			this.#surfaceSlide = false
+			this.#coyoteRemaining = null
+		}
+		const wallRegularSliding =
+			!grappleAttached && this.#wallTraversal.mode === "crouch-slide"
 		const wasPhysicsSliding = this.#slide && !wallRegularSliding
 		const terrainGradient = sampleTerrainGradient(
 			(x, z) => this.#heightAt(x, z),
@@ -2222,7 +2383,8 @@ export class ArenaGame {
 				z: this.#player.velocity.z,
 			},
 			{
-				crouching: crouch,
+				blocked: grappleAttached,
+				crouching: crouch && !grappleAttached,
 				delta,
 				grounded,
 				terrainGradient,
@@ -2338,7 +2500,7 @@ export class ArenaGame {
 		let nextX = motion.x
 		let nextZ = motion.z
 		const mantleCandidate =
-			!crouch && !this.#slide && !this.#surfaceSlide
+			!grappleAttached && !crouch && !this.#slide && !this.#surfaceSlide
 				? queryArenaLedge(this.#seed, {
 						contact: motion.contact,
 						eyeHeight: eye,
@@ -2348,7 +2510,7 @@ export class ArenaGame {
 					})
 				: null
 		const mantleStep = stepMantleTraversal(this.#mantle, {
-			blocked: this.#dead || crouch,
+			blocked: this.#dead || crouch || grappleAttached,
 			candidate: mantleCandidate,
 			delta,
 			position: this.#player.position.toArray(),
@@ -2370,7 +2532,8 @@ export class ArenaGame {
 			this.#audioLandingImpact = 0
 		} else {
 			const wallStep = stepWallTraversal(this.#wallTraversal, {
-				blocked: this.#slide || this.#surfaceSlide || this.#dead,
+				blocked:
+					this.#slide || this.#surfaceSlide || this.#dead || grappleAttached,
 				contact: motion.contact,
 				crouching: crouch,
 				delta,
@@ -2411,7 +2574,7 @@ export class ArenaGame {
 				: null
 			const jumpStep = stepJumpPhysics(
 				{
-					coyoteRemaining: this.#coyoteRemaining,
+					coyoteRemaining: grappleAttached ? null : this.#coyoteRemaining,
 					jumpCount: this.#player.jumps,
 					positionY: this.#player.position.y,
 					velocityY: this.#player.velocity.y,
@@ -2424,6 +2587,7 @@ export class ArenaGame {
 					groundMidpoint: midpointGround,
 					jumpRequested: this.#jumpQueued,
 					ledgeCoyoteEligible:
+						!grappleAttached &&
 						motion.contact === null &&
 						wallStep.state.mode === "none" &&
 						!this.#surfaceSlide,
@@ -2432,7 +2596,7 @@ export class ArenaGame {
 				},
 			)
 			this.#jumpQueued = false
-			this.#coyoteRemaining = jumpStep.coyoteRemaining
+			this.#coyoteRemaining = grappleAttached ? null : jumpStep.coyoteRemaining
 			this.#player.jumps = jumpStep.jumpCount
 			const doubleJumpDirection =
 				jumpStep.impulse === 2
@@ -2458,7 +2622,7 @@ export class ArenaGame {
 			if (jumpStep.impulse !== null || jumpStep.departedGround) {
 				this.#slide = false
 				this.#surfaceSlide = false
-			} else if (jumpStep.landed && crouch) {
+			} else if (jumpStep.landed && crouch && !grappleAttached) {
 				this.#slide = stepSlidePhysics(
 					{
 						sliding: false,
@@ -2479,6 +2643,41 @@ export class ArenaGame {
 			}
 			this.#player.position.set(nextX, jumpStep.positionY, nextZ)
 			this.#player.velocity.y = jumpStep.velocityY
+			if (grappleAttached) {
+				const anchor = this.#grappleState.anchor
+				const ropeLength = this.#grappleState.ropeLength
+				if (anchor !== null && ropeLength !== null) {
+					const steering = new THREE.Vector3(
+						-Math.sin(this.#player.yaw) * -input.y +
+							Math.cos(this.#player.yaw) * input.x,
+						0,
+						-Math.cos(this.#player.yaw) * -input.y -
+							Math.sin(this.#player.yaw) * input.x,
+					)
+					const constrained = constrainGrappleMotion(
+						{
+							position: this.#player.position,
+							velocity: this.#player.velocity,
+						},
+						{
+							anchor: { x: anchor[0], y: anchor[1], z: anchor[2] },
+							delta,
+							ropeLength,
+							steering,
+						},
+					)
+					this.#player.position.set(
+						constrained.position.x,
+						constrained.position.y,
+						constrained.position.z,
+					)
+					this.#player.velocity.set(
+						constrained.velocity.x,
+						constrained.velocity.y,
+						constrained.velocity.z,
+					)
+				}
+			}
 			this.#audioJumpImpulse =
 				jumpStep.impulse === 1 || jumpStep.impulse === 2
 					? jumpStep.impulse
@@ -2492,8 +2691,17 @@ export class ArenaGame {
 			if (!trigger && this.#triggerHeld) this.#releaseRailCharge()
 		} else if (trigger && this.#fireCooldown <= 0) this.#fire()
 		this.#triggerHeld = trigger
-		if (gamepad.grenade && !this.#grenadeHeld) this.#throwGrenade()
-		this.#grenadeHeld = gamepad.grenade
+		const bombPressed = gamepad.bomb
+		if (bombPressed && !this.#grenadeHeld) this.#throwGrenade()
+		this.#grenadeHeld = bombPressed
+		const grapplePressed =
+			this.#keys.has(GRAPPLE_KEY_CODE) ||
+			grappleTriggerHeld(gamepad.grappleTrigger, this.#grappleTriggerHeld)
+		if (grapplePressed && !this.#grappleTriggerHeld)
+			this.#requestGrappleAttach()
+		if (!grapplePressed && this.#grappleTriggerHeld)
+			this.#requestGrappleDetach()
+		this.#grappleTriggerHeld = grapplePressed
 		this.#fireCooldown -= delta
 		this.#grenadeCooldown -= delta
 	}
@@ -2522,6 +2730,14 @@ export class ArenaGame {
 
 	#isPickupNearby(): boolean {
 		return this.#nearbyPickupWeapon() !== null
+	}
+
+	#isGrapplePickupNearby(): boolean {
+		return (
+			this.#grapplePickupAvailable &&
+			this.#player.position.distanceTo(this.#grapplePickupPosition) <=
+				GRAPPLE_PICKUP_RADIUS
+		)
 	}
 
 	#isDroneWreckNearby(): boolean {
@@ -2565,6 +2781,14 @@ export class ArenaGame {
 
 	#requestPickup(): void {
 		if (!this.#connected || this.#dead) return
+		if (this.#isGrapplePickupNearby()) {
+			this.#grappleActionSequence += 1
+			this.#socket.emit("arena:grapple-action", {
+				clientActionId: this.#grappleActionSequence,
+				type: "collect",
+			} satisfies GrappleActionIntent)
+			return
+		}
 		const weapon = this.#nearbyPickupWeapon()
 		if (weapon === null) return
 		this.#releaseRailCharge()
@@ -2573,6 +2797,49 @@ export class ArenaGame {
 			type: "collect",
 			weapon,
 		} satisfies InventoryActionIntent)
+	}
+
+	#requestGrappleAttach(): void {
+		if (
+			!this.#connected ||
+			this.#dead ||
+			this.#grapplePickupOwnerId !== this.#socket.id ||
+			this.#grappleState.phase === "attached"
+		)
+			return
+		const direction = this.#getAimDirection()
+		if (
+			queryArenaAnchor(
+				this.#seed,
+				this.#player.position.toArray(),
+				direction.toArray(),
+				GRAPPLE_MAX_RANGE,
+			) === null
+		) {
+			this.#grappleInvalidUntil = performance.now() / 1_000 + 0.85
+			return
+		}
+		this.#grappleActionSequence += 1
+		this.#socket.emit("arena:grapple-action", {
+			clientActionId: this.#grappleActionSequence,
+			direction: direction.toArray(),
+			origin: this.#player.position.toArray(),
+			type: "attach",
+		} satisfies GrappleActionIntent)
+	}
+
+	#requestGrappleDetach(): void {
+		if (
+			!this.#connected ||
+			this.#grappleState.phase !== "attached" ||
+			this.#grappleState.ownerId !== this.#socket.id
+		)
+			return
+		this.#grappleActionSequence += 1
+		this.#socket.emit("arena:grapple-action", {
+			clientActionId: this.#grappleActionSequence,
+			type: "detach",
+		} satisfies GrappleActionIntent)
 	}
 
 	#requestSwitch(direction: -1 | 1): void {
@@ -2586,8 +2853,16 @@ export class ArenaGame {
 	}
 
 	#requestDrop(): void {
-		if (!this.#connected || this.#dead || this.#equipmentSlots[1] === null)
+		if (!this.#connected || this.#dead) return
+		if (this.#grapplePickupOwnerId === this.#socket.id) {
+			this.#grappleActionSequence += 1
+			this.#socket.emit("arena:grapple-action", {
+				clientActionId: this.#grappleActionSequence,
+				type: "drop",
+			} satisfies GrappleActionIntent)
 			return
+		}
+		if (this.#equipmentSlots[1] === null) return
 		this.#socket.emit("arena:inventory-action", {
 			clientActionId: this.#nextInventoryActionId(),
 			type: "drop-secondary",
@@ -2915,6 +3190,31 @@ export class ArenaGame {
 		for (const pickup of this.#arenaPickupVisuals.values()) {
 			pickup.model.root.rotation.y += delta * 1.1
 		}
+	}
+
+	#updateGrappleVisual(delta: number): void {
+		this.#grapplePickup.rotation.y += delta * 1.6
+		const { anchor, ownerId, phase } = this.#grappleState
+		if (phase !== "attached" || anchor === null || ownerId === null) {
+			this.#grappleTether.visible = false
+			return
+		}
+		const endpoint =
+			ownerId === this.#socket.id
+				? this.#player.position.clone().add(new THREE.Vector3(0, -0.34, 0))
+				: this.#remotePlayers
+						.get(ownerId)
+						?.position.clone()
+						.add(new THREE.Vector3(0, 1.18, 0))
+		if (endpoint === undefined) {
+			this.#grappleTether.visible = false
+			return
+		}
+		this.#grappleTetherGeometry.setFromPoints([
+			endpoint,
+			new THREE.Vector3(...anchor),
+		])
+		this.#grappleTether.visible = true
 	}
 
 	#updateGrenades(delta: number): void {
@@ -3974,6 +4274,25 @@ export class ArenaGame {
 			droneGrenades: this.#droneGrenades,
 			droneWreckNearby: this.#isDroneWreckNearby(),
 			grenadeKind: this.#grenadeKind,
+			grappleOwned: this.#grapplePickupOwnerId === this.#socket.id,
+			grappleInvalid: performance.now() / 1_000 < this.#grappleInvalidUntil,
+			grapplePhase:
+				this.#grappleState.ownerId === this.#socket.id
+					? this.#grappleState.phase
+					: "idle",
+			grapplePickupNearby: this.#isGrapplePickupNearby(),
+			grapplePickupRemaining:
+				this.#grapplePickupAvailableAt === null
+					? 0
+					: Math.max(
+							0,
+							Math.ceil((this.#grapplePickupAvailableAt - Date.now()) / 1_000),
+						),
+			grapplePickupStatus: this.#grapplePickupAvailable
+				? "available"
+				: this.#grapplePickupOwnerId !== null
+					? "carried"
+					: "returning",
 			jump: this.#player.jumps,
 			leadReticleVisible:
 				this.#targetingState === "acquired" ||
@@ -4097,6 +4416,7 @@ export class ArenaGame {
 		this.#updateMiniMissiles(delta)
 		this.#updateDustParticles(delta)
 		this.#updateRemotePlayers(delta)
+		this.#updateGrappleVisual(delta)
 		this.#updateCamera(delta)
 		this.#updateTargeting(delta)
 		this.#updateSmartTargetLead(delta)

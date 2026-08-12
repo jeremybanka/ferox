@@ -138,6 +138,7 @@ export type AuthoritativeMovementInput = Readonly<{
 	coyoteDelta?: number
 	crouching: boolean
 	delta: number
+	grappleAttached?: boolean
 	grounded: boolean
 	jump: 0 | 1 | 2
 	jumpDirection?: readonly [number, number] | null
@@ -180,7 +181,7 @@ export function reconcileAuthoritativeMovement(
 	const mantleStep = stepMantleTraversal(
 		input.previousMantle ?? INITIAL_MANTLE_STATE,
 		{
-			blocked: input.crouching,
+			blocked: input.crouching || input.grappleAttached === true,
 			candidate: input.mantleCandidate ?? null,
 			delta: input.delta,
 			position: input.position ?? [0, 0, 0],
@@ -246,7 +247,7 @@ export function reconcileAuthoritativeMovement(
 						input.delta,
 					)
 	const traversal = stepWallTraversal(input.previousWallTraversal, {
-		blocked: false,
+		blocked: input.grappleAttached === true,
 		contact: input.contact,
 		crouching: input.crouching,
 		delta: input.delta,
@@ -372,19 +373,27 @@ export function reconcileAuthoritativeMovement(
 	}
 	if (input.grounded && impulse === null) jump = 0
 	return {
-		coyoteRemaining,
-		jump,
+		coyoteRemaining: input.grappleAttached === true ? null : coyoteRemaining,
+		jump:
+			input.grappleAttached === true
+				? (input.previousJump ?? input.jump)
+				: jump,
 		mantle: { active: false, progress: 0, surfaceId: null },
 		mantlePosition: null,
 		mantleState: INITIAL_MANTLE_STATE,
 		resolvedPosition: input.resolvedPosition ?? null,
 		sliding:
-			wallRegularSlide ||
-			(mode === "none" &&
-				(terrainSlide === null ? input.sliding : terrainSlide.sliding)),
-		surfaceSliding,
+			input.grappleAttached === true
+				? false
+				: wallRegularSlide ||
+					(mode === "none" &&
+						(terrainSlide === null ? input.sliding : terrainSlide.sliding)),
+		surfaceSliding: input.grappleAttached === true ? false : surfaceSliding,
 		traversalState: traversal.state,
-		velocity,
-		wallTraversal,
+		velocity: input.grappleAttached === true ? input.velocity : velocity,
+		wallTraversal:
+			input.grappleAttached === true
+				? { mode: "none", normal: [0, 0, 0] }
+				: wallTraversal,
 	}
 }

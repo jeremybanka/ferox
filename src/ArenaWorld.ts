@@ -49,6 +49,13 @@ export type ArenaSurfaceContact = Readonly<{
 	time: number
 }>
 
+export type ArenaAnchorHit = Readonly<{
+	distance: number
+	normal: readonly [number, number, number]
+	point: readonly [number, number, number]
+	surfaceId: string
+}>
+
 type ChannelBlueprint = Readonly<{
 	height: number
 	length: number
@@ -638,6 +645,301 @@ function pointInsideArenaObstacleExcept(
 			return true
 	}
 	return false
+}
+
+type RayHit = Readonly<{
+	distance: number
+	normal: readonly [number, number, number]
+}>
+
+const dot3 = (
+	left: readonly [number, number, number],
+	right: readonly [number, number, number],
+): number => left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+
+function rayOrientedBox(
+	origin: readonly [number, number, number],
+	direction: readonly [number, number, number],
+	center: readonly [number, number, number],
+	axes: readonly (readonly [number, number, number])[],
+	halfExtents: readonly [number, number, number],
+): RayHit | null {
+	const relative: [number, number, number] = [
+		origin[0] - center[0],
+		origin[1] - center[1],
+		origin[2] - center[2],
+	]
+	let near = -Infinity
+	let far = Infinity
+	let nearNormal: readonly [number, number, number] = [0, 0, 0]
+	let farNormal: readonly [number, number, number] = [0, 0, 0]
+	for (let index = 0; index < 3; index += 1) {
+		const axis = axes[index]
+		const extent = halfExtents[index]
+		if (axis === undefined || extent === undefined) return null
+		const localOrigin = dot3(relative, axis)
+		const localDirection = dot3(direction, axis)
+		if (Math.abs(localDirection) < 1e-9) {
+			if (Math.abs(localOrigin) > extent) return null
+			continue
+		}
+		let first = (-extent - localOrigin) / localDirection
+		let second = (extent - localOrigin) / localDirection
+		let firstSign = -1
+		if (first > second) {
+			;[first, second] = [second, first]
+			firstSign = 1
+		}
+		if (first > near) {
+			near = first
+			nearNormal = [
+				axis[0] * firstSign,
+				axis[1] * firstSign,
+				axis[2] * firstSign,
+			]
+		}
+		if (second < far) {
+			far = second
+			farNormal = [
+				-axis[0] * firstSign,
+				-axis[1] * firstSign,
+				-axis[2] * firstSign,
+			]
+		}
+		if (near > far) return null
+	}
+	if (far < 0) return null
+	return near >= 0
+		? { distance: near, normal: nearNormal }
+		: { distance: far, normal: farNormal }
+}
+
+function rayPillar(
+	origin: readonly [number, number, number],
+	direction: readonly [number, number, number],
+	pillar: ArenaPillar,
+): RayHit | null {
+	const axis = pillarAxis(pillar)
+	const relative: [number, number, number] = [
+		origin[0] - pillar.x,
+		origin[1] - pillar.baseY,
+		origin[2] - pillar.z,
+	]
+	const originAlong = dot3(relative, axis)
+	const directionAlong = dot3(direction, axis)
+	const perpendicularOrigin: [number, number, number] = [
+		relative[0] - axis[0] * originAlong,
+		relative[1] - axis[1] * originAlong,
+		relative[2] - axis[2] * originAlong,
+	]
+	const perpendicularDirection: [number, number, number] = [
+		direction[0] - axis[0] * directionAlong,
+		direction[1] - axis[1] * directionAlong,
+		direction[2] - axis[2] * directionAlong,
+	]
+	const a = dot3(perpendicularDirection, perpendicularDirection)
+	const b = 2 * dot3(perpendicularOrigin, perpendicularDirection)
+	const c = dot3(perpendicularOrigin, perpendicularOrigin) - pillar.radius ** 2
+	const candidates: RayHit[] = []
+	const discriminant = b * b - 4 * a * c
+	if (a > 1e-9 && discriminant >= 0) {
+		for (const distance of [
+			(-b - Math.sqrt(discriminant)) / (2 * a),
+			(-b + Math.sqrt(discriminant)) / (2 * a),
+		]) {
+			const height = originAlong + directionAlong * distance
+			if (distance < 0 || height < 0 || height > pillar.height) continue
+			const hitRelative: [number, number, number] = [
+				relative[0] + direction[0] * distance,
+				relative[1] + direction[1] * distance,
+				relative[2] + direction[2] * distance,
+			]
+			const along = dot3(hitRelative, axis)
+			const radial: [number, number, number] = [
+				hitRelative[0] - axis[0] * along,
+				hitRelative[1] - axis[1] * along,
+				hitRelative[2] - axis[2] * along,
+			]
+			const radialLength = Math.hypot(...radial)
+			if (radialLength > 1e-9)
+				candidates.push({
+					distance,
+					normal: radial.map((component) => component / radialLength) as [
+						number,
+						number,
+						number,
+					],
+				})
+		}
+	}
+	if (Math.abs(directionAlong) > 1e-9) {
+		for (const [height, sign] of [
+			[0, -1],
+			[pillar.height, 1],
+		] as const) {
+			const distance = (height - originAlong) / directionAlong
+			if (distance < 0) continue
+			const radial: [number, number, number] = [
+				perpendicularOrigin[0] + perpendicularDirection[0] * distance,
+				perpendicularOrigin[1] + perpendicularDirection[1] * distance,
+				perpendicularOrigin[2] + perpendicularDirection[2] * distance,
+			]
+			if (dot3(radial, radial) <= pillar.radius ** 2)
+				candidates.push({
+					distance,
+					normal: [axis[0] * sign, axis[1] * sign, axis[2] * sign],
+				})
+		}
+	}
+	return (
+		candidates.sort((left, right) => left.distance - right.distance)[0] ?? null
+	)
+}
+
+/** Returns the first deterministic height-field intersection along a ray. */
+export function arenaTerrainRayHitDistance(
+	seed: number,
+	origin: readonly [number, number, number],
+	direction: readonly [number, number, number],
+	maxDistance: number,
+): number | null {
+	if (
+		![...origin, ...direction, maxDistance].every(Number.isFinite) ||
+		maxDistance <= 0
+	)
+		return null
+	const directionLength = Math.hypot(...direction)
+	if (directionLength < 1e-6) return null
+	const ray: [number, number, number] = [
+		direction[0] / directionLength,
+		direction[1] / directionLength,
+		direction[2] / directionLength,
+	]
+	const clearanceAt = (distance: number): number =>
+		origin[1] +
+		ray[1] * distance -
+		arenaHeightAt(
+			seed,
+			origin[0] + ray[0] * distance,
+			origin[2] + ray[2] * distance,
+		)
+	let previousDistance = 0
+	if (clearanceAt(0) <= 0) return 0
+	const step = 0.2
+	for (
+		let distance = Math.min(step, maxDistance);
+		distance <= maxDistance;
+		distance = Math.min(maxDistance, distance + step)
+	) {
+		const clearance = clearanceAt(distance)
+		if (clearance <= 0) {
+			let clearDistance = previousDistance
+			let blockedDistance = distance
+			for (let iteration = 0; iteration < 14; iteration += 1) {
+				const midpoint = (clearDistance + blockedDistance) * 0.5
+				if (clearanceAt(midpoint) > 0) clearDistance = midpoint
+				else blockedDistance = midpoint
+			}
+			return blockedDistance
+		}
+		if (distance === maxDistance) break
+		previousDistance = distance
+	}
+	return null
+}
+
+/**
+ * Finds the nearest visible stable structure. Terrain remains ineligible as an
+ * anchor, but its shared height field occludes walls and pillars behind ridges
+ * or below the floor for identical client/server line-of-sight decisions.
+ */
+export function queryArenaAnchor(
+	seed: number,
+	origin: readonly [number, number, number],
+	direction: readonly [number, number, number],
+	maxDistance: number,
+): ArenaAnchorHit | null {
+	if (
+		![...origin, ...direction, maxDistance].every(Number.isFinite) ||
+		maxDistance <= 0
+	)
+		return null
+	const directionLength = Math.hypot(...direction)
+	if (directionLength < 1e-6) return null
+	const ray: [number, number, number] = [
+		direction[0] / directionLength,
+		direction[1] / directionLength,
+		direction[2] / directionLength,
+	]
+	const hits: ArenaAnchorHit[] = []
+	for (const pillar of arenaPillars(seed)) {
+		const hit = rayPillar(origin, ray, pillar)
+		if (hit === null || hit.distance > maxDistance) continue
+		hits.push({
+			distance: hit.distance,
+			normal: hit.normal,
+			point: [
+				origin[0] + ray[0] * hit.distance,
+				origin[1] + ray[1] * hit.distance,
+				origin[2] + ray[2] * hit.distance,
+			],
+			surfaceId: pillar.id,
+		})
+	}
+	for (const wall of arenaWalls(seed)) {
+		const [tangentX, tangentZ] = wallTangent(wall)
+		const [normalX, normalZ] = wallNormal(wall)
+		const up: [number, number, number] = [
+			normalX * Math.sin(wall.leanRadians),
+			Math.cos(wall.leanRadians),
+			normalZ * Math.sin(wall.leanRadians),
+		]
+		const tangent: [number, number, number] = [tangentX, 0, tangentZ]
+		const depth: [number, number, number] = [
+			tangent[1] * up[2] - tangent[2] * up[1],
+			tangent[2] * up[0] - tangent[0] * up[2],
+			tangent[0] * up[1] - tangent[1] * up[0],
+		]
+		const center: [number, number, number] = [
+			wall.x + up[0] * wall.height * 0.5,
+			wall.baseY + up[1] * wall.height * 0.5,
+			wall.z + up[2] * wall.height * 0.5,
+		]
+		const hit = rayOrientedBox(
+			origin,
+			ray,
+			center,
+			[tangent, up, depth],
+			[wall.length * 0.5, wall.height * 0.5, wall.thickness * 0.5],
+		)
+		if (hit === null || hit.distance > maxDistance) continue
+		hits.push({
+			distance: hit.distance,
+			normal: hit.normal,
+			point: [
+				origin[0] + ray[0] * hit.distance,
+				origin[1] + ray[1] * hit.distance,
+				origin[2] + ray[2] * hit.distance,
+			],
+			surfaceId: wall.id,
+		})
+	}
+	const nearest =
+		hits.sort(
+			(left, right) =>
+				left.distance - right.distance ||
+				left.surfaceId.localeCompare(right.surfaceId),
+		)[0] ?? null
+	if (nearest === null) return null
+	const terrainDistance = arenaTerrainRayHitDistance(
+		seed,
+		origin,
+		ray,
+		nearest.distance,
+	)
+	return terrainDistance !== null && terrainDistance + 1e-4 < nearest.distance
+		? null
+		: nearest
 }
 
 function mantleCapsuleIsClear(

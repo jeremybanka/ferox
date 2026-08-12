@@ -8,6 +8,7 @@ import {
 	activeEquipmentSlot,
 	isNewInventoryActionIntent,
 	isDroneRecoveryIntent,
+	isGrappleActionIntent,
 	isGrenadeSelectionIntent,
 	isJumpDirectionForImpulse,
 	isJumpSequence,
@@ -28,20 +29,31 @@ import {
 } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
 import {
+	ARENA_PLAYABLE_HALF_EXTENT,
 	arenaMovementGroundAt,
+	queryArenaAnchor,
 	queryArenaLedge,
 	resolveArenaMotion,
 } from "../src/ArenaWorld.ts"
 import {
 	ARENA_SEED,
 	ARENA_WEAPON_PICKUP_PADS,
+	GRAPPLE_AUTHORITY_AIR_ACCELERATION,
+	GRAPPLE_AUTHORITY_GROUND_ACCELERATION,
+	GRAPPLE_MAX_RANGE,
+	GRAPPLE_PICKUP_POSITION,
 	MINI_MISSILE_PICKUP_POSITION,
 	PLAYER_SPAWN_ORDER,
 	PLAYER_SPAWN_POINTS,
 	railChargeFraction,
 } from "../src/game-constants.ts"
+import {
+	constrainGrappleMotion,
+	stepAuthoritativeGrappleDirectionalJumpMotion,
+	stepAuthoritativeGrappleMotion,
+} from "../src/GrapplePhysics.ts"
 import { DEFAULT_GUN_ID, gunDefinition } from "../src/guns/GunDefinitions.ts"
-import { isJumpGrounded } from "../src/JumpPhysics.ts"
+import { isJumpGrounded, JUMP_PHYSICS } from "../src/JumpPhysics.ts"
 import {
 	INITIAL_MANTLE_STATE,
 	MANTLE_MAXIMUM_RISE,
@@ -64,11 +76,19 @@ import {
 } from "../src/WallTraversal.ts"
 import { ArenaSimulation } from "./ArenaSimulation.ts"
 import {
+	authoritativeGrappleJumpPlanarImpulse,
+	reconcileAuthoritativeGrappleGroundTransition,
+	reconcileAuthoritativeGrappleJump,
+} from "./AuthoritativeGrappleJump.ts"
+import {
 	authoritativeTraversalSpeedLimit,
-	consumeAuthoritativeJumpSignal,
 	limitAuthoritativeTraversalDestination,
 	reconcileAuthoritativeMovement,
 } from "./AuthoritativeMovement.ts"
+import {
+	initialAuthoritativeJumpRoute,
+	routeAuthoritativeJumpSignal,
+} from "./AuthoritativeJumpRouter.ts"
 import { MeleeCombat } from "./MeleeCombat.ts"
 import { isFireCadenceReady } from "./FireCadence.ts"
 import { MiniMissileArmory, type LockUpdate } from "./MiniMissileArmory.ts"
@@ -77,6 +97,7 @@ import {
 	type StandardLockUpdate,
 } from "./StandardLockTracker.ts"
 import { PlayerLifecycle } from "./PlayerLifecycle.ts"
+import { GrappleUtility } from "./GrappleUtility.ts"
 type SpawnPayload = {
 	damageSequence: number
 	position: [number, number]
@@ -111,6 +132,7 @@ const railCharges = new Map<
 >()
 const lastInventoryAction = new Map<string, number>()
 const lastDroneAction = new Map<string, number>()
+const lastGrappleAction = new Map<string, number>()
 const playerReloads = new Map<string, Exclude<ReloadState, null>>()
 const [pickupX, pickupZ] = MINI_MISSILE_PICKUP_POSITION
 const arenaPickupPads = ARENA_WEAPON_PICKUP_PADS.map(
@@ -122,6 +144,12 @@ const armory = new MiniMissileArmory(
 	arenaPickupPads,
 	Date.now(),
 )
+const [grappleX, grappleZ] = GRAPPLE_PICKUP_POSITION
+const grapple = new GrappleUtility([
+	grappleX,
+	arenaHeightAt(ARENA_SEED, grappleX, grappleZ) + 0.82,
+	grappleZ,
+])
 const standardLocks = new StandardLockTracker()
 
 const applyPlayerDamage = (
@@ -179,6 +207,7 @@ const applyPlayerDamage = (
 		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
 		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
 		if (armory.release(playerId, nowMs)) emitPickups()
+		if (grapple.release(playerId, nowMs)) emitGrapple()
 		emitEquipment(playerId)
 		lastPlayerFire.delete(playerId)
 		lastPlayerGrenade.delete(playerId)
@@ -223,6 +252,11 @@ const emitEquipment = (playerId: string): void => {
 const emitPickups = (): void => {
 	io.emit("arena:mini-missile-pickup", armory.pickup())
 	io.emit("arena:weapon-pickups", armory.arenaPickups())
+}
+
+const emitGrapple = (): void => {
+	io.emit("arena:grapple-pickup", grapple.pickup())
+	io.emit("arena:grapple-state", grapple.state())
 }
 
 const cancelPlayerReload = (playerId: string): boolean => {
@@ -376,11 +410,13 @@ realtime(
 		let authoritativeLifeSequence = 0
 		let authoritativeWallTraversal: WallTraversalState =
 			INITIAL_WALL_TRAVERSAL_STATE
+		let authoritativeGrappleJumps: 0 | 1 | 2 = 0
+		let authoritativeGrappleSequence = -1
 		let authoritativeMantle: MantleState = INITIAL_MANTLE_STATE
 		let authoritativeCoyoteRemaining: number | null = null
 		let authoritativeGrounded = true
 		let authoritativeJump: 0 | 1 | 2 = 0
-		let authoritativeJumpSequence = 0
+		let authoritativeJumpRoute = initialAuthoritativeJumpRoute(0)
 		let authoritativeSliding = false
 		let authoritativeSurfaceSliding = false
 		let lastMoveAt = performance.now()
@@ -431,6 +467,7 @@ realtime(
 			weaponsFree: false,
 		})
 		armory.connect(socketId)
+		grapple.connect(socketId)
 		simulation.connectPlayer(socketId)
 		const onReady = (): void => {
 			if (playerLifecycle.isAlive(socketId)) {
@@ -445,6 +482,8 @@ realtime(
 			gameSocket.emit("arena:equipment", armory.equipment(socketId))
 			gameSocket.emit("arena:mini-missile-pickup", armory.pickup())
 			gameSocket.emit("arena:weapon-pickups", armory.arenaPickups())
+			gameSocket.emit("arena:grapple-pickup", grapple.pickup())
+			gameSocket.emit("arena:grapple-state", grapple.state())
 			gameSocket.emit("arena:incoming-lock", armory.incoming(socketId))
 			gameSocket.emit(
 				"arena:drone-inventory",
@@ -499,11 +538,15 @@ realtime(
 			if (current.lifeSequence !== authoritativeLifeSequence) {
 				authoritativeLifeSequence = current.lifeSequence
 				authoritativeWallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+				authoritativeGrappleJumps = 0
+				authoritativeGrappleSequence = -1
 				authoritativeMantle = INITIAL_MANTLE_STATE
 				authoritativeCoyoteRemaining = null
 				authoritativeGrounded = true
 				authoritativeJump = 0
-				authoritativeJumpSequence = 0
+				authoritativeJumpRoute = initialAuthoritativeJumpRoute(
+					current.lifeSequence,
+				)
 				authoritativeSliding = false
 				authoritativeSurfaceSliding = false
 				lastMoveAt = moveAt
@@ -511,127 +554,399 @@ realtime(
 			const timerDelta = Math.max((moveAt - lastMoveAt) / 1_000, 0)
 			const delta = Math.min(timerDelta, 0.1)
 			lastMoveAt = moveAt
-			const requestedPosition = limitAuthoritativeTraversalDestination(
-				current.position,
-				payload.position,
-				authoritativeTraversalSpeedLimit({
-					previousSliding: authoritativeSliding,
-					previousSurfaceSliding: authoritativeSurfaceSliding,
-					previousWallTraversal: authoritativeWallTraversal,
-				}),
-				delta,
-			)
-			const resolvedMotion = resolveArenaMotion(
-				ARENA_SEED,
-				[current.position[0], current.position[2]],
-				[requestedPosition[0], requestedPosition[2]],
-				requestedPosition[1] - 0.86,
-			)
 			const eyeHeight = payload.crouching
 				? PILOT_CROUCH_EYE_HEIGHT
 				: PILOT_STANDING_EYE_HEIGHT
-			const rootY = requestedPosition[1] - eyeHeight
-			const movementGround = arenaMovementGroundAt(
-				ARENA_SEED,
-				resolvedMotion.x,
-				resolvedMotion.z,
-				rootY + 0.45,
-			).height
-			const grounded = isJumpGrounded(
-				{ positionY: requestedPosition[1], velocityY: current.velocity[1] },
-				movementGround + eyeHeight,
-			)
-			const yaw = payload.rotation[0]
-			const jumpSignal = consumeAuthoritativeJumpSignal(
-				authoritativeJumpSequence,
-				{
+			const grappleState = grapple.state()
+			const grappleAttached =
+				grappleState.phase === "attached" &&
+				grappleState.ownerId === socketId &&
+				grappleState.anchor !== null &&
+				grappleState.ropeLength !== null
+			const jumpRoute = routeAuthoritativeJumpSignal(authoritativeJumpRoute, {
+				grappleAttached,
+				lifeSequence: current.lifeSequence,
+				reported: {
 					direction: payload.jumpDirection,
 					impulse: payload.jumpImpulse,
 					sequence: payload.jumpSequence,
 				},
-			)
-			authoritativeJumpSequence = jumpSignal.sequence
-			const mantleCandidate = payload.crouching
-				? null
-				: queryArenaLedge(ARENA_SEED, {
-						contact: resolvedMotion.contact,
-						eyeHeight,
-						maximumRise: MANTLE_MAXIMUM_RISE,
-						position: current.position,
-						velocity: payload.velocity,
-					})
-			const authoritativeMovement = reconcileAuthoritativeMovement({
-				contact: resolvedMotion.contact,
-				coyoteDelta: timerDelta,
-				crouching: payload.crouching,
-				delta,
-				grounded,
-				jump: payload.jump,
-				jumpDirection: jumpSignal.direction,
-				jumpImpulse: jumpSignal.impulse,
-				mantleCandidate,
-				position: current.position,
-				previousCoyoteRemaining: authoritativeCoyoteRemaining,
-				previousGrounded: authoritativeGrounded,
-				previousJump: authoritativeJump,
-				previousMantle: authoritativeMantle,
-				previousSliding: authoritativeSliding,
-				previousSurfaceSliding: authoritativeSurfaceSliding,
-				previousVelocity: current.velocity,
-				previousWallTraversal: authoritativeWallTraversal,
-				reportedWallTraversal: payload.wallTraversal,
-				resolvedPosition: [
-					resolvedMotion.x,
-					requestedPosition[1],
-					resolvedMotion.z,
-				],
-				sliding: payload.sliding,
-				terrainGradient: sampleTerrainGradient(
-					(x, z) => arenaHeightAt(ARENA_SEED, x, z),
-					resolvedMotion.x,
-					resolvedMotion.z,
-				),
-				velocity: payload.velocity,
-				viewDirection: horizontalViewDirectionFromYaw(yaw),
 			})
-			authoritativeWallTraversal = authoritativeMovement.traversalState
-			authoritativeMantle = authoritativeMovement.mantleState
-			authoritativeCoyoteRemaining = authoritativeMovement.coyoteRemaining
-			authoritativeGrounded = grounded && authoritativeMovement.velocity[1] <= 0
-			authoritativeJump = authoritativeMovement.jump
-			authoritativeSliding = authoritativeMovement.sliding
-			authoritativeSurfaceSliding = authoritativeMovement.surfaceSliding
-			const authoritativePosition = authoritativeMovement.mantlePosition ??
-				authoritativeMovement.resolvedPosition ?? [
+			authoritativeJumpRoute = jumpRoute.state
+			const groundEyeHeightAt = (
+				x: number,
+				z: number,
+				positionY: number,
+			): number =>
+				arenaMovementGroundAt(ARENA_SEED, x, z, positionY - eyeHeight + 0.45)
+					.height + eyeHeight
+
+			let finalPosition: [number, number, number]
+			let finalVelocity: [number, number, number]
+			let finalJump: 0 | 1 | 2
+			let finalMantle: NonNullable<PlayerSnapshot["mantle"]> = {
+				active: false,
+				progress: 0,
+				surfaceId: null,
+			}
+			let finalSliding = false
+			let finalWallTraversal: PlayerSnapshot["wallTraversal"] = {
+				mode: "none" as const,
+				normal: [0, 0, 0] as [number, number, number],
+			}
+
+			if (grappleAttached) {
+				const jumpSignal = jumpRoute.grapple!
+				const grappleAnchor = grappleState.anchor!
+				const grappleRopeLength = grappleState.ropeLength!
+				const groundBefore = groundEyeHeightAt(
+					current.position[0],
+					current.position[2],
+					current.position[1],
+				)
+				const groundedBefore = isJumpGrounded(
+					{
+						positionY: current.position[1],
+						velocityY: current.velocity[1],
+					},
+					groundBefore,
+				)
+				if (authoritativeGrappleSequence !== grappleState.sequence) {
+					authoritativeGrappleSequence = grappleState.sequence
+					authoritativeGrappleJumps = groundedBefore
+						? 0
+						: authoritativeJump === 2
+							? 2
+							: 1
+					authoritativeMantle = INITIAL_MANTLE_STATE
+					authoritativeCoyoteRemaining = null
+					authoritativeSliding = false
+					authoritativeSurfaceSliding = false
+					authoritativeWallTraversal = INITIAL_WALL_TRAVERSAL_STATE
+				}
+				const grappleJump = reconcileAuthoritativeGrappleJump({
+					groundedBefore,
+					jumpCount: authoritativeGrappleJumps,
+					requestedDirection:
+						jumpSignal.direction === null ? null : [...jumpSignal.direction],
+					requestedImpulse: jumpSignal.impulse,
+				})
+				authoritativeGrappleJumps = grappleJump.jumpCount
+				const jumpPlanarImpulse =
+					authoritativeGrappleJumpPlanarImpulse(grappleJump)
+				const integrateGrapple = (applyGravity: boolean) => {
+					if (
+						grappleJump.acceptedImpulse === 2 &&
+						grappleJump.acceptedDirection !== null
+					)
+						return stepAuthoritativeGrappleDirectionalJumpMotion(
+							{
+								position: {
+									x: current.position[0],
+									y: current.position[1],
+									z: current.position[2],
+								},
+								velocity: {
+									x: current.velocity[0],
+									y: current.velocity[1],
+									z: current.velocity[2],
+								},
+							},
+							{
+								anchor: {
+									x: grappleAnchor[0],
+									y: grappleAnchor[1],
+									z: grappleAnchor[2],
+								},
+								delta,
+								gravity: JUMP_PHYSICS.gravity,
+								instantaneousVerticalVelocity:
+									grappleJump.instantaneousVerticalVelocity ??
+									JUMP_PHYSICS.doubleJumpVelocity,
+								planarImpulse: jumpPlanarImpulse,
+								ropeLength: grappleRopeLength,
+								steering: {
+									x: grappleJump.acceptedDirection[0],
+									y: 0,
+									z: grappleJump.acceptedDirection[1],
+								},
+							},
+						)
+					return stepAuthoritativeGrappleMotion(
+						{
+							position: {
+								x: current.position[0],
+								y: current.position[1],
+								z: current.position[2],
+							},
+							velocity: {
+								x: current.velocity[0],
+								y: current.velocity[1],
+								z: current.velocity[2],
+							},
+						},
+						{
+							x: payload.velocity[0],
+							y: payload.velocity[1],
+							z: payload.velocity[2],
+						},
+						{
+							anchor: {
+								x: grappleAnchor[0],
+								y: grappleAnchor[1],
+								z: grappleAnchor[2],
+							},
+							applyGravity,
+							delta,
+							gravity: JUMP_PHYSICS.gravity,
+							instantaneousVerticalVelocity:
+								grappleJump.instantaneousVerticalVelocity,
+							maximumInputAcceleration: groundedBefore
+								? GRAPPLE_AUTHORITY_GROUND_ACCELERATION
+								: GRAPPLE_AUTHORITY_AIR_ACCELERATION,
+							ropeLength: grappleRopeLength,
+							steering: { x: 0, y: 0, z: 0 },
+						},
+					)
+				}
+				let authoritative = integrateGrapple(!groundedBefore)
+				let followsGroundContour = false
+				if (groundedBefore && grappleJump.acceptedImpulse === null) {
+					const provisionalMotion = resolveArenaMotion(
+						ARENA_SEED,
+						[current.position[0], current.position[2]],
+						[authoritative.position.x, authoritative.position.z],
+						authoritative.position.y - 0.86,
+					)
+					const midpointY =
+						(current.position[1] + authoritative.position.y) * 0.5
+					const groundMidpoint = groundEyeHeightAt(
+						(current.position[0] + provisionalMotion.x) * 0.5,
+						(current.position[2] + provisionalMotion.z) * 0.5,
+						midpointY,
+					)
+					const groundAfter = groundEyeHeightAt(
+						provisionalMotion.x,
+						provisionalMotion.z,
+						authoritative.position.y,
+					)
+					const groundTransition =
+						reconcileAuthoritativeGrappleGroundTransition({
+							acceptedImpulse: grappleJump.acceptedImpulse,
+							groundAfter,
+							groundBefore,
+							groundedBefore,
+							groundMidpoint,
+						})
+					followsGroundContour = groundTransition.followsGroundContour
+					if (groundTransition.applyGravity)
+						authoritative = integrateGrapple(true)
+				}
+				const resolvedMotion = resolveArenaMotion(
+					ARENA_SEED,
+					[current.position[0], current.position[2]],
+					[authoritative.position.x, authoritative.position.z],
+					authoritative.position.y - 0.86,
+				)
+				finalPosition = [
 					resolvedMotion.x,
-					requestedPosition[1],
+					authoritative.position.y,
 					resolvedMotion.z,
 				]
+				finalVelocity = [
+					authoritative.velocity.x,
+					authoritative.velocity.y,
+					authoritative.velocity.z,
+				]
+				const groundAfter = groundEyeHeightAt(
+					finalPosition[0],
+					finalPosition[2],
+					finalPosition[1],
+				)
+				if (followsGroundContour && grappleJump.acceptedImpulse === null) {
+					finalPosition[1] = groundAfter
+					finalVelocity[1] = 0
+				}
+				if (finalPosition[1] < groundAfter) {
+					finalPosition[1] = groundAfter
+					finalVelocity[1] = Math.max(0, finalVelocity[1])
+				}
+				const constrained = constrainGrappleMotion(
+					{
+						position: {
+							x: finalPosition[0],
+							y: finalPosition[1],
+							z: finalPosition[2],
+						},
+						velocity: {
+							x: finalVelocity[0],
+							y: finalVelocity[1],
+							z: finalVelocity[2],
+						},
+					},
+					{
+						anchor: {
+							x: grappleAnchor[0],
+							y: grappleAnchor[1],
+							z: grappleAnchor[2],
+						},
+						delta: 0,
+						ropeLength: grappleRopeLength,
+						steering: { x: 0, y: 0, z: 0 },
+					},
+				)
+				finalPosition = [
+					constrained.position.x,
+					constrained.position.y,
+					constrained.position.z,
+				]
+				finalVelocity = [
+					constrained.velocity.x,
+					constrained.velocity.y,
+					constrained.velocity.z,
+				]
+				const groundedAfter = isJumpGrounded(
+					{ positionY: finalPosition[1], velocityY: finalVelocity[1] },
+					groundEyeHeightAt(
+						finalPosition[0],
+						finalPosition[2],
+						finalPosition[1],
+					),
+				)
+				if (groundedAfter) authoritativeGrappleJumps = 0
+				else if (authoritativeGrappleJumps === 0) authoritativeGrappleJumps = 1
+				authoritativeJump = authoritativeGrappleJumps
+				authoritativeGrounded = groundedAfter
+				finalJump = authoritativeGrappleJumps
+				if (
+					Math.abs(payload.position[0]) > ARENA_PLAYABLE_HALF_EXTENT + 1 ||
+					Math.abs(payload.position[2]) > ARENA_PLAYABLE_HALF_EXTENT + 1
+				) {
+					grapple.detach(socketId)
+					emitGrapple()
+				}
+			} else {
+				const jumpSignal = jumpRoute.movement!
+				authoritativeGrappleSequence = -1
+				const requestedPosition = limitAuthoritativeTraversalDestination(
+					current.position,
+					payload.position,
+					authoritativeTraversalSpeedLimit({
+						previousSliding: authoritativeSliding,
+						previousSurfaceSliding: authoritativeSurfaceSliding,
+						previousWallTraversal: authoritativeWallTraversal,
+					}),
+					delta,
+				)
+				const resolvedMotion = resolveArenaMotion(
+					ARENA_SEED,
+					[current.position[0], current.position[2]],
+					[requestedPosition[0], requestedPosition[2]],
+					requestedPosition[1] - 0.86,
+				)
+				const movementGround = arenaMovementGroundAt(
+					ARENA_SEED,
+					resolvedMotion.x,
+					resolvedMotion.z,
+					requestedPosition[1] - eyeHeight + 0.45,
+				).height
+				const grounded = isJumpGrounded(
+					{
+						positionY: requestedPosition[1],
+						velocityY: current.velocity[1],
+					},
+					movementGround + eyeHeight,
+				)
+				const mantleCandidate = payload.crouching
+					? null
+					: queryArenaLedge(ARENA_SEED, {
+							contact: resolvedMotion.contact,
+							eyeHeight,
+							maximumRise: MANTLE_MAXIMUM_RISE,
+							position: current.position,
+							velocity: payload.velocity,
+						})
+				const authoritativeMovement = reconcileAuthoritativeMovement({
+					contact: resolvedMotion.contact,
+					coyoteDelta: timerDelta,
+					crouching: payload.crouching,
+					delta,
+					grounded,
+					jump: payload.jump,
+					jumpDirection: jumpSignal.direction,
+					jumpImpulse: jumpSignal.impulse,
+					mantleCandidate,
+					position: current.position,
+					previousCoyoteRemaining: authoritativeCoyoteRemaining,
+					previousGrounded: authoritativeGrounded,
+					previousJump: authoritativeJump,
+					previousMantle: authoritativeMantle,
+					previousSliding: authoritativeSliding,
+					previousSurfaceSliding: authoritativeSurfaceSliding,
+					previousVelocity: current.velocity,
+					previousWallTraversal: authoritativeWallTraversal,
+					reportedWallTraversal: payload.wallTraversal,
+					resolvedPosition: [
+						resolvedMotion.x,
+						requestedPosition[1],
+						resolvedMotion.z,
+					],
+					sliding: payload.sliding,
+					terrainGradient: sampleTerrainGradient(
+						(x, z) => arenaHeightAt(ARENA_SEED, x, z),
+						resolvedMotion.x,
+						resolvedMotion.z,
+					),
+					velocity: payload.velocity,
+					viewDirection: horizontalViewDirectionFromYaw(payload.rotation[0]),
+				})
+				authoritativeWallTraversal = authoritativeMovement.traversalState
+				authoritativeMantle = authoritativeMovement.mantleState
+				authoritativeCoyoteRemaining = authoritativeMovement.coyoteRemaining
+				authoritativeGrounded =
+					grounded && authoritativeMovement.velocity[1] <= 0
+				authoritativeJump = authoritativeMovement.jump
+				authoritativeSliding = authoritativeMovement.sliding
+				authoritativeSurfaceSliding = authoritativeMovement.surfaceSliding
+				const authoritativePosition = authoritativeMovement.mantlePosition ??
+					authoritativeMovement.resolvedPosition ?? [
+						resolvedMotion.x,
+						requestedPosition[1],
+						resolvedMotion.z,
+					]
+				finalPosition = [...authoritativePosition]
+				finalVelocity = [...authoritativeMovement.velocity]
+				finalJump = authoritativeMovement.jump
+				finalMantle = authoritativeMovement.mantle
+				finalSliding = authoritativeMovement.sliding
+				finalWallTraversal = authoritativeMovement.wallTraversal
+			}
+
 			players.set(socketId, {
 				...current,
 				aimDirection: payload.aimDirection,
 				crouching: payload.crouching,
-				freeAim: payload.freeAim,
-				jump: authoritativeMovement.jump,
-				mantle: authoritativeMovement.mantle,
-				position: [...authoritativePosition],
-				rotation: payload.rotation,
-				sliding: authoritativeMovement.sliding,
-				sprinting: payload.sprinting,
-				velocity: [...authoritativeMovement.velocity],
-				wallTraversal: authoritativeMovement.wallTraversal,
-				visorExpression: payload.visorExpression,
-				visorStartedAt: payload.visorStartedAt,
-				weaponsFree: payload.weaponsFree,
-				equippedWeapon: armory.activeWeapon(socketId),
 				dead: false,
 				deathStartedAt: null,
+				equippedWeapon: armory.activeWeapon(socketId),
+				freeAim: payload.freeAim,
 				id: socketId,
+				jump: finalJump,
 				lifeSequence: current.lifeSequence,
+				mantle: finalMantle,
+				position: finalPosition,
 				recoilSequence: current.recoilSequence,
 				recoilStartedAt: current.recoilStartedAt,
 				reload: current.reload,
 				respawnAt: null,
+				rotation: payload.rotation,
+				sliding: finalSliding,
+				sprinting: payload.sprinting,
+				velocity: finalVelocity,
+				visorExpression: payload.visorExpression,
+				visorStartedAt: payload.visorStartedAt,
+				wallTraversal: finalWallTraversal,
+				weaponsFree: payload.weaponsFree,
 			})
 			reconcileStandardLocks()
 		}
@@ -850,6 +1165,64 @@ realtime(
 				)
 			}
 		}
+		const onGrappleAction = (payload: unknown): void => {
+			if (!playerLifecycle.isAlive(socketId) || !isGrappleActionIntent(payload))
+				return
+			const previous = lastGrappleAction.get(socketId) ?? -1
+			if (payload.clientActionId <= previous) return
+			lastGrappleAction.set(socketId, payload.clientActionId)
+			const player = players.get(socketId)
+			if (player === undefined) return
+			let changed = false
+			let pickupChanged = false
+			switch (payload.type) {
+				case "collect":
+					changed = grapple.collect(socketId, player.position)
+					pickupChanged = changed
+					break
+				case "attach": {
+					if (
+						Math.hypot(
+							payload.origin[0] - player.position[0],
+							payload.origin[1] - player.position[1],
+							payload.origin[2] - player.position[2],
+						) > 2.5
+					)
+						return
+					const directionLength = Math.hypot(...payload.direction)
+					const aimLength = Math.hypot(...player.aimDirection)
+					const aimAlignment =
+						directionLength > 1e-6 && aimLength > 1e-6
+							? (payload.direction[0] * player.aimDirection[0] +
+									payload.direction[1] * player.aimDirection[1] +
+									payload.direction[2] * player.aimDirection[2]) /
+								(directionLength * aimLength)
+							: -1
+					// A 35° allowance tolerates the 20 Hz move stream without allowing a
+					// client to anchor behind the server-observed reticle.
+					if (aimAlignment < Math.cos((35 * Math.PI) / 180)) return
+					const hit = queryArenaAnchor(
+						ARENA_SEED,
+						player.position,
+						payload.direction,
+						GRAPPLE_MAX_RANGE,
+					)
+					if (hit === null) return
+					changed = grapple.attach(socketId, player.position, hit, Date.now())
+					break
+				}
+				case "detach":
+					changed = grapple.detach(socketId)
+					break
+				case "drop":
+					changed = grapple.release(socketId, Date.now())
+					pickupChanged = changed
+					break
+			}
+			if (!changed) return
+			if (pickupChanged) io.emit("arena:grapple-pickup", grapple.pickup())
+			io.emit("arena:grapple-state", grapple.state())
+		}
 		const onGesture = (payload: unknown): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
 			melee.accept(socketId, payload, Date.now())
@@ -891,12 +1264,14 @@ realtime(
 		gameSocket.on("arena:fire-mini-missile", onFireMiniMissile)
 		gameSocket.on("arena:inventory-action", onInventoryAction)
 		gameSocket.on("arena:throw-grenade", onThrowGrenade)
+		gameSocket.on("arena:grapple-action", onGrappleAction)
 		gameSocket.on("arena:gesture", onGesture)
 		gameSocket.on("arena:recover-drone", onRecoverDrone)
 		gameSocket.on("arena:cycle-grenade", onCycleGrenade)
 
 		return () => {
 			simulation.removePlayer(socketId, true)
+			grapple.disconnect(socketId, Date.now())
 			emitMissileLockUpdates(armory.disconnect(socketId, Date.now()))
 			emitStandardLockUpdates(standardLocks.clearPlayer(socketId))
 			players.delete(socketId)
@@ -912,7 +1287,9 @@ realtime(
 			lastInventoryAction.delete(socketId)
 			melee.removePlayer(socketId)
 			lastDroneAction.delete(socketId)
+			lastGrappleAction.delete(socketId)
 			emitPickups()
+			emitGrapple()
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)
 			gameSocket.off("arena:move", onMove)
@@ -922,6 +1299,7 @@ realtime(
 			gameSocket.off("arena:fire-mini-missile", onFireMiniMissile)
 			gameSocket.off("arena:inventory-action", onInventoryAction)
 			gameSocket.off("arena:throw-grenade", onThrowGrenade)
+			gameSocket.off("arena:grapple-action", onGrappleAction)
 			gameSocket.off("arena:gesture", onGesture)
 			gameSocket.off("arena:recover-drone", onRecoverDrone)
 			gameSocket.off("arena:cycle-grenade", onCycleGrenade)
@@ -978,6 +1356,7 @@ setInterval(() => {
 		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
 		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
 		if (armory.release(playerId, nowMs)) emitPickups()
+		if (grapple.release(playerId, nowMs)) emitGrapple()
 		armory.resetLoadout(playerId)
 		playerReloads.delete(playerId)
 		emitEquipment(playerId)
@@ -986,6 +1365,7 @@ setInterval(() => {
 		lastPlayerMissile.delete(playerId)
 		railCharges.delete(playerId)
 		lastRailChargeId.delete(playerId)
+		lastGrappleAction.delete(playerId)
 		io.to(playerId).emit("arena:spawn", {
 			damageSequence: playerDamageSequences.get(playerId) ?? 0,
 			position: [spawnX, spawnZ],
@@ -1032,6 +1412,7 @@ setInterval(() => {
 	simulation.update(delta)
 	melee.update(nowMs)
 	if (armory.update(nowMs)) emitPickups()
+	if (grapple.update(nowMs)) emitGrapple()
 }, 1_000 / 30)
 
 setInterval(() => {

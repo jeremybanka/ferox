@@ -25,6 +25,12 @@ export type GameHudState = {
 	droneGrenades: number
 	droneWreckNearby: boolean
 	grenadeKind: "drone" | "standard"
+	grappleOwned: boolean
+	grappleInvalid: boolean
+	grapplePhase: "attached" | "idle"
+	grapplePickupNearby: boolean
+	grapplePickupStatus: "available" | "carried" | "returning"
+	grapplePickupRemaining: number
 	leadReticleVisible: boolean
 	leadReticleX: number
 	leadReticleY: number
@@ -73,6 +79,12 @@ export const gameHudStateAtom = atom<GameHudState>({
 		droneGrenades: 0,
 		droneWreckNearby: false,
 		grenadeKind: "standard",
+		grappleOwned: false,
+		grappleInvalid: false,
+		grapplePhase: "idle",
+		grapplePickupNearby: false,
+		grapplePickupStatus: "returning",
+		grapplePickupRemaining: 0,
 		leadReticleVisible: false,
 		leadReticleX: 0.5,
 		leadReticleY: 0.5,

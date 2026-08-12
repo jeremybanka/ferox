@@ -384,6 +384,53 @@ describe("authoritative wall movement", () => {
 		expect(state.wallTraversal.mode).toBe("none")
 	})
 
+	test("grapple precedence suppresses wall, mantle, coyote, and surface slide without refilling a spent jump", () => {
+		const state = reconcileAuthoritativeMovement({
+			contact: wallContact,
+			crouching: false,
+			delta: 1 / 60,
+			grappleAttached: true,
+			grounded: false,
+			jump: 2,
+			mantleCandidate: {
+				rise: 0.5,
+				surfaceId: wallContact.surfaceId,
+				target: [0, 3.5, 0],
+			},
+			position: [0, 3, 0],
+			previousCoyoteRemaining: 0.08,
+			previousGrounded: false,
+			previousJump: 2,
+			previousMantle: {
+				elapsed: 0.05,
+				mode: "mantle",
+				start: [0, 3, 0],
+				surfaceId: wallContact.surfaceId,
+				target: [0, 3.5, 0],
+			},
+			previousSliding: true,
+			previousSurfaceSliding: true,
+			previousVelocity: [-1, -2, 9],
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "run", normal: [1, 0, 0] },
+			sliding: true,
+			terrainGradient: { x: Math.tan((70 * Math.PI) / 180), z: 0 },
+			velocity: [-1, -2, 9],
+			viewDirection: [0, 0, 1],
+		})
+
+		expect(state.jump).toBe(2)
+		expect(state.coyoteRemaining).toBeNull()
+		expect(state.mantle).toEqual({
+			active: false,
+			progress: 0,
+			surfaceId: null,
+		})
+		expect(state.sliding).toBe(false)
+		expect(state.surfaceSliding).toBe(false)
+		expect(state.wallTraversal).toEqual({ mode: "none", normal: [0, 0, 0] })
+	})
+
 	test("authoritative crouch slide caps forged speed without refilling jump", () => {
 		const contact = { ...wallContact, surfaceNormal: [1, 0, 0] as const }
 		const acquired = reconcileAuthoritativeMovement({

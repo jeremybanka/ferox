@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest"
 
 import { ARENA_SEED, PLAYER_SPAWN_POINTS } from "./game-constants.ts"
+import { arenaHeightAt } from "./arena-terrain.ts"
 import {
 	ARENA_AREA_SCALE,
 	ARENA_GRID_DIVISIONS,
@@ -9,6 +10,7 @@ import {
 	ARENA_RENDER_SIZE,
 	ARENA_TERRAIN_SEGMENTS,
 	arenaPillars,
+	arenaTerrainRayHitDistance,
 	arenaWalls,
 	arenaMovementGroundAt,
 	isSpawnClear,
@@ -16,6 +18,7 @@ import {
 	pointInsideArenaObstacle,
 	queryArenaLedge,
 	resolveArenaMotion,
+	queryArenaAnchor,
 	wallCenterAtY,
 	wallNormal,
 	wallTangent,
@@ -312,5 +315,64 @@ describe("arena world", () => {
 		const result = resolveArenaMotion(ARENA_SEED, [0, 0], [900, -900], 200)
 		expect(result.x).toBe(ARENA_PLAYABLE_HALF_EXTENT)
 		expect(result.z).toBe(-ARENA_PLAYABLE_HALF_EXTENT)
+	})
+
+	test("deterministically acquires the nearest seeded structure surface", () => {
+		const wall = arenaWalls(ARENA_SEED).find(
+			(candidate) => candidate.role === "outer",
+		)!
+		const centerY = wall.baseY + Math.cos(wall.leanRadians) * wall.height * 0.5
+		const center = wallCenterAtY(wall, centerY)!
+		const [normalX, normalZ] = wallNormal(wall)
+		const origin: [number, number, number] = [
+			center[0] + normalX * 10,
+			centerY,
+			center[1] + normalZ * 10,
+		]
+		const direction: [number, number, number] = [-normalX, 0, -normalZ]
+		const first = queryArenaAnchor(ARENA_SEED, origin, direction, 20)
+		expect(first?.surfaceId.startsWith("wall-")).toBe(true)
+		expect(first?.distance).toBeGreaterThan(8)
+		expect(queryArenaAnchor(ARENA_SEED, origin, direction, 20)).toEqual(first)
+		expect(queryArenaAnchor(ARENA_SEED, origin, direction, 2)).toBeNull()
+	})
+
+	test("finds deterministic floor hits and rejects structures hidden by a ridge", () => {
+		const floorOrigin: [number, number, number] = [
+			0,
+			arenaHeightAt(ARENA_SEED, 0, 0) + 2,
+			0,
+		]
+		expect(
+			arenaTerrainRayHitDistance(ARENA_SEED, floorOrigin, [0, -1, 0], 4),
+		).toBeCloseTo(2, 4)
+
+		const hiddenWall = arenaWalls(ARENA_SEED).find(
+			(wall) => wall.id === "wall-outer-43",
+		)!
+		const targetY =
+			hiddenWall.baseY +
+			Math.cos(hiddenWall.leanRadians) * hiddenWall.height * 0.5
+		const target = wallCenterAtY(hiddenWall, targetY)!
+		const origin: [number, number, number] = [
+			-120,
+			arenaHeightAt(ARENA_SEED, -120, -110) + 1.72,
+			-110,
+		]
+		const direction: [number, number, number] = [
+			target[0] - origin[0],
+			targetY - origin[1],
+			target[1] - origin[2],
+		]
+		const targetDistance = Math.hypot(...direction)
+		const terrainDistance = arenaTerrainRayHitDistance(
+			ARENA_SEED,
+			origin,
+			direction,
+			targetDistance,
+		)
+		expect(terrainDistance).not.toBeNull()
+		expect(terrainDistance!).toBeLessThan(targetDistance)
+		expect(queryArenaAnchor(ARENA_SEED, origin, direction, 52)).toBeNull()
 	})
 })

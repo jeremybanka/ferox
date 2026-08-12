@@ -139,11 +139,15 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</incoming-threat>
 
 				<pickup-prompt
-					data-active={hud.pickup === "nearby"}
-					aria-hidden={hud.pickup !== "nearby"}
+					data-active={hud.pickup === "nearby" || hud.grapplePickupNearby}
+					aria-hidden={hud.pickup !== "nearby" && !hud.grapplePickupNearby}
 					style={{ "--pickup-progress": hud.pickupProgress }}
 				>
-					<strong>{nearbyGun?.name ?? "WEAPON"} READY</strong>
+					<strong>
+						{hud.grapplePickupNearby
+							? "GRAPPLING HOOK READY"
+							: `${nearbyGun?.name ?? "WEAPON"} READY`}
+					</strong>
 					<span>
 						<kbd>E</kbd>
 						<kbd>RB</kbd>
@@ -166,6 +170,14 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</drone-recovery-prompt>
 
 				<pickup-status-board aria-label="Arena weapon pickup status">
+					<pickup-status data-status={hud.grapplePickupStatus}>
+						<strong>GRAPPLE</strong>
+						<span>
+							{hud.grapplePickupStatus === "returning"
+								? `RETURN ${hud.grapplePickupRemaining}s`
+								: hud.grapplePickupStatus.toUpperCase()}
+						</span>
+					</pickup-status>
 					{hud.pickupStatuses.map((pickup) => (
 						<pickup-status key={pickup.weapon} data-status={pickup.status}>
 							<strong>{gunDefinition(pickup.weapon).name}</strong>
@@ -273,6 +285,22 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</player-vitals>
 
 				<weapon-status>
+					<grapple-status
+						data-owned={hud.grappleOwned}
+						data-phase={hud.grapplePhase}
+					>
+						<kbd>Z / LT</kbd>
+						<strong>GRAPPLE</strong>
+						<span>
+							{hud.grappleInvalid
+								? "NO ANCHOR"
+								: hud.grapplePhase === "attached"
+									? "TETHERED"
+									: hud.grappleOwned
+										? "READY"
+										: "NO UTILITY"}
+						</span>
+					</grapple-status>
 					<grenade-status data-active={hud.grenadeKind === "drone"}>
 						<kbd>2 / X</kbd>
 						<strong>
@@ -347,10 +375,12 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<span>FREE AIM</span>
 						<kbd>1 / Y / WHEEL</kbd>
 						<span>SWITCH</span>
-						<kbd>RMB / LT</kbd>
-						<span>GRENADE</span>
+						<kbd>Z / LT</kbd>
+						<span>GRAPPLE</span>
+						<kbd>RMB / VIEW</kbd>
+						<span>BOMB</span>
 						<kbd>2 / X</kbd>
-						<span>GRENADE TYPE</span>
+						<span>BOMB TYPE</span>
 						<kbd>HOLD E / RB</kbd>
 						<span>PICK UP</span>
 						<kbd>R / RB</kbd>
