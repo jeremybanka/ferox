@@ -2,10 +2,14 @@ import { describe, expect, test } from "vitest"
 
 import {
 	contextualRightBumperAction,
+	BOMB_GAMEPAD_BUTTON,
 	debounceWheelInput,
 	IDLE_HOLD_INPUT_STATE,
 	inputEdge,
 	gamepadGestureInputs,
+	grappleTriggerHeld,
+	isBombGamepadInput,
+	isGrappleKeyboardInput,
 	isGrenadeSwitchGamepadInput,
 	isGrenadeSwitchKeyboardInput,
 	keyboardGestureInput,
@@ -18,6 +22,28 @@ import {
 	WEAPON_SWITCH_GAMEPAD_BUTTON,
 	wheelDirection,
 } from "./game-input.ts"
+
+describe("grapple and bomb input", () => {
+	test("uses LT hysteresis and rearms only below the release threshold", () => {
+		expect(grappleTriggerHeld(0.61, false)).toBe(false)
+		expect(grappleTriggerHeld(0.62, false)).toBe(true)
+		expect(grappleTriggerHeld(0.4, true)).toBe(true)
+		expect(grappleTriggerHeld(0.38, true)).toBe(false)
+	})
+
+	test("provides keyboard parity and moves controller bomb to View", () => {
+		expect(isGrappleKeyboardInput("KeyZ")).toBe(true)
+		expect(isGrappleKeyboardInput("KeyF")).toBe(false)
+		const buttons = Array.from({ length: 16 }, () => ({
+			pressed: false,
+			value: 0,
+		}))
+		buttons[6] = { pressed: true, value: 1 }
+		expect(isBombGamepadInput(buttons)).toBe(false)
+		buttons[BOMB_GAMEPAD_BUTTON] = { pressed: true, value: 1 }
+		expect(isBombGamepadInput(buttons)).toBe(true)
+	})
+})
 
 describe("pickup input", () => {
 	test("accepts one non-repeating E key edge", () => {

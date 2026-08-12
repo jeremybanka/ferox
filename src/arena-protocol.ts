@@ -1,4 +1,5 @@
 import { isGunId, type GunId } from "./guns/GunDefinitions.ts"
+import { isBoundedDirectionalJumpDirection } from "./DirectionalJumpPhysics.ts"
 
 export type Vector3Tuple = [number, number, number]
 
@@ -109,7 +110,6 @@ export type PlayerSnapshot = {
 
 export type JumpImpulse = 1 | 2 | null
 export type JumpDirection = [number, number] | null
-export const JUMP_DIRECTION_MINIMUM_MAGNITUDE = 1e-6
 
 export type PlayerMoveSnapshot = Omit<
 	PlayerSnapshot,
@@ -131,7 +131,7 @@ export type PlayerMoveSnapshot = Omit<
 	jumpImpulse: JumpImpulse
 	/** World-space [x,z] direction, present only for a double-jump edge. */
 	jumpDirection: JumpDirection
-	/** Monotonic per-connection sequence; incremented only for a new impulse. */
+	/** Monotonic per-life sequence; reset on spawn and incremented per impulse. */
 	jumpSequence: number
 }
 
@@ -140,17 +140,15 @@ export function isJumpImpulse(value: unknown): value is JumpImpulse {
 }
 
 export function isJumpDirection(value: unknown): value is JumpDirection {
-	if (value === null) return true
-	if (
-		!Array.isArray(value) ||
-		value.length !== 2 ||
-		!value.every(Number.isFinite)
-	)
-		return false
-	const magnitude = Math.hypot(value[0] as number, value[1] as number)
 	return (
-		magnitude === 0 ||
-		(magnitude >= JUMP_DIRECTION_MINIMUM_MAGNITUDE && magnitude <= 1 + 1e-6)
+		value === null ||
+		(Array.isArray(value) &&
+			value.length === 2 &&
+			value.every(Number.isFinite) &&
+			isBoundedDirectionalJumpDirection({
+				x: value[0] as number,
+				z: value[1] as number,
+			}))
 	)
 }
 
@@ -168,6 +166,109 @@ export function isJumpDirectionForImpulse(
 
 export function isJumpSequence(value: unknown): value is number {
 	return Number.isSafeInteger(value) && (value as number) >= 0
+}
+
+export type GrapplePhase = "attached" | "idle"
+
+export type GrapplePickupSnapshot = Readonly<{
+	available: boolean
+	availableAt: number | null
+	ownerId: string | null
+	position: Vector3Tuple
+}>
+
+export type GrappleStateSnapshot = Readonly<{
+	anchor: Vector3Tuple | null
+	attachedAt: number | null
+	ownerId: string | null
+	phase: GrapplePhase
+	ropeLength: number | null
+	sequence: number
+	surfaceId: string | null
+}>
+
+export type GrappleActionIntent =
+	| Readonly<{ clientActionId: number; type: "collect" | "detach" | "drop" }>
+	| Readonly<{
+			clientActionId: number
+			direction: Vector3Tuple
+			origin: Vector3Tuple
+			type: "attach"
+	  }>
+
+const isVector3Tuple = (value: unknown): value is Vector3Tuple =>
+	Array.isArray(value) &&
+	value.length === 3 &&
+	value.every((component) => Number.isFinite(component))
+
+export function isGrappleActionIntent(
+	value: unknown,
+): value is GrappleActionIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	if (
+		!Number.isSafeInteger(record["clientActionId"]) ||
+		(record["clientActionId"] as number) < 0
+	)
+		return false
+	if (
+		record["type"] === "collect" ||
+		record["type"] === "detach" ||
+		record["type"] === "drop"
+	)
+		return Object.keys(record).length === 2
+	return (
+		record["type"] === "attach" &&
+		Object.keys(record).length === 4 &&
+		isVector3Tuple(record["direction"]) &&
+		isVector3Tuple(record["origin"])
+	)
+}
+
+export function isGrapplePickupSnapshot(
+	value: unknown,
+): value is GrapplePickupSnapshot {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 4 &&
+		typeof record["available"] === "boolean" &&
+		(record["availableAt"] === null ||
+			Number.isFinite(record["availableAt"])) &&
+		(record["ownerId"] === null || typeof record["ownerId"] === "string") &&
+		isVector3Tuple(record["position"])
+	)
+}
+
+export function isGrappleStateSnapshot(
+	value: unknown,
+): value is GrappleStateSnapshot {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	if (
+		Object.keys(record).length !== 7 ||
+		!Number.isSafeInteger(record["sequence"]) ||
+		(record["sequence"] as number) < 0 ||
+		(record["phase"] !== "idle" && record["phase"] !== "attached") ||
+		(record["ownerId"] !== null && typeof record["ownerId"] !== "string") ||
+		(record["surfaceId"] !== null && typeof record["surfaceId"] !== "string") ||
+		(record["attachedAt"] !== null && !Number.isFinite(record["attachedAt"])) ||
+		(record["ropeLength"] !== null &&
+			(!Number.isFinite(record["ropeLength"]) ||
+				(record["ropeLength"] as number) <= 0)) ||
+		(record["anchor"] !== null && !isVector3Tuple(record["anchor"]))
+	)
+		return false
+	return record["phase"] === "idle"
+		? record["anchor"] === null &&
+				record["attachedAt"] === null &&
+				record["ropeLength"] === null &&
+				record["surfaceId"] === null
+		: record["anchor"] !== null &&
+				record["attachedAt"] !== null &&
+				record["ownerId"] !== null &&
+				record["ropeLength"] !== null &&
+				record["surfaceId"] !== null
 }
 
 export const GESTURE_ACTIONS = ["wave", "salute", "fistbump", "punch"] as const

@@ -101,6 +101,41 @@ test("standing terrain uses a strict 60-degree controlled surface slide", () => 
 	}
 })
 
+test("grapple attachment makes steep-ground slide physics inert until detach", () => {
+	const velocity = { x: 4.25, z: -2.5 }
+	const steepGround = {
+		crouching: false,
+		delta: 0.1,
+		grounded: true,
+		terrainGradient: gradientAtDegrees(70),
+	}
+	const attached = stepSlidePhysics(
+		{ ...velocity, sliding: true, surfaceSliding: true },
+		{ ...steepGround, blocked: true },
+	)
+	const detached = stepSlidePhysics(
+		{
+			sliding: attached.sliding,
+			surfaceSliding: attached.surfaceSliding,
+			x: attached.x,
+			z: attached.z,
+		},
+		steepGround,
+	)
+
+	assert.equal(attached.movementState, "blocked")
+	assert.deepEqual(attached.downhillAcceleration, { x: 0, z: 0 })
+	assert.equal(attached.sliding, false)
+	assert.equal(attached.surfaceSliding, false)
+	assert.equal(attached.x, velocity.x)
+	assert.equal(attached.z, velocity.z)
+	assert.ok(attached.slopeAngleRadians > SLIDE_PHYSICS.steepSurfaceRadians)
+	assert.equal(detached.movementState, "surface-sliding")
+	assert.equal(detached.sliding, false)
+	assert.equal(detached.surfaceSliding, true)
+	assert.notDeepEqual({ x: detached.x, z: detached.z }, velocity)
+})
+
 test("crouching on the same steep terrain selects regular slide", () => {
 	const step = stepSlidePhysics(
 		{ sliding: false, surfaceSliding: true, x: 4, z: 0 },

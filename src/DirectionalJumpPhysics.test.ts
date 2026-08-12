@@ -6,6 +6,8 @@ import {
 	cameraRelativeMovementDirection,
 	DIRECTIONAL_DOUBLE_JUMP,
 	directionalDoubleJumpImpulse,
+	isBoundedDirectionalJumpDirection,
+	normalizeDirectionalJumpDirection,
 } from "./DirectionalJumpPhysics.ts"
 
 const closeTo = (actual: number, expected: number): void =>
@@ -71,6 +73,29 @@ test("no input preserves momentum while input can launch from rest", () => {
 		z: 0,
 	})
 	assert.equal(cameraRelativeMovementDirection({ x: 0.1, y: 0 }, 0), null)
+})
+
+test("zero is inert while subnormal directions never normalize to non-finite values", () => {
+	assert.equal(isBoundedDirectionalJumpDirection({ x: 0, z: 0 }), true)
+	assert.equal(
+		isBoundedDirectionalJumpDirection({ x: Number.MIN_VALUE, z: 0 }),
+		false,
+	)
+	assert.equal(
+		normalizeDirectionalJumpDirection({ x: Number.MIN_VALUE, z: 0 }),
+		null,
+	)
+	assert.deepEqual(
+		directionalDoubleJumpImpulse({ x: Number.MIN_VALUE, z: 0 }),
+		{ x: 0, z: 0 },
+	)
+	const velocity = applyDirectionalDoubleJump(
+		{ x: 4, z: -3 },
+		{ x: Number.MIN_VALUE, z: 0 },
+		2,
+	)
+	assert.deepEqual(velocity, { x: 4, z: -3 })
+	assert.ok([velocity.x, velocity.z].every(Number.isFinite))
 })
 
 test("directional steering is gated to the accepted second jump", () => {

@@ -793,6 +793,7 @@ app-shell.class {
 			display: grid;
 			justify-items: end;
 
+			> grapple-status,
 			> grenade-status {
 				display: flex;
 				align-items: center;
@@ -817,6 +818,19 @@ app-shell.class {
 				}
 				> span {
 					color: #62ffb4;
+				}
+			}
+
+			> grapple-status {
+				&[data-owned="true"] {
+					border-color: #63eafa;
+					color: #baf8ff;
+					box-shadow: 0 0 0.7rem rgb(88 234 255 / 0.25);
+				}
+
+				&[data-phase="attached"] {
+					border-color: #fff27a;
+					color: #fffbc2;
 				}
 			}
 

@@ -1,7 +1,35 @@
 import {
+	GRAPPLE_TRIGGER_PRESS_THRESHOLD,
+	GRAPPLE_TRIGGER_RELEASE_THRESHOLD,
 	PICKUP_HOLD_DURATION_MS,
 	WEAPON_SWITCH_WHEEL_DEBOUNCE_MS,
 } from "./game-constants.ts"
+
+export const GRAPPLE_GAMEPAD_AXIS_BUTTON = 6
+export const GRAPPLE_KEY_CODE = "KeyZ"
+export const BOMB_GAMEPAD_BUTTON = 8
+
+export function isGrappleKeyboardInput(code: string): boolean {
+	return code === GRAPPLE_KEY_CODE
+}
+
+/** Analog hysteresis avoids noisy LT values producing attach/detach chatter. */
+export function grappleTriggerHeld(
+	value: number,
+	previouslyHeld: boolean,
+): boolean {
+	if (!Number.isFinite(value)) return false
+	return previouslyHeld
+		? value > GRAPPLE_TRIGGER_RELEASE_THRESHOLD
+		: value >= GRAPPLE_TRIGGER_PRESS_THRESHOLD
+}
+
+export function isBombGamepadInput(
+	buttons: readonly ({ pressed?: boolean; value?: number } | undefined)[],
+): boolean {
+	const button = buttons[BOMB_GAMEPAD_BUTTON]
+	return button?.pressed === true || (button?.value ?? 0) > 0.5
+}
 
 export const WEAPON_SWITCH_GAMEPAD_BUTTON = 3
 export const WEAPON_SWITCH_KEY_CODE = "Digit1"
