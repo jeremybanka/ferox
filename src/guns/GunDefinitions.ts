@@ -13,6 +13,15 @@ import {
 	SHOTGUN_MAGAZINE_SIZE,
 	SHOTGUN_RELOAD_SHELL_SECONDS,
 	SHOTGUN_SERVER_MINIMUM_INTERVAL_MS,
+	HEAVY_LASER_CHARGE_MS,
+	HEAVY_LASER_CHARGED_DAMAGE,
+	HEAVY_LASER_MAGAZINE_SIZE,
+	HEAVY_LASER_SERVER_MINIMUM_INTERVAL_MS,
+	HEAVY_LASER_TAP_DAMAGE,
+	ION_BEAM_CHARGE_MS,
+	ION_BEAM_DAMAGE,
+	ION_BEAM_MAGAZINE_SIZE,
+	ION_BEAM_SERVER_MINIMUM_INTERVAL_MS,
 } from "../game-constants.ts"
 
 export const GUN_IDS = [
@@ -21,6 +30,8 @@ export const GUN_IDS = [
 	"bubble-gun",
 	"rail-gun",
 	"mini-missile",
+	"ion-beam-rifle",
+	"heavy-laser",
 ] as const
 
 export type GunId = (typeof GUN_IDS)[number]
@@ -45,18 +56,29 @@ export type GunTransform = {
 export type GunDefinition = {
 	capabilities: {
 		fire: true
+		requiresLock: boolean
 		pickup: boolean
 		reload: boolean
 	}
 	fire: {
 		clientCooldownSeconds: number
 		serverMinimumIntervalMs: number
-		type: "ballistic" | "bubbles" | "guided-missile" | "projectile" | "shotgun"
+		type:
+			| "ballistic"
+			| "bubbles"
+			| "guided-missile"
+			| "hitscan"
+			| "projectile"
+			| "shotgun"
 	}
 	id: GunId
 	magazineSize: number
 	model: GunModelId
 	name: string
+	lockOptics: null | {
+		maxFovReductionDegrees: number
+		zoomMultiplier: number
+	}
 	presentation: Readonly<Record<GunPresentationView, GunTransform>>
 	reload: GunReloadDefinition
 	tuning:
@@ -73,6 +95,12 @@ export type GunDefinition = {
 		| { kind: "shotgun" }
 		| { kind: "bubbles" }
 		| { kind: "ballistic" }
+		| {
+				chargeMs: number
+				chargedDamage: number
+				kind: "hitscan"
+				tapDamage: number | null
+		  }
 }
 
 const identityScale = [1, 1, 1] as const
@@ -80,7 +108,12 @@ const zeroRotation = [0, 0, 0] as const
 
 export const GUN_DEFINITIONS = {
 	"arc-blaster": {
-		capabilities: { fire: true, pickup: false, reload: true },
+		capabilities: {
+			fire: true,
+			pickup: false,
+			reload: true,
+			requiresLock: false,
+		},
 		fire: {
 			clientCooldownSeconds: 0.13,
 			serverMinimumIntervalMs: 110,
@@ -90,6 +123,7 @@ export const GUN_DEFINITIONS = {
 		magazineSize: 28,
 		model: "arc-blaster",
 		name: "ARC BLASTER",
+		lockOptics: { maxFovReductionDegrees: 5, zoomMultiplier: 1.2 },
 		presentation: {
 			firstPerson: {
 				position: [0.35, -0.31, -0.7],
@@ -111,7 +145,12 @@ export const GUN_DEFINITIONS = {
 		tuning: { damage: PLAYER_PROJECTILE_DAMAGE, kind: "projectile" },
 	},
 	"mini-missile": {
-		capabilities: { fire: true, pickup: true, reload: true },
+		capabilities: {
+			fire: true,
+			pickup: true,
+			reload: true,
+			requiresLock: false,
+		},
 		fire: {
 			clientCooldownSeconds: MINI_MISSILE_CLIENT_COOLDOWN_SECONDS,
 			serverMinimumIntervalMs: MINI_MISSILE_SERVER_MINIMUM_INTERVAL_MS,
@@ -121,6 +160,7 @@ export const GUN_DEFINITIONS = {
 		magazineSize: MINI_MISSILE_AMMO,
 		model: "mini-missile",
 		name: "MINI-MISSILE",
+		lockOptics: { maxFovReductionDegrees: 5, zoomMultiplier: 1.2 },
 		presentation: {
 			firstPerson: {
 				position: [0.36, -0.3, -0.72],
@@ -147,7 +187,12 @@ export const GUN_DEFINITIONS = {
 		},
 	},
 	shotgun: {
-		capabilities: { fire: true, pickup: true, reload: true },
+		capabilities: {
+			fire: true,
+			pickup: true,
+			reload: true,
+			requiresLock: false,
+		},
 		fire: {
 			clientCooldownSeconds: 0.74,
 			serverMinimumIntervalMs: SHOTGUN_SERVER_MINIMUM_INTERVAL_MS,
@@ -157,6 +202,7 @@ export const GUN_DEFINITIONS = {
 		magazineSize: SHOTGUN_MAGAZINE_SIZE,
 		model: "shotgun",
 		name: "BREACH SHOTGUN",
+		lockOptics: { maxFovReductionDegrees: 5, zoomMultiplier: 1.2 },
 		presentation: {
 			firstPerson: {
 				position: [0.35, -0.32, -0.72],
@@ -178,7 +224,12 @@ export const GUN_DEFINITIONS = {
 		tuning: { kind: "shotgun" },
 	},
 	"bubble-gun": {
-		capabilities: { fire: true, pickup: true, reload: true },
+		capabilities: {
+			fire: true,
+			pickup: true,
+			reload: true,
+			requiresLock: false,
+		},
 		fire: {
 			clientCooldownSeconds: 0.55,
 			serverMinimumIntervalMs: BUBBLE_SERVER_MINIMUM_INTERVAL_MS,
@@ -188,6 +239,7 @@ export const GUN_DEFINITIONS = {
 		magazineSize: BUBBLE_GUN_MAGAZINE_SIZE,
 		model: "bubble-gun",
 		name: "BUBBLE GUN",
+		lockOptics: { maxFovReductionDegrees: 5, zoomMultiplier: 1.2 },
 		presentation: {
 			firstPerson: {
 				position: [0.35, -0.32, -0.72],
@@ -209,7 +261,12 @@ export const GUN_DEFINITIONS = {
 		tuning: { kind: "bubbles" },
 	},
 	"rail-gun": {
-		capabilities: { fire: true, pickup: true, reload: true },
+		capabilities: {
+			fire: true,
+			pickup: true,
+			reload: true,
+			requiresLock: false,
+		},
 		fire: {
 			clientCooldownSeconds: 1.08,
 			serverMinimumIntervalMs: RAIL_SERVER_MINIMUM_INTERVAL_MS,
@@ -219,6 +276,7 @@ export const GUN_DEFINITIONS = {
 		magazineSize: RAIL_GUN_MAGAZINE_SIZE,
 		model: "rail-gun",
 		name: "RAIL GUN",
+		lockOptics: null,
 		presentation: {
 			firstPerson: {
 				position: [0.35, -0.33, -0.74],
@@ -238,6 +296,90 @@ export const GUN_DEFINITIONS = {
 			refillProgress: 0.8,
 		},
 		tuning: { kind: "ballistic" },
+	},
+	"ion-beam-rifle": {
+		capabilities: {
+			fire: true,
+			pickup: true,
+			reload: true,
+			requiresLock: true,
+		},
+		fire: {
+			clientCooldownSeconds: 2.15,
+			serverMinimumIntervalMs: ION_BEAM_SERVER_MINIMUM_INTERVAL_MS,
+			type: "hitscan",
+		},
+		id: "ion-beam-rifle",
+		lockOptics: { maxFovReductionDegrees: 48, zoomMultiplier: 2 },
+		magazineSize: ION_BEAM_MAGAZINE_SIZE,
+		model: "ion-beam-rifle",
+		name: "ION BEAM RIFLE",
+		presentation: {
+			firstPerson: {
+				position: [0.35, -0.33, -0.75],
+				rotation: zeroRotation,
+				scale: [0.9, 0.9, 0.9],
+			},
+			thirdPerson: {
+				position: [0, -0.1, -0.2],
+				rotation: [-Math.PI / 2, 0, 0],
+				scale: [0.92, 0.92, 0.92],
+			},
+		},
+		reload: {
+			ammoRule: "refill-magazine",
+			animation: "arc-cell",
+			durationSeconds: 2.6,
+			refillProgress: 0.82,
+		},
+		tuning: {
+			chargeMs: ION_BEAM_CHARGE_MS,
+			chargedDamage: ION_BEAM_DAMAGE,
+			kind: "hitscan",
+			tapDamage: null,
+		},
+	},
+	"heavy-laser": {
+		capabilities: {
+			fire: true,
+			pickup: true,
+			reload: true,
+			requiresLock: true,
+		},
+		fire: {
+			clientCooldownSeconds: 0.65,
+			serverMinimumIntervalMs: HEAVY_LASER_SERVER_MINIMUM_INTERVAL_MS,
+			type: "hitscan",
+		},
+		id: "heavy-laser",
+		lockOptics: { maxFovReductionDegrees: 58, zoomMultiplier: 3 },
+		magazineSize: HEAVY_LASER_MAGAZINE_SIZE,
+		model: "heavy-laser",
+		name: "HEAVY LASER",
+		presentation: {
+			firstPerson: {
+				position: [0.35, -0.34, -0.78],
+				rotation: zeroRotation,
+				scale: [0.92, 0.92, 0.92],
+			},
+			thirdPerson: {
+				position: [0, -0.1, -0.22],
+				rotation: [-Math.PI / 2, 0, 0],
+				scale: [0.95, 0.95, 0.95],
+			},
+		},
+		reload: {
+			ammoRule: "refill-magazine",
+			animation: "mini-tube-service",
+			durationSeconds: 3.1,
+			refillProgress: 0.84,
+		},
+		tuning: {
+			chargeMs: HEAVY_LASER_CHARGE_MS,
+			chargedDamage: HEAVY_LASER_CHARGED_DAMAGE,
+			kind: "hitscan",
+			tapDamage: HEAVY_LASER_TAP_DAMAGE,
+		},
 	},
 } as const satisfies Record<GunId, GunDefinition>
 

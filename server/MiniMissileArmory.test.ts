@@ -16,6 +16,8 @@ const ARENA_TEST_PADS = [
 	[12, 0, 0],
 	[0, 0, 12],
 	[9, 0, 9],
+	[-9, 0, -9],
+	[14, 0, -4],
 ] as const
 
 test("connect creates a deterministic ARC-only two-slot inventory", () => {
@@ -74,7 +76,7 @@ test("arena pickups have deterministic distinct pads and staggered openings", ()
 	const initial = armory.arenaPickups()
 	assert.equal(
 		new Set(initial.map((pickup) => pickup.position.join(","))).size,
-		3,
+		5,
 	)
 	assert.equal(
 		initial.find((pickup) => pickup.weapon === "shotgun")?.available,
@@ -128,7 +130,7 @@ test("arena pickup collection is proximity validated, contended, rotating, and a
 	assert.equal(
 		new Set(armory.arenaPickups().map((pickup) => pickup.position.join(",")))
 			.size,
-		3,
+		5,
 	)
 	assert.equal(armory.update(returning.availableAt! - 1), false)
 	assert.equal(armory.update(returning.availableAt!), true)

@@ -21,6 +21,9 @@ import {
 	type MeleeHitResult,
 	type GrenadeIntent,
 	type MiniMissileIntent,
+	type HitscanBeamSnapshot,
+	type LockChargeIntent,
+	type LockChargeSnapshot,
 	type RailChargeIntent,
 	type PlayerMoveSnapshot,
 	type PlayerDamageImpact,
@@ -98,6 +101,10 @@ import {
 } from "./StandardLockTracker.ts"
 import { PlayerLifecycle } from "./PlayerLifecycle.ts"
 import { GrappleUtility } from "./GrappleUtility.ts"
+import {
+	LockHitscanChargeController,
+	type LockChargeResolution,
+} from "./LockHitscanCharge.ts"
 type SpawnPayload = {
 	damageSequence: number
 	position: [number, number]
@@ -151,6 +158,11 @@ const grapple = new GrappleUtility([
 	grappleZ,
 ])
 const standardLocks = new StandardLockTracker()
+const lockHitscanCharges = new LockHitscanChargeController()
+
+const emitLockCharge = (snapshot: LockChargeSnapshot | null): void => {
+	if (snapshot !== null) io.emit("arena:lock-charge", snapshot)
+}
 
 const applyPlayerDamage = (
 	playerId: string,
@@ -214,6 +226,7 @@ const applyPlayerDamage = (
 		lastPlayerMissile.delete(playerId)
 		railCharges.delete(playerId)
 		lastRailChargeId.delete(playerId)
+		emitLockCharge(lockHitscanCharges.cancel(playerId))
 		io.emit("arena:players", [...players.values()])
 	}
 	io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
@@ -331,6 +344,61 @@ const simulation = new ArenaSimulation({
 		applyPlayerDamage(playerId, damage, impact),
 	seed: ARENA_SEED,
 })
+
+const resolveLockCharge = (resolution: LockChargeResolution): boolean => {
+	const { snapshot, damage } = resolution
+	if (damage === null) {
+		emitLockCharge(snapshot)
+		return false
+	}
+	const playerId = snapshot.ownerId
+	const targetId = standardLocks.targetFor(playerId)
+	const equipped = gunDefinition(armory.activeWeapon(playerId))
+	const now = performance.now()
+	if (
+		!playerLifecycle.isAlive(playerId) ||
+		targetId === null ||
+		equipped.id !== snapshot.weapon ||
+		equipped.fire.type !== "hitscan" ||
+		players.get(playerId)?.reload !== null ||
+		!isFireCadenceReady(
+			lastPlayerFire.get(playerId),
+			now,
+			equipped.fire.serverMinimumIntervalMs,
+		) ||
+		!armory.consumeActive(playerId, "hitscan")
+	) {
+		emitLockCharge({ ...snapshot, phase: "cancelled" })
+		return false
+	}
+	const result = simulation.fireLockedHitscan(
+		playerId,
+		snapshot.chargeId,
+		targetId,
+		damage,
+	)
+	if (result === null) {
+		armory.restoreActive(playerId)
+		emitLockCharge({ ...snapshot, phase: "cancelled" })
+		return false
+	}
+	lastPlayerFire.set(playerId, now)
+	emitEquipment(playerId)
+	emitLockCharge(snapshot)
+	io.emit("arena:hitscan-beam", {
+		beamId: result.beamId,
+		color: snapshot.weapon === "ion-beam-rifle" ? "#ffe55c" : "#ff6d47",
+		damage,
+		end: result.end,
+		ownerId: playerId,
+		start: result.start,
+		weapon: snapshot.weapon,
+	} satisfies HitscanBeamSnapshot)
+	const player = players.get(playerId)
+	if (player !== undefined)
+		Object.assign(player, nextAcceptedRecoilSignal(player, Date.now() / 1_000))
+	return true
+}
 
 const melee = new MeleeCombat({
 	getPlayers: () =>
@@ -1089,6 +1157,51 @@ realtime(
 			lastPlayerMissile.set(socketId, now)
 			emitEquipment(socketId)
 		}
+		const onLockCharge = (payload: LockChargeIntent): void => {
+			if (
+				!playerLifecycle.isAlive(socketId) ||
+				payload === null ||
+				typeof payload !== "object" ||
+				!Number.isSafeInteger(payload.clientChargeId) ||
+				payload.clientChargeId < 0 ||
+				(payload.type !== "start" && payload.type !== "release")
+			)
+				return
+			const equipped = gunDefinition(armory.activeWeapon(socketId))
+			if (
+				equipped.fire.type !== "hitscan" ||
+				(equipped.id !== "ion-beam-rifle" && equipped.id !== "heavy-laser") ||
+				players.get(socketId)?.reload !== null ||
+				standardLocks.targetFor(socketId) === null
+			)
+				return
+			if (payload.type === "start") {
+				if (
+					!isFireCadenceReady(
+						lastPlayerFire.get(socketId),
+						performance.now(),
+						equipped.fire.serverMinimumIntervalMs,
+					) ||
+					activeEquipmentSlot(armory.equipment(socketId)).ammo <= 0
+				)
+					return
+				emitLockCharge(
+					lockHitscanCharges.start(
+						socketId,
+						payload.clientChargeId,
+						equipped.id,
+						Date.now(),
+					),
+				)
+				return
+			}
+			const resolution = lockHitscanCharges.release(
+				socketId,
+				payload.clientChargeId,
+				Date.now(),
+			)
+			if (resolution !== null) resolveLockCharge(resolution)
+		}
 		const onInventoryAction = (payload: unknown): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
 			const previous = lastInventoryAction.get(socketId) ?? -1
@@ -1141,8 +1254,11 @@ realtime(
 					break
 			}
 			if (!changed) return
+			emitLockCharge(lockHitscanCharges.cancel(socketId))
 			if (payload.type !== "reload") cancelPlayerReload(socketId)
-			if (payload.type !== "reload") railCharges.delete(socketId)
+			if (payload.type !== "reload") {
+				railCharges.delete(socketId)
+			}
 			const after = armory.activeWeapon(socketId)
 			if (payload.type === "drop-secondary")
 				simulation.cancelLocksByOwner(socketId)
@@ -1261,6 +1377,7 @@ realtime(
 		gameSocket.on("arena:standard-lock", onStandardLock)
 		gameSocket.on("arena:fire", onFire)
 		gameSocket.on("arena:rail-charge", onRailCharge)
+		gameSocket.on("arena:lock-charge", onLockCharge)
 		gameSocket.on("arena:fire-mini-missile", onFireMiniMissile)
 		gameSocket.on("arena:inventory-action", onInventoryAction)
 		gameSocket.on("arena:throw-grenade", onThrowGrenade)
@@ -1284,6 +1401,7 @@ realtime(
 			lastPlayerMissile.delete(socketId)
 			railCharges.delete(socketId)
 			lastRailChargeId.delete(socketId)
+			emitLockCharge(lockHitscanCharges.disconnect(socketId))
 			lastInventoryAction.delete(socketId)
 			melee.removePlayer(socketId)
 			lastDroneAction.delete(socketId)
@@ -1296,6 +1414,7 @@ realtime(
 			gameSocket.off("arena:standard-lock", onStandardLock)
 			gameSocket.off("arena:fire", onFire)
 			gameSocket.off("arena:rail-charge", onRailCharge)
+			gameSocket.off("arena:lock-charge", onLockCharge)
 			gameSocket.off("arena:fire-mini-missile", onFireMiniMissile)
 			gameSocket.off("arena:inventory-action", onInventoryAction)
 			gameSocket.off("arena:throw-grenade", onThrowGrenade)
@@ -1365,6 +1484,7 @@ setInterval(() => {
 		lastPlayerMissile.delete(playerId)
 		railCharges.delete(playerId)
 		lastRailChargeId.delete(playerId)
+		emitLockCharge(lockHitscanCharges.cancel(playerId))
 		lastGrappleAction.delete(playerId)
 		io.to(playerId).emit("arena:spawn", {
 			damageSequence: playerDamageSequences.get(playerId) ?? 0,
@@ -1409,6 +1529,16 @@ setInterval(() => {
 		if (step.refill !== null || step.completed) playersChanged = true
 	}
 	if (playersChanged) io.emit("arena:players", [...players.values()])
+	for (const resolution of lockHitscanCharges.advance(nowMs, (charge) => {
+		const player = players.get(charge.ownerId)
+		return (
+			playerLifecycle.isAlive(charge.ownerId) &&
+			player?.reload === null &&
+			armory.activeWeapon(charge.ownerId) === charge.weapon &&
+			standardLocks.targetFor(charge.ownerId) !== null
+		)
+	}))
+		resolveLockCharge(resolution)
 	simulation.update(delta)
 	melee.update(nowMs)
 	if (armory.update(nowMs)) emitPickups()

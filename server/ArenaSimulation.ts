@@ -35,6 +35,8 @@ import { isMiniMissileTargetRef } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
 import {
 	ARENA_PLAYABLE_HALF_EXTENT,
+	arenaTerrainRayHitDistance,
+	queryArenaAnchor,
 	resolveArenaMotion,
 } from "../src/ArenaWorld.ts"
 import {
@@ -98,6 +100,7 @@ import {
 	MINI_MISSILE_RADIUS,
 	MINI_MISSILE_SEEKER_SCAN_SECONDS,
 	MINI_MISSILE_SPEED,
+	LOCK_HITSCAN_MAX_RANGE,
 	miniMissileDamageAtDistance,
 } from "../src/game-constants.ts"
 import { pilotTorsoTargetFromEye } from "../src/pilot-targeting.ts"
@@ -132,6 +135,14 @@ export type SimulationDroneSeed = {
 	personality?: DronePersonality
 	position: Vector3Tuple
 	stationary?: boolean
+}
+
+export type HitscanResult = {
+	beamId: number
+	damage: number
+	end: Vector3Tuple
+	hit: DirectHitResult | null
+	start: Vector3Tuple
 }
 
 type CollisionCandidate<T> = {
@@ -345,6 +356,7 @@ export class ArenaSimulation {
 	#nextGrenadeId = 1
 	#nextMissileId = 1
 	#nextProjectileId = 1
+	#nextHitscanId = 1
 	#nextSpawn = 1.2
 	#sequence = 0
 	#spawnElapsed = 0
@@ -634,6 +646,102 @@ export class ArenaSimulation {
 		this.#ballistics.push(ballistic)
 		this.#emitBallistic(this.#snapshotBallistic(ballistic))
 		return true
+	}
+
+	fireLockedHitscan(
+		playerId: string,
+		clientShotId: number,
+		targetPlayerId: string,
+		damage: number,
+	): HitscanResult | null {
+		if (
+			!Number.isSafeInteger(clientShotId) ||
+			!Number.isFinite(damage) ||
+			damage < 0
+		)
+			return null
+		const players = this.#getPlayers()
+		const attacker = players.find((candidate) => candidate.id === playerId)
+		const lockedTarget = players.find(
+			(candidate) => candidate.id === targetPlayerId,
+		)
+		if (attacker === undefined || lockedTarget === undefined) return null
+		const start = new THREE.Vector3(...attacker.position)
+		const target = new THREE.Vector3(
+			...pilotTorsoTargetFromEye(lockedTarget.position, lockedTarget.crouching),
+		)
+		const direction = target.sub(start)
+		const targetDistance = direction.length()
+		if (targetDistance <= 0 || targetDistance > LOCK_HITSCAN_MAX_RANGE)
+			return null
+		direction.normalize()
+		const worldHit = queryArenaAnchor(
+			this.#seed,
+			start.toArray(),
+			direction.toArray(),
+			LOCK_HITSCAN_MAX_RANGE,
+		)
+		const terrainDistance = arenaTerrainRayHitDistance(
+			this.#seed,
+			start.toArray(),
+			direction.toArray(),
+			LOCK_HITSCAN_MAX_RANGE,
+		)
+		const maximumDistance = Math.min(
+			worldHit?.distance ?? LOCK_HITSCAN_MAX_RANGE,
+			terrainDistance ?? LOCK_HITSCAN_MAX_RANGE,
+		)
+		const end = start.clone().addScaledVector(direction, maximumDistance)
+		const bubbleHit = this.#nearestBubbleAlongSegment(start, end)
+		const droneHit = this.#nearestDroneAlongSegment(start, end, 1.35, playerId)
+		const playerHit = this.#nearestPlayerAlongSegment(
+			start,
+			end,
+			players,
+			playerId,
+		)
+		const beamId = this.#nextHitscanId++
+		let hit: DirectHitResult | null = null
+		let travelFraction = 1
+		if (this.#collisionIsNearest(bubbleHit, droneHit, playerHit)) {
+			this.#damageBubble(bubbleHit.target, damage)
+			travelFraction = bubbleHit.travelFraction
+		} else if (this.#collisionIsNearest(droneHit, bubbleHit, playerHit)) {
+			this.#damageDrone(droneHit.target, damage, playerId)
+			travelFraction = droneHit.travelFraction
+			hit = {
+				classification: "normal",
+				clientShotId,
+				damage,
+				projectileId: beamId,
+				targetId: droneHit.target.id,
+				targetType: "drone",
+			}
+		} else if (playerHit !== undefined) {
+			travelFraction = playerHit.travelFraction
+			const impact = start.clone().lerp(end, travelFraction)
+			this.#onPlayerDamage(playerHit.target.id, damage, {
+				direction: direction.toArray(),
+				position: impact.toArray(),
+				source: "hitscan",
+			})
+			hit = {
+				classification: playerHit.classification,
+				clientShotId,
+				damage,
+				projectileId: beamId,
+				targetId: playerHit.target.id,
+				targetType: "player",
+			}
+		}
+		if (hit !== null) this.#onDirectHit(playerId, hit)
+		return {
+			beamId,
+			damage,
+			end: start.clone().lerp(end, travelFraction).toArray(),
+			hit,
+			start: start.toArray(),
+		}
 	}
 
 	shotgunPellets(): ShotgunPelletSnapshot[] {

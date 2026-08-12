@@ -138,6 +138,24 @@ describe("authoritative standard lock tracking", () => {
 		])
 	})
 
+	test("exposes validated targets for both lock-gated hitscan weapons", () => {
+		for (const equippedWeapon of ["ion-beam-rifle", "heavy-laser"] as const) {
+			const tracker = new StandardLockTracker()
+			const attacker = pilot("attacker", [0, 1.72, 0], [0, -0.067, -1], {
+				equippedWeapon,
+			})
+			const target = pilot("target", [0, 1.72, -10])
+			tracker.acceptIntent("attacker", { active: true, clientLockId: 1 })
+			tracker.reconcile(
+				new Map([
+					[attacker.id, attacker],
+					[target.id, target],
+				]),
+			)
+			expect(tracker.targetFor("attacker")).toBe("target")
+		}
+	})
+
 	test("aggregates attackers and clears either side on lifecycle cleanup", () => {
 		const tracker = new StandardLockTracker()
 		const pilots = new Map([

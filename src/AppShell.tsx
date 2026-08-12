@@ -328,8 +328,10 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					<em>
 						{hud.reloading
 							? `RELOADING ${Math.round(hud.reloadProgress * 100)}%`
-							: hud.weapon === "rail-gun" && hud.chargeProgress > 0
-								? `CHARGING ${Math.round(hud.chargeProgress * 100)}% • RELEASE TO FIRE`
+							: hud.chargeProgress > 0
+								? gun.fire.type === "hitscan"
+									? `${hud.weapon === "heavy-laser" ? "TAP READY" : "LOCK REQUIRED"} • CHARGING ${Math.round(hud.chargeProgress * 100)}%`
+									: `CHARGING ${Math.round(hud.chargeProgress * 100)}% • RELEASE TO FIRE`
 								: gun.fire.type === "guided-missile"
 									? hud.ammo === 0
 										? "PRESS RB / R TO SERVICE LAUNCHER"
