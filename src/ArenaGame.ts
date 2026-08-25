@@ -125,21 +125,20 @@ import {
 	TARGET_LOST_FLASH_MS,
 } from "./game-constants.ts"
 import {
+	controllerActionHeld,
+	controllerGameplayInputIsNeutral,
 	contextualRightBumperAction,
 	debounceWheelInput,
 	IDLE_HOLD_INPUT_STATE,
 	inputEdge,
-	gamepadGestureInputs,
 	grappleTriggerHeld,
 	GRAPPLE_KEY_CODE,
-	isBombGamepadInput,
-	isGrenadeSwitchGamepadInput,
 	isGrenadeSwitchKeyboardInput,
-	isPickupGamepadInput,
-	isWeaponSwitchGamepadInput,
 	isWeaponSwitchKeyboardInput,
 	keyboardGestureInput,
+	resolveControllerActions,
 	updateHoldInput,
+	type ControllerBindings,
 	type HoldInputState,
 } from "./game-input.ts"
 import { constrainGrappleMotion } from "./GrapplePhysics.ts"
@@ -327,6 +326,7 @@ type SpawnSnapshot = {
 type ArenaGameOptions = {
 	audioDefinition?: GameAudioDefinition
 	canvas: HTMLCanvasElement
+	controllerBindings: ControllerBindings
 	onHud: (state: GameHudState) => void
 	seed: number
 	socket: Socket
@@ -457,6 +457,7 @@ export class ArenaGame {
 	>()
 	readonly #audio: GameAudio
 	readonly #canvas: HTMLCanvasElement
+	#controllerBindings: ControllerBindings
 	readonly #camera = new THREE.PerspectiveCamera(
 		CAMERA_BASE_FOV_DEGREES,
 		1,
@@ -623,6 +624,8 @@ export class ArenaGame {
 	#movementCore: MovementCoreState = INITIAL_MOVEMENT_CORE_STATE
 	#movementToggleQueued = false
 	#gamepadConnected = false
+	#controllerInputArmed = true
+	#gameplayInputSuppressed = false
 	#wallTraversal: WallTraversalState = INITIAL_WALL_TRAVERSAL_STATE
 	#mantle: MantleState = INITIAL_MANTLE_STATE
 	#mantleProgress = 0
@@ -652,6 +655,7 @@ export class ArenaGame {
 				? new GameAudio(options.seed)
 				: new GameAudio(options.seed, options.audioDefinition)
 		this.#canvas = options.canvas
+		this.#controllerBindings = options.controllerBindings
 		this.#onHud = options.onHud
 		this.#seed = options.seed
 		this.#socket = options.socket
@@ -683,6 +687,18 @@ export class ArenaGame {
 		void this.#audio.start()
 		this.#canvas.focus()
 		void this.#canvas.requestPointerLock().catch(() => undefined)
+	}
+
+	setControllerBindings(bindings: ControllerBindings): void {
+		this.#controllerBindings = bindings
+		this.#controllerInputArmed = false
+	}
+
+	setGameplayInputSuppressed(suppressed: boolean): void {
+		if (this.#gameplayInputSuppressed === suppressed) return
+		this.#gameplayInputSuppressed = suppressed
+		this.#controllerInputArmed = false
+		this.#clearActiveInputState()
 	}
 
 	dispose(): void {
@@ -817,7 +833,7 @@ export class ArenaGame {
 	}
 
 	readonly #onKeyDown = (event: KeyboardEvent): void => {
-		if (this.#dead) return
+		if (this.#dead || this.#gameplayInputSuppressed) return
 		this.#keys.add(event.code)
 		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
 		if ((event.code === "CapsLock" || event.code === "KeyV") && !event.repeat)
@@ -835,11 +851,12 @@ export class ArenaGame {
 
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
 		this.#keys.delete(event.code)
+		if (this.#gameplayInputSuppressed) return
 		if (event.code === "KeyF") this.#releaseRailCharge()
 	}
 
 	readonly #onMouseMove = (event: MouseEvent): void => {
-		if (this.#dead) return
+		if (this.#dead || this.#gameplayInputSuppressed) return
 		if (
 			document.pointerLockElement !== this.#canvas &&
 			!this.#mouseLookDragging
@@ -857,6 +874,7 @@ export class ArenaGame {
 	}
 
 	readonly #onWheel = (event: WheelEvent): void => {
+		if (this.#gameplayInputSuppressed) return
 		const update = debounceWheelInput(
 			event.deltaY,
 			performance.now(),
@@ -868,6 +886,7 @@ export class ArenaGame {
 	}
 
 	readonly #onMouseDown = (event: MouseEvent): void => {
+		if (this.#gameplayInputSuppressed) return
 		if (document.pointerLockElement !== this.#canvas) {
 			if (event.target !== this.#canvas) return
 			this.start()
@@ -882,6 +901,7 @@ export class ArenaGame {
 
 	readonly #onMouseUp = (event: MouseEvent): void => {
 		this.#mouseLookDragging = false
+		if (this.#gameplayInputSuppressed) return
 		if (event.button === 0) this.#releaseRailCharge()
 	}
 
@@ -2128,6 +2148,36 @@ export class ArenaGame {
 		this.#reload = cancelReload(this.#reload)
 	}
 
+	#clearActiveInputState(): void {
+		this.#keys.clear()
+		this.#lookGamepad.set(0, 0)
+		this.#mouseLookDelta.set(0, 0)
+		this.#mouseLookDragging = false
+		this.#movementCore = resetMovementCore()
+		this.#movementToggleQueued = false
+		this.#jumpQueued = false
+		this.#lockToggleQueued = false
+		this.#freeAim = false
+		this.#leftBumperDuration = 0
+		this.#leftBumperHeld = false
+		this.#rightBumperHeld = false
+		this.#switchHeld = false
+		this.#grenadeSwitchHeld = false
+		this.#shotHeld = false
+		this.#triggerHeld = false
+		this.#grenadeHeld = false
+		this.#grappleTriggerHeld = false
+		this.#railCharging = false
+		this.#pickupHoldState = IDLE_HOLD_INPUT_STATE
+		this.#pickupProgress = 0
+		this.#gestureHeld = {
+			fistbump: false,
+			punch: false,
+			salute: false,
+			wave: false,
+		}
+	}
+
 	#resetTransientState(): void {
 		this.#keys.clear()
 		this.#player.velocity.set(0, 0, 0)
@@ -2173,6 +2223,7 @@ export class ArenaGame {
 	}
 
 	#pollGamepad(): {
+		autorun: boolean
 		bomb: boolean
 		connected: boolean
 		crouch: boolean
@@ -2185,7 +2236,6 @@ export class ArenaGame {
 		pickup: boolean
 		reload: boolean
 		salute: boolean
-		autorun: boolean
 		switchWeapon: boolean
 		switchGrenade: boolean
 		wave: boolean
@@ -2195,7 +2245,9 @@ export class ArenaGame {
 		const gamepad = navigator.getGamepads().find((pad) => pad !== null)
 		if (gamepad === undefined || gamepad === null) {
 			this.#lookGamepad.set(0, 0)
+			this.#controllerInputArmed = false
 			return {
+				autorun: false,
 				bomb: false,
 				connected: false,
 				crouch: false,
@@ -2208,7 +2260,41 @@ export class ArenaGame {
 				pickup: false,
 				reload: false,
 				salute: false,
+				switchWeapon: false,
+				switchGrenade: false,
+				wave: false,
+				x: 0,
+				y: 0,
+			}
+		}
+		const resolved = resolveControllerActions(
+			gamepad,
+			this.#controllerBindings,
+			this.#gameplayInputSuppressed,
+		)
+		if (
+			!this.#gameplayInputSuppressed &&
+			!this.#controllerInputArmed &&
+			controllerGameplayInputIsNeutral(resolved)
+		) {
+			this.#controllerInputArmed = true
+		}
+		if (this.#gameplayInputSuppressed || !this.#controllerInputArmed) {
+			this.#lookGamepad.set(0, 0)
+			return {
 				autorun: false,
+				bomb: false,
+				connected: true,
+				crouch: false,
+				fire: false,
+				fistbump: false,
+				grappleTrigger: 0,
+				jump: false,
+				lock: false,
+				punch: false,
+				pickup: false,
+				reload: false,
+				salute: false,
 				switchWeapon: false,
 				switchGrenade: false,
 				wave: false,
@@ -2219,40 +2305,29 @@ export class ArenaGame {
 		const deadzone = (value: number): number =>
 			Math.abs(value) < 0.14 ? 0 : value
 		this.#lookGamepad.set(
-			deadzone(gamepad.axes[2] ?? 0),
-			deadzone(gamepad.axes[3] ?? 0),
+			deadzone(resolved.values.lookX),
+			deadzone(resolved.values.lookY),
 		)
-		const jump = gamepad.buttons[0]?.pressed ?? false
-		const crouch = gamepad.buttons[1]?.pressed ?? false
-		const fire = (gamepad.buttons[7]?.value ?? 0) > 0.25
-		const grappleTrigger = gamepad.buttons[6]?.value ?? 0
-		const bomb = isBombGamepadInput(gamepad.buttons)
-		const lock = gamepad.buttons[4]?.pressed ?? false
-		const pickup = isPickupGamepadInput(gamepad.buttons)
-		const reload = gamepad.buttons[5]?.pressed ?? false
-		const autorun = gamepad.buttons[10]?.pressed ?? false
-		const switchWeapon = isWeaponSwitchGamepadInput(gamepad.buttons)
-		const gestures = gamepadGestureInputs(gamepad.buttons)
-		const switchGrenade = isGrenadeSwitchGamepadInput(gamepad.buttons)
+		const pickupReload = controllerActionHeld(resolved, "pickupReload")
 		return {
-			bomb,
+			autorun: controllerActionHeld(resolved, "autorun"),
+			bomb: controllerActionHeld(resolved, "bomb"),
 			connected: true,
-			crouch,
-			fire,
-			fistbump: gestures.fistbump,
-			grappleTrigger,
-			jump,
-			lock,
-			punch: gestures.punch,
-			pickup,
-			reload,
-			salute: gestures.salute,
-			autorun,
-			switchWeapon,
-			switchGrenade,
-			wave: gestures.wave,
-			x: deadzone(gamepad.axes[0] ?? 0),
-			y: deadzone(gamepad.axes[1] ?? 0),
+			crouch: controllerActionHeld(resolved, "crouch"),
+			fire: resolved.values.fire > 0.25,
+			fistbump: controllerActionHeld(resolved, "fistbump"),
+			grappleTrigger: resolved.values.grapple,
+			jump: controllerActionHeld(resolved, "jump"),
+			lock: controllerActionHeld(resolved, "lock"),
+			punch: controllerActionHeld(resolved, "punch"),
+			pickup: pickupReload,
+			reload: pickupReload,
+			salute: controllerActionHeld(resolved, "salute"),
+			switchWeapon: controllerActionHeld(resolved, "switchWeapon"),
+			switchGrenade: controllerActionHeld(resolved, "switchGrenade"),
+			wave: controllerActionHeld(resolved, "wave"),
+			x: deadzone(resolved.values.moveX),
+			y: deadzone(resolved.values.moveY),
 		}
 	}
 

@@ -15,6 +15,57 @@ app-shell.class {
 		outline: none;
 	}
 
+	> button[data-controls-launch] {
+		position: absolute;
+		right: clamp(1rem, 2.2vw, 2rem);
+		bottom: clamp(1rem, 2.2vw, 2rem);
+		z-index: 4;
+		display: grid;
+		justify-items: end;
+		gap: 0.15rem;
+		padding: 0.65rem 0.8rem;
+		border: 1px solid rgb(107 255 223 / 0.42);
+		background: rgb(9 18 31 / 0.82);
+		color: #e9fff8;
+		clip-path: polygon(
+			7px 0,
+			100% 0,
+			100% calc(100% - 7px),
+			calc(100% - 7px) 100%,
+			0 100%,
+			0 7px
+		);
+		cursor: pointer;
+		font-family: var(--font-mono);
+		text-transform: uppercase;
+		transition:
+			background 150ms ease,
+			border-color 150ms ease,
+			box-shadow 150ms ease;
+
+		&:hover,
+		&:focus-visible {
+			border-color: var(--color-signal);
+			background: rgb(28 69 69 / 0.94);
+			box-shadow: 0 0 1.5rem rgb(95 255 226 / 0.16);
+			outline: 2px solid rgb(107 255 223 / 0.24);
+			outline-offset: 2px;
+		}
+
+		> span {
+			font-size: 0.62rem;
+			font-weight: 700;
+			letter-spacing: 0.12em;
+		}
+
+		> kbd {
+			color: rgb(233 255 248 / 0.58);
+			font: inherit;
+			font-size: 0.48rem;
+			letter-spacing: 0.08em;
+		}
+	}
+
 	> game-hud {
 		position: absolute;
 		inset: 0;
