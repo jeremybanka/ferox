@@ -169,17 +169,11 @@ export function isJumpSequence(value: unknown): value is number {
 
 export type GrapplePhase = "attached" | "idle"
 
-export type GrapplePickupSnapshot = Readonly<{
-	available: boolean
-	availableAt: number | null
-	ownerId: string | null
-	position: Vector3Tuple
-}>
-
 export type GrappleStateSnapshot = Readonly<{
 	anchor: Vector3Tuple | null
+	attachmentId: number | null
 	attachedAt: number | null
-	ownerId: string | null
+	ownerId: string
 	phase: GrapplePhase
 	ropeLength: number | null
 	sequence: number
@@ -187,7 +181,7 @@ export type GrappleStateSnapshot = Readonly<{
 }>
 
 export type GrappleActionIntent =
-	| Readonly<{ clientActionId: number; type: "collect" | "detach" | "drop" }>
+	| Readonly<{ clientActionId: number; type: "detach" }>
 	| Readonly<{
 			clientActionId: number
 			direction: Vector3Tuple
@@ -210,32 +204,12 @@ export function isGrappleActionIntent(
 		(record["clientActionId"] as number) < 0
 	)
 		return false
-	if (
-		record["type"] === "collect" ||
-		record["type"] === "detach" ||
-		record["type"] === "drop"
-	)
-		return Object.keys(record).length === 2
+	if (record["type"] === "detach") return Object.keys(record).length === 2
 	return (
 		record["type"] === "attach" &&
 		Object.keys(record).length === 4 &&
 		isVector3Tuple(record["direction"]) &&
 		isVector3Tuple(record["origin"])
-	)
-}
-
-export function isGrapplePickupSnapshot(
-	value: unknown,
-): value is GrapplePickupSnapshot {
-	if (value === null || typeof value !== "object") return false
-	const record = value as Record<string, unknown>
-	return (
-		Object.keys(record).length === 4 &&
-		typeof record["available"] === "boolean" &&
-		(record["availableAt"] === null ||
-			Number.isFinite(record["availableAt"])) &&
-		(record["ownerId"] === null || typeof record["ownerId"] === "string") &&
-		isVector3Tuple(record["position"])
 	)
 }
 
@@ -245,11 +219,14 @@ export function isGrappleStateSnapshot(
 	if (value === null || typeof value !== "object") return false
 	const record = value as Record<string, unknown>
 	if (
-		Object.keys(record).length !== 7 ||
+		Object.keys(record).length !== 8 ||
 		!Number.isSafeInteger(record["sequence"]) ||
 		(record["sequence"] as number) < 0 ||
 		(record["phase"] !== "idle" && record["phase"] !== "attached") ||
-		(record["ownerId"] !== null && typeof record["ownerId"] !== "string") ||
+		typeof record["ownerId"] !== "string" ||
+		(record["attachmentId"] !== null &&
+			(!Number.isSafeInteger(record["attachmentId"]) ||
+				(record["attachmentId"] as number) < 0)) ||
 		(record["surfaceId"] !== null && typeof record["surfaceId"] !== "string") ||
 		(record["attachedAt"] !== null && !Number.isFinite(record["attachedAt"])) ||
 		(record["ropeLength"] !== null &&
@@ -260,12 +237,13 @@ export function isGrappleStateSnapshot(
 		return false
 	return record["phase"] === "idle"
 		? record["anchor"] === null &&
+				record["attachmentId"] === null &&
 				record["attachedAt"] === null &&
 				record["ropeLength"] === null &&
 				record["surfaceId"] === null
 		: record["anchor"] !== null &&
+				record["attachmentId"] !== null &&
 				record["attachedAt"] !== null &&
-				record["ownerId"] !== null &&
 				record["ropeLength"] !== null &&
 				record["surfaceId"] !== null
 }

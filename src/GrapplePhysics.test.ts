@@ -1,13 +1,91 @@
 import { describe, expect, test } from "vitest"
 
 import {
+	GRAPPLE_ATTACH_IMPULSE,
+	GRAPPLE_MAX_REEL_RATE,
+	GRAPPLE_MAX_SPEED,
+	GRAPPLE_MIN_REEL_RATE,
+} from "./game-constants.ts"
+import {
+	advanceGrappleRopeLength,
+	applyGrappleAttachImpulse,
 	constrainGrappleMotion,
+	grappleReelRate,
 	stepAuthoritativeGrappleMotion,
 } from "./GrapplePhysics.ts"
 
 const anchor = { x: 0, y: 10, z: 0 }
 
 describe("grapple constraint", () => {
+	test("attachment adds one bounded radial impulse and preserves tangent velocity", () => {
+		const result = applyGrappleAttachImpulse(
+			{
+				position: { x: 0, y: 0, z: 0 },
+				velocity: { x: 7, y: 0, z: -3 },
+			},
+			anchor,
+		)
+		expect(result.velocity.x).toBe(7)
+		expect(result.velocity.y).toBe(GRAPPLE_ATTACH_IMPULSE)
+		expect(result.velocity.z).toBe(-3)
+		const capped = applyGrappleAttachImpulse(
+			{
+				position: { x: 0, y: 0, z: 0 },
+				velocity: { x: 100, y: 100, z: 100 },
+			},
+			anchor,
+		)
+		expect(
+			Math.hypot(capped.velocity.x, capped.velocity.y, capped.velocity.z),
+		).toBeCloseTo(GRAPPLE_MAX_SPEED)
+	})
+
+	test("reel rate is monotonic with aim and reaches named endpoints", () => {
+		const position = { x: 0, y: 0, z: 0 }
+		const away = grappleReelRate(position, anchor, { x: 0, y: -1, z: 0 })
+		const side = grappleReelRate(position, anchor, { x: 1, y: 0, z: 0 })
+		const toward = grappleReelRate(position, anchor, { x: 0, y: 1, z: 0 })
+		expect(away).toBe(GRAPPLE_MIN_REEL_RATE)
+		expect(side).toBeGreaterThanOrEqual(away)
+		expect(toward).toBe(GRAPPLE_MAX_REEL_RATE)
+	})
+
+	test("malformed aim cannot create non-finite reel state", () => {
+		expect(
+			grappleReelRate({ x: 0, y: 0, z: 0 }, anchor, {
+				x: Number.NaN,
+				y: 0,
+				z: 0,
+			}),
+		).toBe(GRAPPLE_MIN_REEL_RATE)
+		expect(
+			advanceGrappleRopeLength({
+				aimDirection: { x: Number.NaN, y: 0, z: 0 },
+				anchor,
+				delta: 0.1,
+				position: { x: 0, y: 0, z: 0 },
+				ropeLength: 20,
+			}),
+		).toBeCloseTo(20 - GRAPPLE_MIN_REEL_RATE * 0.1)
+	})
+
+	test("rope shortening is elapsed-time based across frame subdivision", () => {
+		const input = {
+			aimDirection: { x: 0, y: 1, z: 0 },
+			anchor,
+			position: { x: 0, y: 0, z: 0 },
+			ropeLength: 20,
+		}
+		const single = advanceGrappleRopeLength({ ...input, delta: 0.1 })
+		const firstHalf = advanceGrappleRopeLength({ ...input, delta: 0.05 })
+		const secondHalf = advanceGrappleRopeLength({
+			...input,
+			delta: 0.05,
+			ropeLength: firstHalf,
+		})
+		expect(single).toBeCloseTo(secondHalf, 10)
+	})
+
 	test("preserves tangential inertia while removing outward rope velocity", () => {
 		const result = constrainGrappleMotion(
 			{

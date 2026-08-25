@@ -139,15 +139,11 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</incoming-threat>
 
 				<pickup-prompt
-					data-active={hud.pickup === "nearby" || hud.grapplePickupNearby}
-					aria-hidden={hud.pickup !== "nearby" && !hud.grapplePickupNearby}
+					data-active={hud.pickup === "nearby"}
+					aria-hidden={hud.pickup !== "nearby"}
 					style={{ "--pickup-progress": hud.pickupProgress }}
 				>
-					<strong>
-						{hud.grapplePickupNearby
-							? "GRAPPLING HOOK READY"
-							: `${nearbyGun?.name ?? "WEAPON"} READY`}
-					</strong>
+					<strong>{`${nearbyGun?.name ?? "WEAPON"} READY`}</strong>
 					<span>
 						<kbd>E</kbd>
 						<kbd>RB</kbd>
@@ -170,14 +166,6 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</drone-recovery-prompt>
 
 				<pickup-status-board aria-label="Arena weapon pickup status">
-					<pickup-status data-status={hud.grapplePickupStatus}>
-						<strong>GRAPPLE</strong>
-						<span>
-							{hud.grapplePickupStatus === "returning"
-								? `RETURN ${hud.grapplePickupRemaining}s`
-								: hud.grapplePickupStatus.toUpperCase()}
-						</span>
-					</pickup-status>
 					{hud.pickupStatuses.map((pickup) => (
 						<pickup-status key={pickup.weapon} data-status={pickup.status}>
 							<strong>{gunDefinition(pickup.weapon).name}</strong>
@@ -285,10 +273,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				</player-vitals>
 
 				<weapon-status>
-					<grapple-status
-						data-owned={hud.grappleOwned}
-						data-phase={hud.grapplePhase}
-					>
+					<grapple-status data-phase={hud.grapplePhase}>
 						<kbd>Z / LT</kbd>
 						<strong>GRAPPLE</strong>
 						<span>
@@ -296,9 +281,7 @@ export function AppShell({ socket }: AppShellProps): VNode {
 								? "NO ANCHOR"
 								: hud.grapplePhase === "attached"
 									? "TETHERED"
-									: hud.grappleOwned
-										? "READY"
-										: "NO UTILITY"}
+									: "READY"}
 						</span>
 					</grapple-status>
 					<grenade-status data-active={hud.grenadeKind === "drone"}>

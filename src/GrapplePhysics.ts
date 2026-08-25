@@ -1,5 +1,11 @@
 import {
+	GRAPPLE_ATTACH_IMPULSE,
+	GRAPPLE_MAX_REEL_RATE,
 	GRAPPLE_MAX_SPEED,
+	GRAPPLE_MIN_REEL_RATE,
+	GRAPPLE_MIN_ROPE_LENGTH,
+	GRAPPLE_REEL_MAX_ALIGNMENT,
+	GRAPPLE_REEL_MIN_ALIGNMENT,
 	GRAPPLE_STEERING_ACCELERATION,
 	GRAPPLE_TENSION_ACCELERATION,
 } from "./game-constants.ts"
@@ -39,10 +45,118 @@ const length = (vector: GrappleVector): number =>
 const dot = (left: GrappleVector, right: GrappleVector): number =>
 	left.x * right.x + left.y * right.y + left.z * right.z
 
+const finiteVector = (vector: GrappleVector): boolean =>
+	[vector.x, vector.y, vector.z].every(Number.isFinite)
+
+const clampSpeed = (velocity: GrappleVector): GrappleVector => {
+	const speed = length(velocity)
+	if (speed <= GRAPPLE_MAX_SPEED) return velocity
+	const scale = GRAPPLE_MAX_SPEED / speed
+	return {
+		x: velocity.x * scale,
+		y: velocity.y * scale,
+		z: velocity.z * scale,
+	}
+}
+
+/** Adds the accepted attachment impulse exactly once without erasing inertia. */
+export function applyGrappleAttachImpulse(
+	motion: GrappleMotion,
+	anchor: GrappleVector,
+): GrappleMotion {
+	if (
+		!finiteVector(motion.position) ||
+		!finiteVector(motion.velocity) ||
+		!finiteVector(anchor)
+	)
+		return motion
+	const towardAnchor = {
+		x: anchor.x - motion.position.x,
+		y: anchor.y - motion.position.y,
+		z: anchor.z - motion.position.z,
+	}
+	const distance = length(towardAnchor)
+	if (distance < 1e-6) return motion
+	return {
+		position: motion.position,
+		velocity: clampSpeed({
+			x:
+				motion.velocity.x +
+				(towardAnchor.x / distance) * GRAPPLE_ATTACH_IMPULSE,
+			y:
+				motion.velocity.y +
+				(towardAnchor.y / distance) * GRAPPLE_ATTACH_IMPULSE,
+			z:
+				motion.velocity.z +
+				(towardAnchor.z / distance) * GRAPPLE_ATTACH_IMPULSE,
+		}),
+	}
+}
+
+/** Returns a bounded, monotonic reel rate from normalized view/anchor alignment. */
+export function grappleReelRate(
+	position: GrappleVector,
+	anchor: GrappleVector,
+	aimDirection: GrappleVector,
+): number {
+	if (
+		!finiteVector(position) ||
+		!finiteVector(anchor) ||
+		!finiteVector(aimDirection)
+	)
+		return GRAPPLE_MIN_REEL_RATE
+	const towardAnchor = {
+		x: anchor.x - position.x,
+		y: anchor.y - position.y,
+		z: anchor.z - position.z,
+	}
+	const anchorDistance = length(towardAnchor)
+	const aimLength = length(aimDirection)
+	if (anchorDistance < 1e-6 || aimLength < 1e-6) return GRAPPLE_MIN_REEL_RATE
+	const alignment = Math.max(
+		-1,
+		Math.min(1, dot(towardAnchor, aimDirection) / (anchorDistance * aimLength)),
+	)
+	const linear = Math.max(
+		0,
+		Math.min(
+			1,
+			(alignment - GRAPPLE_REEL_MIN_ALIGNMENT) /
+				(GRAPPLE_REEL_MAX_ALIGNMENT - GRAPPLE_REEL_MIN_ALIGNMENT),
+		),
+	)
+	const smooth = linear * linear * (3 - 2 * linear)
+	return (
+		GRAPPLE_MIN_REEL_RATE +
+		(GRAPPLE_MAX_REEL_RATE - GRAPPLE_MIN_REEL_RATE) * smooth
+	)
+}
+
+/** Shrinks authoritative rope length by time, never by packet count. */
+export function advanceGrappleRopeLength(input: {
+	aimDirection: GrappleVector
+	anchor: GrappleVector
+	delta: number
+	position: GrappleVector
+	ropeLength: number
+}): number {
+	if (!Number.isFinite(input.ropeLength) || input.ropeLength <= 0)
+		return input.ropeLength
+	const delta = Math.max(
+		0,
+		Math.min(Number.isFinite(input.delta) ? input.delta : 0, 0.1),
+	)
+	return Math.max(
+		GRAPPLE_MIN_ROPE_LENGTH,
+		input.ropeLength -
+			grappleReelRate(input.position, input.anchor, input.aimDirection) * delta,
+	)
+}
+
 /**
  * Grapple has the last word after ordinary movement, gravity, and collision.
- * It never invents a launch impulse: tangential speed survives, outward radial
- * speed is removed only when the fixed rope is taut, and steering cannot reel.
+ * Tangential speed survives, outward radial speed is removed when the current
+ * authoritative rope is taut, and steering remains tangent to the tether.
  */
 export function constrainGrappleMotion(
 	motion: GrappleMotion,
@@ -114,15 +228,7 @@ export function constrainGrappleMotion(
 		}
 	}
 
-	const speed = length(velocity)
-	if (speed > GRAPPLE_MAX_SPEED) {
-		const scale = GRAPPLE_MAX_SPEED / speed
-		velocity = {
-			x: velocity.x * scale,
-			y: velocity.y * scale,
-			z: velocity.z * scale,
-		}
-	}
+	velocity = { ...clampSpeed(velocity) }
 	const position =
 		distance <= input.ropeLength
 			? motion.position
