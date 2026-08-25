@@ -16,6 +16,8 @@ const ARENA_TEST_PADS = [
 	[12, 0, 0],
 	[0, 0, 12],
 	[9, 0, 9],
+	[-9, 0, -9],
+	[14, 0, -4],
 ] as const
 
 test("connect creates a deterministic ARC-only two-slot inventory", () => {
@@ -74,7 +76,7 @@ test("arena pickups have deterministic distinct pads and staggered openings", ()
 	const initial = armory.arenaPickups()
 	assert.equal(
 		new Set(initial.map((pickup) => pickup.position.join(","))).size,
-		3,
+		6,
 	)
 	assert.equal(
 		initial.find((pickup) => pickup.weapon === "shotgun")?.available,
@@ -88,6 +90,10 @@ test("arena pickups have deterministic distinct pads and staggered openings", ()
 		initial.find((pickup) => pickup.weapon === "rail-gun")?.availableAt,
 		startedAt + ARENA_WEAPON_INITIAL_DELAY_MS["rail-gun"],
 	)
+	assert.equal(
+		initial.find((pickup) => pickup.weapon === "vamp")?.available,
+		true,
+	)
 	assert.equal(armory.update(startedAt + 3_999), false)
 	assert.equal(armory.update(startedAt + 4_000), true)
 	assert.equal(
@@ -95,6 +101,23 @@ test("arena pickups have deterministic distinct pads and staggered openings", ()
 			?.available,
 		true,
 	)
+})
+
+test("Vamp pickup is immediately available and carrying eligibility survives switching", () => {
+	const armory = new MiniMissileArmory([40, 0, 40], ARENA_TEST_PADS, 0)
+	armory.connect("pilot")
+	const vamp = armory.arenaPickups().find((pickup) => pickup.weapon === "vamp")!
+	assert.equal(vamp.available, true)
+	assert.equal(
+		armory.collectArenaWeapon("pilot", "vamp", vamp.position, 0),
+		true,
+	)
+	assert.equal(armory.hasWeapon("pilot", "vamp"), true)
+	assert.equal(armory.activeWeapon("pilot"), "vamp")
+	assert.equal(armory.switchActive("pilot", -1), true)
+	assert.equal(armory.activeWeapon("pilot"), "arc-blaster")
+	assert.equal(armory.hasWeapon("pilot", "vamp"), true)
+	assert.equal(armory.hasWeapon("unknown", "vamp"), false)
 })
 
 test("arena pickup collection is proximity validated, contended, rotating, and ammo persistent", () => {
@@ -128,7 +151,7 @@ test("arena pickup collection is proximity validated, contended, rotating, and a
 	assert.equal(
 		new Set(armory.arenaPickups().map((pickup) => pickup.position.join(",")))
 			.size,
-		3,
+		6,
 	)
 	assert.equal(armory.update(returning.availableAt! - 1), false)
 	assert.equal(armory.update(returning.availableAt!), true)

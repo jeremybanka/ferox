@@ -27,12 +27,15 @@ import type {
 	GrenadeSnapshot,
 	IncomingLockSnapshot,
 	IncomingStandardLockSnapshot,
+	HitscanBeamSnapshot,
 	InventoryActionIntent,
 	MiniMissileEndedSnapshot,
 	MiniMissileExplodedSnapshot,
 	MiniMissileIntent,
 	MiniMissilePickupSnapshot,
 	MiniMissileSnapshot,
+	LockChargeIntent,
+	LockChargeSnapshot,
 	MeleeHitResult,
 	PlayerMoveSnapshot,
 	PlayerDamageSnapshot,
@@ -46,12 +49,15 @@ import type {
 	WeaponSlotIndex,
 	PilotEmote,
 	VisorExpression,
+	VampHealthPickupSnapshot,
+	VampTriggerIntent,
 	WeaponKind,
 } from "./arena-protocol.ts"
 import {
 	activeEquipmentSlot,
 	isGrappleStateSnapshot,
 	isNewEquipmentSnapshot,
+	isVampHealthPickupSnapshot,
 	isVisorExpression,
 } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
@@ -100,6 +106,7 @@ import {
 	GRENADE_RESTITUTION,
 	GRAPPLE_MAX_RANGE,
 	HIT_MARKER_DURATION_SECONDS,
+	HITSCAN_BEAM_LIFETIME_SECONDS,
 	MINI_MISSILE_PICKUP_POSITION,
 	MINI_MISSILE_PICKUP_RADIUS,
 	PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT,
@@ -353,7 +360,17 @@ type ArenaPickupVisual = {
 	model: GunModel
 	ownerId: string | null
 	position: THREE.Vector3
-	weapon: "bubble-gun" | "rail-gun" | "shotgun"
+	weapon: Exclude<WeaponKind, "arc-blaster" | "mini-missile">
+}
+
+type HitscanBeamVisual = {
+	life: number
+	line: THREE.Line
+}
+
+type VampHealthPickupVisual = {
+	baseY: number
+	mesh: THREE.Mesh
 }
 
 type MiniMissileVisual = {
@@ -480,6 +497,8 @@ export class ArenaGame {
 	readonly #dustParticles: DustParticle[] = []
 	readonly #grenadeExplosions: GrenadeExplosion[] = []
 	readonly #grenades: Grenade[] = []
+	readonly #hitscanBeams: HitscanBeamVisual[] = []
+	readonly #vampHealthPickupVisuals = new Map<number, VampHealthPickupVisual>()
 	readonly #grappleTetherMaterial = new THREE.LineBasicMaterial({
 		color: "#73f5ff",
 		depthTest: true,
@@ -539,6 +558,8 @@ export class ArenaGame {
 	#fireCooldown = 0
 	#railCharging = false
 	#railChargeStartedAt = 0
+	#lockCharge: LockChargeSnapshot | null = null
+	#vampChainId: number | null = null
 	#triggerHeld = false
 	#freeAim = false
 	#grenadeCooldown = 0
@@ -684,6 +705,11 @@ export class ArenaGame {
 
 	setGameplayInputSuppressed(suppressed: boolean): void {
 		if (this.#gameplayInputSuppressed === suppressed) return
+		if (suppressed) {
+			this.#releaseRailCharge()
+			this.#releaseLockCharge()
+			this.#releaseVampChain()
+		}
 		this.#gameplayInputSuppressed = suppressed
 		this.#controllerInputArmed = false
 		this.#clearActiveInputState()
@@ -738,6 +764,9 @@ export class ArenaGame {
 		this.#socket.off("arena:bubble-popped", this.#onBubblePopped)
 		this.#socket.off("arena:ballistic", this.#onBallistic)
 		this.#socket.off("arena:ballistic-ended", this.#onBallisticEnded)
+		this.#socket.off("arena:lock-charge", this.#onLockCharge)
+		this.#socket.off("arena:hitscan-beam", this.#onHitscanBeam)
+		this.#socket.off("arena:vamp-health-pickups", this.#onVampHealthPickups)
 		this.#socket.off("arena:shotgun-pellets", this.#onShotgunPellets)
 		this.#socket.off(
 			"arena:shotgun-pellet-suspended",
@@ -800,6 +829,13 @@ export class ArenaGame {
 			;(visual.mesh.material as THREE.Material).dispose()
 		}
 		this.#ballistics.clear()
+		for (const beam of this.#hitscanBeams) {
+			this.#scene.remove(beam.line)
+			beam.line.geometry.dispose()
+			;(beam.line.material as THREE.Material).dispose()
+		}
+		this.#hitscanBeams.length = 0
+		this.#clearVampHealthPickupVisuals()
 		for (const model of this.#remotePlayers.values()) {
 			model.ragdoll?.dispose()
 			this.#scene.remove(model.rig.root)
@@ -826,7 +862,10 @@ export class ArenaGame {
 			this.#requestSwitch(1)
 		if (isGrenadeSwitchKeyboardInput(event.code, event.repeat))
 			this.#requestGrenadeCycle()
-		if (event.code === "KeyE" && !event.repeat) this.#requestDroneRecovery()
+		if (event.code === "KeyE" && !event.repeat) {
+			this.#requestDroneRecovery()
+			this.#requestPickup()
+		}
 		if (event.code === "KeyX" && !event.repeat) this.#requestDrop()
 		const gesture = keyboardGestureInput(event.code, event.repeat)
 		if (gesture !== null) this.#requestGesture(gesture)
@@ -835,7 +874,11 @@ export class ArenaGame {
 	readonly #onKeyUp = (event: KeyboardEvent): void => {
 		this.#keys.delete(event.code)
 		if (this.#gameplayInputSuppressed) return
-		if (event.code === "KeyF") this.#releaseRailCharge()
+		if (event.code === "KeyF") {
+			this.#releaseRailCharge()
+			this.#releaseLockCharge()
+			this.#releaseVampChain()
+		}
 	}
 
 	readonly #onMouseMove = (event: MouseEvent): void => {
@@ -877,6 +920,9 @@ export class ArenaGame {
 		if (event.target === this.#canvas) this.#mouseLookDragging = true
 		if (event.button === 0) {
 			if (this.#weaponKind === "rail-gun") this.#beginRailCharge()
+			else if (this.#weaponKind === "vamp") this.#beginVampChain()
+			else if (gunDefinition(this.#weaponKind).fire.type === "hitscan")
+				this.#beginLockCharge()
 			else this.#fire()
 		}
 		if (event.button === 2) this.#throwGrenade()
@@ -885,7 +931,11 @@ export class ArenaGame {
 	readonly #onMouseUp = (event: MouseEvent): void => {
 		this.#mouseLookDragging = false
 		if (this.#gameplayInputSuppressed) return
-		if (event.button === 0) this.#releaseRailCharge()
+		if (event.button === 0) {
+			this.#releaseRailCharge()
+			this.#releaseLockCharge()
+			this.#releaseVampChain()
+		}
 	}
 
 	readonly #onContextMenu = (event: MouseEvent): void => {
@@ -923,6 +973,9 @@ export class ArenaGame {
 		this.#pickupProgress = 0
 		this.#equipmentRevision = -1
 		this.#cancelReloadPresentation()
+		this.#lockCharge = null
+		this.#vampChainId = null
+		this.#clearVampHealthPickupVisuals()
 		this.#drones.reset()
 		this.#droneSalvage.dispose()
 		this.#droneGrenades = 0
@@ -1423,6 +1476,8 @@ export class ArenaGame {
 		]
 		this.#weaponKind = active.weapon
 		if (active.weapon !== "rail-gun") this.#railCharging = false
+		if (active.weapon !== this.#lockCharge?.weapon) this.#lockCharge = null
+		if (active.weapon !== "vamp") this.#vampChainId = null
 		this.#ammo = active.ammo
 		this.#setLocalGunModel(active.weapon)
 		if (previousRevision >= 0) {
@@ -1604,6 +1659,126 @@ export class ArenaGame {
 		)
 	}
 
+	readonly #onLockCharge = (snapshot: LockChargeSnapshot): void => {
+		if (
+			snapshot.ownerId !== this.#socket.id ||
+			(snapshot.weapon !== "ion-beam-rifle" &&
+				snapshot.weapon !== "heavy-laser") ||
+			!Number.isSafeInteger(snapshot.chargeId)
+		)
+			return
+		this.#lockCharge = snapshot.phase === "charging" ? snapshot : null
+	}
+
+	readonly #onHitscanBeam = (snapshot: HitscanBeamSnapshot): void => {
+		if (
+			!Array.isArray(snapshot.start) ||
+			!Array.isArray(snapshot.end) ||
+			snapshot.start.length !== 3 ||
+			snapshot.end.length !== 3 ||
+			![...snapshot.start, ...snapshot.end].every(Number.isFinite)
+		)
+			return
+		const geometry = new THREE.BufferGeometry().setFromPoints([
+			new THREE.Vector3(...snapshot.start),
+			new THREE.Vector3(...snapshot.end),
+		])
+		const material = new THREE.LineBasicMaterial({
+			color: snapshot.color,
+			depthWrite: false,
+			opacity: 0.96,
+			transparent: true,
+		})
+		const line = new THREE.Line(geometry, material)
+		line.name = `${snapshot.weapon} authoritative beam ${snapshot.beamId}`
+		line.frustumCulled = false
+		this.#scene.add(line)
+		this.#hitscanBeams.push({ life: HITSCAN_BEAM_LIFETIME_SECONDS, line })
+		this.#spawnMuzzleFlash(
+			new THREE.Vector3(...snapshot.start),
+			new THREE.Vector3(...snapshot.end)
+				.sub(new THREE.Vector3(...snapshot.start))
+				.normalize(),
+			snapshot.color,
+		)
+		if (snapshot.ownerId !== this.#socket.id || snapshot.weapon === "vamp")
+			this.#audio.playWeapon(snapshot.weapon)
+	}
+
+	readonly #onVampHealthPickups = (snapshots: unknown): void => {
+		if (!Array.isArray(snapshots)) return
+		const active = new Set<number>()
+		for (const candidate of snapshots) {
+			if (!isVampHealthPickupSnapshot(candidate)) continue
+			const snapshot: VampHealthPickupSnapshot = candidate
+			active.add(snapshot.id)
+			let visual = this.#vampHealthPickupVisuals.get(snapshot.id)
+			if (visual === undefined) {
+				const material = new THREE.MeshStandardMaterial({
+					color: "#e13b4d",
+					emissive: "#8f1028",
+					emissiveIntensity: 1.4,
+					metalness: 0.18,
+					roughness: 0.3,
+				})
+				const mesh = new THREE.Mesh(
+					new THREE.OctahedronGeometry(0.2, 1),
+					material,
+				)
+				mesh.name = `Vamp health pickup ${snapshot.id}`
+				this.#scene.add(mesh)
+				visual = { baseY: snapshot.position[1], mesh }
+				this.#vampHealthPickupVisuals.set(snapshot.id, visual)
+			}
+			visual.baseY = snapshot.position[1]
+			visual.mesh.position.set(...snapshot.position)
+		}
+		for (const [id, visual] of this.#vampHealthPickupVisuals) {
+			if (active.has(id)) continue
+			this.#disposeVampHealthPickupVisual(id, visual)
+		}
+	}
+
+	#disposeVampHealthPickupVisual(
+		id: number,
+		visual: VampHealthPickupVisual,
+	): void {
+		this.#scene.remove(visual.mesh)
+		visual.mesh.geometry.dispose()
+		;(visual.mesh.material as THREE.Material).dispose()
+		this.#vampHealthPickupVisuals.delete(id)
+	}
+
+	#clearVampHealthPickupVisuals(): void {
+		for (const [id, visual] of this.#vampHealthPickupVisuals) {
+			this.#disposeVampHealthPickupVisual(id, visual)
+		}
+	}
+
+	#updateVampHealthPickups(delta: number): void {
+		const now = performance.now() / 1_000
+		for (const [id, visual] of this.#vampHealthPickupVisuals) {
+			visual.mesh.position.y = visual.baseY + Math.sin(now * 2.8 + id) * 0.16
+			visual.mesh.rotation.y += delta * 1.8
+			visual.mesh.rotation.x = Math.sin(now * 1.7 + id) * 0.18
+		}
+	}
+
+	#updateHitscanBeams(delta: number): void {
+		for (let index = this.#hitscanBeams.length - 1; index >= 0; index -= 1) {
+			const beam = this.#hitscanBeams[index]
+			if (beam === undefined) continue
+			beam.life -= delta
+			const material = beam.line.material as THREE.LineBasicMaterial
+			material.opacity = Math.max(0, beam.life / HITSCAN_BEAM_LIFETIME_SECONDS)
+			if (beam.life > 0) continue
+			this.#scene.remove(beam.line)
+			beam.line.geometry.dispose()
+			material.dispose()
+			this.#hitscanBeams.splice(index, 1)
+		}
+	}
+
 	readonly #onShotgunPellets = (snapshots: ShotgunPelletSnapshot[]): void => {
 		if (!Array.isArray(snapshots)) return
 		this.#shotgunPellets.reconcile(
@@ -1725,6 +1900,9 @@ export class ArenaGame {
 		this.#socket.on("arena:bubble-popped", this.#onBubblePopped)
 		this.#socket.on("arena:ballistic", this.#onBallistic)
 		this.#socket.on("arena:ballistic-ended", this.#onBallisticEnded)
+		this.#socket.on("arena:lock-charge", this.#onLockCharge)
+		this.#socket.on("arena:hitscan-beam", this.#onHitscanBeam)
+		this.#socket.on("arena:vamp-health-pickups", this.#onVampHealthPickups)
 		this.#socket.on("arena:shotgun-pellets", this.#onShotgunPellets)
 		this.#socket.on(
 			"arena:shotgun-pellet-suspended",
@@ -2008,10 +2186,20 @@ export class ArenaGame {
 
 		const arenaPickupColors = {
 			"bubble-gun": "#f58bdf",
+			"heavy-laser": "#ff6d47",
+			"ion-beam-rifle": "#ffe55c",
 			"rail-gun": "#ffc15c",
 			shotgun: "#ff7657",
+			vamp: "#e13b4d",
 		} as const
-		for (const weapon of ["shotgun", "bubble-gun", "rail-gun"] as const) {
+		for (const weapon of [
+			"shotgun",
+			"bubble-gun",
+			"rail-gun",
+			"ion-beam-rifle",
+			"heavy-laser",
+			"vamp",
+		] as const) {
 			const color = arenaPickupColors[weapon]
 			const group = new THREE.Group()
 			group.name = `${weapon} world pickup`
@@ -2143,6 +2331,8 @@ export class ArenaGame {
 		this.#freeAim = false
 		this.#leftBumperHeld = false
 		this.#rightBumperHeld = false
+		this.#triggerHeld = false
+		this.#vampChainId = null
 		this.#shotHeld = false
 		this.#grenadeHeld = false
 		this.#grappleTriggerHeld = false
@@ -2736,6 +2926,14 @@ export class ArenaGame {
 		if (this.#weaponKind === "rail-gun") {
 			if (trigger && !this.#triggerHeld) this.#beginRailCharge()
 			if (!trigger && this.#triggerHeld) this.#releaseRailCharge()
+		} else if (gunDefinition(this.#weaponKind).fire.type === "hitscan") {
+			if (this.#weaponKind === "vamp") {
+				if (trigger && !this.#triggerHeld) this.#beginVampChain()
+				if (!trigger && this.#triggerHeld) this.#releaseVampChain()
+			} else {
+				if (trigger && !this.#triggerHeld) this.#beginLockCharge()
+				if (!trigger && this.#triggerHeld) this.#releaseLockCharge()
+			}
 		} else if (trigger && this.#fireCooldown <= 0) this.#fire()
 		this.#triggerHeld = trigger
 		const bombPressed = gamepad.bomb
@@ -3028,6 +3226,77 @@ export class ArenaGame {
 		this.#fireCooldown = gunDefinition("rail-gun").fire.clientCooldownSeconds
 		this.#recoilState = addRecoilShot(this.#recoilState)
 		this.#recoilPulse += 1
+	}
+
+	#beginLockCharge(): void {
+		const gun = gunDefinition(this.#weaponKind)
+		if (
+			gun.fire.type !== "hitscan" ||
+			(gun.id !== "ion-beam-rifle" && gun.id !== "heavy-laser") ||
+			this.#lockCharge !== null ||
+			this.#dead ||
+			this.#reload !== null ||
+			this.#ammo === 0 ||
+			this.#fireCooldown > 0 ||
+			this.#targetingState !== "locked" ||
+			this.#lockedTargetId?.kind !== "pilot"
+		)
+			return
+		const tuning = gun.tuning
+		if (tuning.kind !== "hitscan" || tuning.mode !== "charged") return
+		this.#shotSequence += 1
+		const now = Date.now()
+		this.#lockCharge = {
+			chargeId: this.#shotSequence,
+			completesAt: now + tuning.chargeMs,
+			ownerId: this.#socket.id ?? "local",
+			phase: "charging",
+			startedAt: now,
+			weapon: gun.id,
+		}
+		this.#socket.emit("arena:lock-charge", {
+			clientChargeId: this.#shotSequence,
+			type: "start",
+		} satisfies LockChargeIntent)
+	}
+
+	#releaseLockCharge(): void {
+		const charge = this.#lockCharge
+		if (charge === null) return
+		this.#lockCharge = null
+		this.#socket.emit("arena:lock-charge", {
+			clientChargeId: charge.chargeId,
+			type: "release",
+		} satisfies LockChargeIntent)
+	}
+
+	#beginVampChain(): void {
+		if (
+			this.#weaponKind !== "vamp" ||
+			this.#vampChainId !== null ||
+			this.#dead ||
+			this.#reload !== null ||
+			this.#ammo === 0 ||
+			this.#targetingState !== "locked" ||
+			this.#lockedTargetId?.kind !== "pilot"
+		)
+			return
+		this.#shotSequence += 1
+		this.#vampChainId = this.#shotSequence
+		this.#socket.emit("arena:vamp-trigger", {
+			clientChainId: this.#shotSequence,
+			type: "start",
+		} satisfies VampTriggerIntent)
+	}
+
+	#releaseVampChain(): void {
+		if (this.#vampChainId === null) return
+		const clientChainId = this.#vampChainId
+		this.#vampChainId = null
+		this.#socket.emit("arena:vamp-trigger", {
+			clientChainId,
+			type: "release",
+		} satisfies VampTriggerIntent)
 	}
 
 	#throwGrenade(): void {
@@ -3759,7 +4028,7 @@ export class ArenaGame {
 		const gun = gunDefinition(this.#weaponKind)
 		const active =
 			this.#connected &&
-			gun.fire.type === "projectile" &&
+			(gun.fire.type === "projectile" || gun.capabilities.requiresLock) &&
 			this.#targetingState === "locked" &&
 			this.#lockedTargetId?.kind === "pilot"
 		if (active === this.#standardLockReported) return
@@ -4267,13 +4536,20 @@ export class ArenaGame {
 		const grappleState = this.#grappleStates.get(this.#socket.id ?? "")
 		this.#onHud({
 			ammo: this.#ammo,
-			chargeProgress: this.#railCharging
-				? Math.min(
-						1,
-						(performance.now() - this.#railChargeStartedAt) /
-							RAIL_CHARGE_MAX_MS,
-					)
-				: 0,
+			chargeProgress:
+				this.#lockCharge !== null
+					? Math.min(
+							1,
+							(Date.now() - this.#lockCharge.startedAt) /
+								(this.#lockCharge.completesAt - this.#lockCharge.startedAt),
+						)
+					: this.#railCharging
+						? Math.min(
+								1,
+								(performance.now() - this.#railChargeStartedAt) /
+									RAIL_CHARGE_MAX_MS,
+							)
+						: 0,
 			activeSlot: this.#activeSlot,
 			connection: this.#connected
 				? "online"
@@ -4407,6 +4683,8 @@ export class ArenaGame {
 		this.#drones.update(delta)
 		this.#droneSalvage.update(delta)
 		this.#updateMuzzleFlashes(delta)
+		this.#updateHitscanBeams(delta)
+		this.#updateVampHealthPickups(delta)
 		this.#damageEffects.update(delta)
 		this.#fistContactEffects.update(delta)
 		this.#updateProjectiles(delta)

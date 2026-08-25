@@ -55,6 +55,7 @@ describe("gun definitions", () => {
 			fire: true,
 			pickup: false,
 			reload: true,
+			requiresLock: false,
 		})
 		expect(blaster.fire.type).toBe("projectile")
 		expect(blaster.reload).toEqual({
@@ -67,6 +68,7 @@ describe("gun definitions", () => {
 			fire: true,
 			pickup: true,
 			reload: true,
+			requiresLock: false,
 		})
 		expect(launcher.fire.type).toBe("guided-missile")
 		expect(launcher.reload).toEqual({
@@ -90,6 +92,31 @@ describe("gun definitions", () => {
 		expect(launcher.tuning).toMatchObject({ speed: MINI_MISSILE_SPEED })
 		expect(MINI_MISSILE_SPEED).toBe(14)
 		expect(launcher.name).not.toBe(blaster.name)
+	})
+
+	test("defines lock-gated hitscan timing and damage without lock optics", () => {
+		expect(gunDefinition("ion-beam-rifle")).toMatchObject({
+			capabilities: { requiresLock: true },
+			fire: { type: "hitscan" },
+			tuning: { chargeMs: 2_000, chargedDamage: 40, tapDamage: null },
+		})
+		expect(gunDefinition("heavy-laser")).toMatchObject({
+			capabilities: { requiresLock: true },
+			fire: { type: "hitscan" },
+			tuning: { chargeMs: 5_000, chargedDamage: 120, tapDamage: 2 },
+		})
+		expect(gunDefinition("vamp")).toMatchObject({
+			capabilities: { requiresLock: true },
+			fire: { serverMinimumIntervalMs: 100, type: "hitscan" },
+			magazineSize: 100,
+			tuning: {
+				damage: 1,
+				firstIntervalMs: 1_000,
+				intervalStepMs: 150,
+				minimumIntervalMs: 100,
+				mode: "continuous",
+			},
+		})
 	})
 
 	test("validates registered IDs and rejects unknown network values", () => {

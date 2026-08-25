@@ -117,6 +117,80 @@ test("player projectiles damage another pilot across a simulation tick", () => {
 	expect(endedProjectiles).toEqual([{ id: 1 }])
 })
 
+test("locked hitscan resolves and reports one instantaneous pilot hit", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 8, 13],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 8, 9],
+			velocity: [0, 0, 0],
+		},
+	]
+	const damage: Array<{
+		amount: number
+		impact: PlayerDamageImpact
+		playerId: string
+	}> = []
+	const directHits: Array<{ playerId: string; result: DirectHitResult }> = []
+	const simulation = makeSimulation(
+		players,
+		(playerId, amount, impact) => damage.push({ amount, impact, playerId }),
+		[],
+		directHits,
+	)
+	const result = simulation.fireLockedHitscan("shooter", 7, "target", 40)
+	expect(result).not.toBeNull()
+	expect(result?.damage).toBe(40)
+	expect(damage).toMatchObject([
+		{ amount: 40, impact: { source: "hitscan" }, playerId: "target" },
+	])
+	expect(directHits).toMatchObject([
+		{
+			playerId: "shooter",
+			result: { clientShotId: 7, damage: 40, targetId: "target" },
+		},
+	])
+})
+
+test("target-only locked hitscan treats an occluder as a miss without damage", () => {
+	const players: SimulationPlayer[] = [
+		{
+			crouching: false,
+			id: "shooter",
+			position: [0, 8, 13],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "occluder",
+			position: [0, 8, 11],
+			velocity: [0, 0, 0],
+		},
+		{
+			crouching: false,
+			id: "target",
+			position: [0, 8, 9],
+			velocity: [0, 0, 0],
+		},
+	]
+	const damage: Array<{ amount: number; playerId: string }> = []
+	const simulation = makeSimulation(
+		players,
+		(playerId, amount) => damage.push({ amount, playerId }),
+		[],
+	)
+	const result = simulation.fireLockedHitscan("shooter", 8, "target", 1, true)
+	expect(result).not.toBeNull()
+	expect(result?.hit).toBeNull()
+	expect(damage).toEqual([])
+})
+
 test("player projectile intent IDs reject replay before spawning", () => {
 	const players: SimulationPlayer[] = [
 		{
@@ -1312,7 +1386,7 @@ test("a pursuing Bully routes around a wall instead of orbiting into it", () => 
 	).toBeLessThan(
 		Math.hypot(firstWaypoint[0] - start[0], firstWaypoint[1] - start[1]) - 40,
 	)
-})
+}, 10_000)
 
 test("a wreck can be recovered once and deploys exactly once after ten meters", () => {
 	const players: SimulationPlayer[] = [

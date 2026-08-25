@@ -32,8 +32,9 @@ export function selectValidatedStandardLockTarget(
 	attacker: StandardLockPilotState,
 	pilots: ReadonlyMap<string, StandardLockPilotState>,
 ): string | null {
+	const gun = gunDefinition(attacker.equippedWeapon)
 	if (
-		gunDefinition(attacker.equippedWeapon).fire.type !== "projectile" ||
+		(gun.fire.type !== "projectile" && !gun.capabilities.requiresLock) ||
 		attacker.freeAim
 	)
 		return null
@@ -91,6 +92,10 @@ export class StandardLockTracker {
 			if (targetId === playerId) attackers += 1
 		}
 		return { attackers }
+	}
+
+	targetFor(attackerId: string): string | null {
+		return this.#targetsByAttacker.get(attackerId) ?? null
 	}
 
 	reconcile(

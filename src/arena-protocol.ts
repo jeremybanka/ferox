@@ -486,7 +486,7 @@ export type ArenaWeaponPickupSnapshot = {
 	availableAt: number | null
 	ownerId: string | null
 	position: Vector3Tuple
-	weapon: "bubble-gun" | "rail-gun" | "shotgun"
+	weapon: Exclude<GunId, "arc-blaster" | "mini-missile">
 }
 
 export type WeaponSlotIndex = 0 | 1
@@ -642,6 +642,72 @@ export type RailChargeIntent =
 			type: "release"
 	  }
 
+export type LockChargeIntent =
+	| { clientChargeId: number; type: "start" }
+	| { clientChargeId: number; type: "release" }
+
+export type LockChargeSnapshot = {
+	chargeId: number
+	completesAt: number
+	ownerId: string
+	phase: "cancelled" | "charging" | "fired"
+	startedAt: number
+	weapon: "heavy-laser" | "ion-beam-rifle"
+}
+
+export type VampTriggerIntent = {
+	clientChainId: number
+	type: "release" | "start"
+}
+
+export function isVampTriggerIntent(
+	value: unknown,
+): value is VampTriggerIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 2 &&
+		Number.isSafeInteger(record["clientChainId"]) &&
+		(record["clientChainId"] as number) >= 0 &&
+		(record["type"] === "release" || record["type"] === "start")
+	)
+}
+
+export type VampHealthPickupSnapshot = Readonly<{
+	amount: 1
+	expiresAt: number
+	id: number
+	ownerId: string
+	position: Vector3Tuple
+}>
+
+export function isVampHealthPickupSnapshot(
+	value: unknown,
+): value is VampHealthPickupSnapshot {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 5 &&
+		record["amount"] === 1 &&
+		Number.isFinite(record["expiresAt"]) &&
+		Number.isSafeInteger(record["id"]) &&
+		(record["id"] as number) >= 0 &&
+		typeof record["ownerId"] === "string" &&
+		(record["ownerId"] as string).length > 0 &&
+		isVector3Tuple(record["position"])
+	)
+}
+
+export type HitscanBeamSnapshot = {
+	beamId: number
+	color: "#e13b4d" | "#ffe55c" | "#ff6d47"
+	damage: number
+	end: Vector3Tuple
+	ownerId: string
+	start: Vector3Tuple
+	weapon: "heavy-laser" | "ion-beam-rifle" | "vamp"
+}
+
 export type DirectHitClassification = "headshot" | "normal"
 export type DirectHitTargetType = "drone" | "player"
 
@@ -664,6 +730,7 @@ export type PlayerDamageImpact = {
 		| "bubble"
 		| "grenade"
 		| "kamikaze"
+		| "hitscan"
 		| "melee"
 		| "mini-missile"
 		| "projectile"

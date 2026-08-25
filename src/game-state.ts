@@ -44,7 +44,7 @@ export type GameHudState = {
 	pickupStatuses: readonly {
 		remaining: number
 		status: "available" | "carried" | "returning"
-		weapon: "bubble-gun" | "rail-gun" | "shotgun"
+		weapon: Exclude<WeaponKind, "arc-blaster" | "mini-missile">
 	}[]
 	reticleX: number
 	reticleY: number

@@ -13,6 +13,7 @@ import {
 	isJumpDirectionForImpulse,
 	isJumpSequence,
 	isMantleSnapshot,
+	isVampTriggerIntent,
 	isVisorExpression,
 	isWallTraversalSnapshot,
 	nextAcceptedRecoilSignal,
@@ -22,6 +23,9 @@ import {
 	type GrenadeIntent,
 	type GrappleStateSnapshot,
 	type MiniMissileIntent,
+	type HitscanBeamSnapshot,
+	type LockChargeIntent,
+	type LockChargeSnapshot,
 	type RailChargeIntent,
 	type PlayerMoveSnapshot,
 	type PlayerDamageImpact,
@@ -101,6 +105,16 @@ import {
 } from "./StandardLockTracker.ts"
 import { PlayerLifecycle } from "./PlayerLifecycle.ts"
 import { GrappleUtility } from "./GrappleUtility.ts"
+import {
+	LockHitscanChargeController,
+	type LockChargeResolution,
+} from "./LockHitscanCharge.ts"
+import {
+	VampContinuousFireController,
+	type VampChainSnapshot,
+} from "./VampContinuousFire.ts"
+import { VampHealthPickupField } from "./VampHealthPickups.ts"
+import { resolveVampScheduledHit } from "./VampHitResolution.ts"
 type SpawnPayload = {
 	damageSequence: number
 	position: [number, number]
@@ -149,6 +163,18 @@ const armory = new MiniMissileArmory(
 )
 const grapple = new GrappleUtility()
 const standardLocks = new StandardLockTracker()
+const lockHitscanCharges = new LockHitscanChargeController()
+const vampChains = new VampContinuousFireController()
+const vampHealthPickups = new VampHealthPickupField()
+let nextVampShotId = 0
+
+const emitLockCharge = (snapshot: LockChargeSnapshot | null): void => {
+	if (snapshot !== null) io.emit("arena:lock-charge", snapshot)
+}
+
+const emitVampHealthPickups = (): void => {
+	io.emit("arena:vamp-health-pickups", vampHealthPickups.snapshots())
+}
 
 const applyPlayerDamage = (
 	playerId: string,
@@ -224,6 +250,9 @@ const applyPlayerDamage = (
 		lastPlayerMissile.delete(playerId)
 		railCharges.delete(playerId)
 		lastRailChargeId.delete(playerId)
+		emitLockCharge(lockHitscanCharges.cancel(playerId))
+		vampChains.cancel(playerId)
+		if (vampHealthPickups.clearOwner(playerId)) emitVampHealthPickups()
 		io.emit("arena:players", [...players.values()])
 	}
 	io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
@@ -349,6 +378,170 @@ const simulation = new ArenaSimulation({
 	onPlayerDamage: applySimulationPlayerDamage,
 	seed: ARENA_SEED,
 })
+
+const resolveLockCharge = (resolution: LockChargeResolution): boolean => {
+	const { snapshot, damage } = resolution
+	if (damage === null) {
+		emitLockCharge(snapshot)
+		return false
+	}
+	const playerId = snapshot.ownerId
+	const targetId = standardLocks.targetFor(playerId)
+	const equipped = gunDefinition(armory.activeWeapon(playerId))
+	const now = performance.now()
+	if (
+		!playerLifecycle.isAlive(playerId) ||
+		targetId === null ||
+		equipped.id !== snapshot.weapon ||
+		equipped.fire.type !== "hitscan" ||
+		players.get(playerId)?.reload !== null ||
+		!isFireCadenceReady(
+			lastPlayerFire.get(playerId),
+			now,
+			equipped.fire.serverMinimumIntervalMs,
+		) ||
+		!armory.consumeActive(playerId, "hitscan")
+	) {
+		emitLockCharge({ ...snapshot, phase: "cancelled" })
+		return false
+	}
+	const result = simulation.fireLockedHitscan(
+		playerId,
+		snapshot.chargeId,
+		targetId,
+		damage,
+	)
+	if (result === null) {
+		armory.restoreActive(playerId)
+		emitLockCharge({ ...snapshot, phase: "cancelled" })
+		return false
+	}
+	lastPlayerFire.set(playerId, now)
+	emitEquipment(playerId)
+	emitLockCharge(snapshot)
+	io.emit("arena:hitscan-beam", {
+		beamId: result.beamId,
+		color: snapshot.weapon === "ion-beam-rifle" ? "#ffe55c" : "#ff6d47",
+		damage,
+		end: result.end,
+		ownerId: playerId,
+		start: result.start,
+		weapon: snapshot.weapon,
+	} satisfies HitscanBeamSnapshot)
+	const player = players.get(playerId)
+	if (player !== undefined)
+		Object.assign(player, nextAcceptedRecoilSignal(player, Date.now() / 1_000))
+	return true
+}
+
+const isLockChargeValid = (charge: LockChargeSnapshot): boolean => {
+	const player = players.get(charge.ownerId)
+	return (
+		playerLifecycle.isAlive(charge.ownerId) &&
+		player?.reload === null &&
+		armory.activeWeapon(charge.ownerId) === charge.weapon &&
+		standardLocks.targetFor(charge.ownerId) !== null
+	)
+}
+
+const scheduleLockChargeDeadline = (snapshot: LockChargeSnapshot): void => {
+	const resolveAtDeadline = (): void => {
+		const active = lockHitscanCharges.active(snapshot.ownerId)
+		if (active === null || active.chargeId !== snapshot.chargeId) return
+		const remainingMs = active.completesAt - Date.now()
+		if (remainingMs > 0) {
+			setTimeout(resolveAtDeadline, remainingMs)
+			return
+		}
+		const resolution = lockHitscanCharges.resolveDue(
+			snapshot.ownerId,
+			snapshot.chargeId,
+			Date.now(),
+			isLockChargeValid,
+		)
+		if (resolution !== null) resolveLockCharge(resolution)
+	}
+	setTimeout(resolveAtDeadline, Math.max(0, snapshot.completesAt - Date.now()))
+}
+
+const isVampChainValid = (snapshot: VampChainSnapshot): boolean => {
+	const player = players.get(snapshot.ownerId)
+	return (
+		playerLifecycle.isAlive(snapshot.ownerId) &&
+		player?.reload === null &&
+		armory.activeWeapon(snapshot.ownerId) === "vamp" &&
+		activeEquipmentSlot(armory.equipment(snapshot.ownerId)).ammo > 0 &&
+		standardLocks.targetFor(snapshot.ownerId) !== null
+	)
+}
+
+const attemptVampHit = (snapshot: VampChainSnapshot): boolean => {
+	if (!isVampChainValid(snapshot)) return false
+	const targetId = standardLocks.targetFor(snapshot.ownerId)
+	if (targetId === null) return false
+	return resolveVampScheduledHit({
+		consumeAmmo: () => armory.consumeActive(snapshot.ownerId, "hitscan"),
+		emitBeam: (result) =>
+			io.emit("arena:hitscan-beam", {
+				beamId: result.beamId,
+				color: "#e13b4d",
+				damage: 1,
+				end: result.end,
+				ownerId: snapshot.ownerId,
+				start: result.start,
+				weapon: "vamp",
+			} satisfies HitscanBeamSnapshot),
+		onSuccess: () => {
+			emitEquipment(snapshot.ownerId)
+			const player = players.get(snapshot.ownerId)
+			if (player !== undefined) {
+				Object.assign(
+					player,
+					nextAcceptedRecoilSignal(player, Date.now() / 1_000),
+				)
+			}
+		},
+		restoreAmmo: () => armory.restoreActive(snapshot.ownerId),
+		spawnHealthPickup: (position) => {
+			if (
+				vampHealthPickups.spawn(snapshot.ownerId, position, Date.now()) !== null
+			) {
+				emitVampHealthPickups()
+			}
+		},
+		targetId,
+		trace: () =>
+			simulation.fireLockedHitscan(
+				snapshot.ownerId,
+				nextVampShotId++,
+				targetId,
+				1,
+				true,
+			),
+	})
+}
+
+const scheduleVampDeadline = (snapshot: VampChainSnapshot): void => {
+	const resolveAtDeadline = (): void => {
+		const active = vampChains.active(snapshot.ownerId)
+		if (active === null || active.chainId !== snapshot.chainId) return
+		const remainingMs = active.dueAt - Date.now()
+		if (remainingMs > 0) {
+			setTimeout(resolveAtDeadline, remainingMs)
+			return
+		}
+		const resolution = vampChains.resolveDue(
+			snapshot.ownerId,
+			snapshot.chainId,
+			Date.now(),
+			attemptVampHit,
+		)
+		if (resolution?.next !== null && resolution?.next !== undefined) {
+			scheduleVampDeadline(resolution.next)
+		}
+	}
+	setTimeout(resolveAtDeadline, Math.max(0, snapshot.dueAt - Date.now()))
+}
 
 const melee = new MeleeCombat({
 	getPlayers: () =>
@@ -499,6 +692,10 @@ realtime(
 			gameSocket.emit("arena:equipment", armory.equipment(socketId))
 			gameSocket.emit("arena:mini-missile-pickup", armory.pickup())
 			gameSocket.emit("arena:weapon-pickups", armory.arenaPickups())
+			gameSocket.emit(
+				"arena:vamp-health-pickups",
+				vampHealthPickups.snapshots(),
+			)
 			for (const state of grapple.states())
 				gameSocket.emit("arena:grapple-state", state)
 			gameSocket.emit("arena:incoming-lock", armory.incoming(socketId))
@@ -1115,6 +1312,83 @@ realtime(
 			lastPlayerMissile.set(socketId, now)
 			emitEquipment(socketId)
 		}
+		const onLockCharge = (payload: LockChargeIntent): void => {
+			if (
+				!playerLifecycle.isAlive(socketId) ||
+				payload === null ||
+				typeof payload !== "object" ||
+				!Number.isSafeInteger(payload.clientChargeId) ||
+				payload.clientChargeId < 0 ||
+				(payload.type !== "start" && payload.type !== "release")
+			)
+				return
+			const equipped = gunDefinition(armory.activeWeapon(socketId))
+			if (
+				equipped.fire.type !== "hitscan" ||
+				(equipped.id !== "ion-beam-rifle" && equipped.id !== "heavy-laser") ||
+				players.get(socketId)?.reload !== null ||
+				standardLocks.targetFor(socketId) === null
+			)
+				return
+			if (payload.type === "start") {
+				if (
+					!isFireCadenceReady(
+						lastPlayerFire.get(socketId),
+						performance.now(),
+						equipped.fire.serverMinimumIntervalMs,
+					) ||
+					activeEquipmentSlot(armory.equipment(socketId)).ammo <= 0
+				)
+					return
+				const charge = lockHitscanCharges.start(
+					socketId,
+					payload.clientChargeId,
+					equipped.id,
+					Date.now(),
+				)
+				emitLockCharge(charge)
+				if (charge !== null) scheduleLockChargeDeadline(charge)
+				return
+			}
+			const due = lockHitscanCharges.resolveDue(
+				socketId,
+				payload.clientChargeId,
+				Date.now(),
+				isLockChargeValid,
+			)
+			if (due !== null) {
+				resolveLockCharge(due)
+				return
+			}
+			const resolution = lockHitscanCharges.release(
+				socketId,
+				payload.clientChargeId,
+				Date.now(),
+			)
+			if (resolution !== null) resolveLockCharge(resolution)
+		}
+		const onVampTrigger = (payload: unknown): void => {
+			if (!isVampTriggerIntent(payload)) return
+			if (payload.type === "release") {
+				vampChains.release(socketId, payload.clientChainId)
+				return
+			}
+			const player = players.get(socketId)
+			if (
+				!playerLifecycle.isAlive(socketId) ||
+				player?.reload !== null ||
+				armory.activeWeapon(socketId) !== "vamp" ||
+				activeEquipmentSlot(armory.equipment(socketId)).ammo <= 0 ||
+				standardLocks.targetFor(socketId) === null
+			)
+				return
+			const chain = vampChains.start(
+				socketId,
+				payload.clientChainId,
+				Date.now(),
+			)
+			if (chain !== null) scheduleVampDeadline(chain)
+		}
 		const onInventoryAction = (payload: unknown): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
 			const previous = lastInventoryAction.get(socketId) ?? -1
@@ -1167,8 +1441,12 @@ realtime(
 					break
 			}
 			if (!changed) return
+			emitLockCharge(lockHitscanCharges.cancel(socketId))
+			vampChains.cancel(socketId)
 			if (payload.type !== "reload") cancelPlayerReload(socketId)
-			if (payload.type !== "reload") railCharges.delete(socketId)
+			if (payload.type !== "reload") {
+				railCharges.delete(socketId)
+			}
 			const after = armory.activeWeapon(socketId)
 			if (payload.type === "drop-secondary")
 				simulation.cancelLocksByOwner(socketId)
@@ -1310,6 +1588,8 @@ realtime(
 		gameSocket.on("arena:standard-lock", onStandardLock)
 		gameSocket.on("arena:fire", onFire)
 		gameSocket.on("arena:rail-charge", onRailCharge)
+		gameSocket.on("arena:lock-charge", onLockCharge)
+		gameSocket.on("arena:vamp-trigger", onVampTrigger)
 		gameSocket.on("arena:fire-mini-missile", onFireMiniMissile)
 		gameSocket.on("arena:inventory-action", onInventoryAction)
 		gameSocket.on("arena:throw-grenade", onThrowGrenade)
@@ -1333,6 +1613,9 @@ realtime(
 			lastPlayerMissile.delete(socketId)
 			railCharges.delete(socketId)
 			lastRailChargeId.delete(socketId)
+			emitLockCharge(lockHitscanCharges.disconnect(socketId))
+			vampChains.disconnect(socketId)
+			if (vampHealthPickups.clearOwner(socketId)) emitVampHealthPickups()
 			lastInventoryAction.delete(socketId)
 			melee.removePlayer(socketId)
 			lastDroneAction.delete(socketId)
@@ -1345,6 +1628,8 @@ realtime(
 			gameSocket.off("arena:standard-lock", onStandardLock)
 			gameSocket.off("arena:fire", onFire)
 			gameSocket.off("arena:rail-charge", onRailCharge)
+			gameSocket.off("arena:lock-charge", onLockCharge)
+			gameSocket.off("arena:vamp-trigger", onVampTrigger)
 			gameSocket.off("arena:fire-mini-missile", onFireMiniMissile)
 			gameSocket.off("arena:inventory-action", onInventoryAction)
 			gameSocket.off("arena:throw-grenade", onThrowGrenade)
@@ -1414,6 +1699,9 @@ setInterval(() => {
 		lastPlayerMissile.delete(playerId)
 		railCharges.delete(playerId)
 		lastRailChargeId.delete(playerId)
+		emitLockCharge(lockHitscanCharges.cancel(playerId))
+		vampChains.cancel(playerId)
+		if (vampHealthPickups.clearOwner(playerId)) emitVampHealthPickups()
 		lastGrappleAction.delete(playerId)
 		io.to(playerId).emit("arena:spawn", {
 			damageSequence: playerDamageSequences.get(playerId) ?? 0,
@@ -1458,6 +1746,19 @@ setInterval(() => {
 		if (step.refill !== null || step.completed) playersChanged = true
 	}
 	if (playersChanged) io.emit("arena:players", [...players.values()])
+	let vampPickupsChanged = vampHealthPickups.advance(nowMs)
+	for (const [playerId, player] of players) {
+		const collected = vampHealthPickups.collect(
+			playerId,
+			player.position,
+			playerLifecycle.isAlive(playerId) && armory.hasWeapon(playerId, "vamp"),
+			() => playerLifecycle.heal(playerId, 1),
+		)
+		if (collected === null) continue
+		vampPickupsChanged = true
+		io.to(playerId).emit("arena:combat", combatSnapshot(playerId))
+	}
+	if (vampPickupsChanged) emitVampHealthPickups()
 	simulation.update(delta)
 	melee.update(nowMs)
 	if (armory.update(nowMs)) emitPickups()

@@ -81,14 +81,28 @@ export class MiniMissileArmory {
 	) {
 		this.#pickupPosition = pickupPosition
 		this.#arenaPickupPads = arenaPickupPads
-		const guns = ["shotgun", "bubble-gun", "rail-gun"] as const
-		const preferredPads = [0, 2, 4]
+		const guns = [
+			"shotgun",
+			"bubble-gun",
+			"rail-gun",
+			"ion-beam-rifle",
+			"heavy-laser",
+			"vamp",
+		] as const
+		const preferredPads = [0, 2, 4, 1, 3, 5]
 		const occupied = new Set<number>()
 		for (const [index, weapon] of guns.entries()) {
 			if (arenaPickupPads.length === 0) continue
 			let padIndex = (preferredPads[index] ?? index) % arenaPickupPads.length
-			while (occupied.has(padIndex))
+			for (
+				let offset = 0;
+				offset < arenaPickupPads.length && occupied.has(padIndex);
+				offset += 1
+			)
 				padIndex = (padIndex + 1) % arenaPickupPads.length
+			// Small focused test arenas may provide fewer pads than the full gun
+			// catalog. Omit overflow pickups instead of cycling forever.
+			if (occupied.has(padIndex)) continue
 			occupied.add(padIndex)
 			const delay = ARENA_WEAPON_INITIAL_DELAY_MS[weapon]
 			this.#arenaPickups.set(weapon, {
@@ -221,6 +235,7 @@ export class MiniMissileArmory {
 			| "ballistic"
 			| "bubbles"
 			| "guided-missile"
+			| "hitscan"
 			| "projectile"
 			| "shotgun",
 	): boolean {
@@ -372,6 +387,11 @@ export class MiniMissileArmory {
 		const weapon = equipment.slots[equipment.activeSlot]?.weapon
 		if (weapon !== undefined) return weapon
 		return assertUnhandledWeapon(weapon as never)
+	}
+
+	hasWeapon(playerId: string, weapon: GunId): boolean {
+		const inventory = this.#inventories.get(playerId)
+		return inventory?.slots.some((slot) => slot?.weapon === weapon) ?? false
 	}
 
 	pickup(): MiniMissilePickupSnapshot {

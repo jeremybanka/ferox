@@ -129,18 +129,19 @@ function buildLongGun(
 	root: THREE.Group,
 	muzzle: THREE.Group,
 	materials: ReturnType<typeof materialPalette>,
-	id: "rail-gun" | "shotgun",
+	id: "heavy-laser" | "ion-beam-rifle" | "rail-gun" | "shotgun" | "vamp",
 ): void {
 	const triggerPoint = new THREE.Vector3(0, -0.1, 0.08)
-	const body = box(id === "rail-gun" ? 0.3 : 0.34, 0.25, 1.12, materials.body)
+	const precision = id === "rail-gun" || id === "ion-beam-rifle"
+	const body = box(
+		precision ? 0.3 : 0.34,
+		id === "heavy-laser" ? 0.32 : 0.25,
+		1.12,
+		materials.body,
+	)
 	body.position.z = -0.3
 	const barrel = new THREE.Mesh(
-		new THREE.CylinderGeometry(
-			id === "rail-gun" ? 0.055 : 0.085,
-			0.1,
-			0.92,
-			10,
-		),
+		new THREE.CylinderGeometry(precision ? 0.055 : 0.085, 0.1, 0.92, 10),
 		materials.accent,
 	)
 	barrel.rotation.x = Math.PI / 2
@@ -151,7 +152,7 @@ function buildLongGun(
 	grip.position.set(0, -0.28, 0.06)
 	grip.rotation.x = -0.2
 	const rail = box(
-		id === "rail-gun" ? 0.42 : 0.12,
+		precision ? 0.42 : id === "heavy-laser" ? 0.3 : 0.12,
 		0.08,
 		0.82,
 		materials.accent,
@@ -225,6 +226,15 @@ export function createGunModel(
 			break
 		case "rail-gun":
 			buildLongGun(root, muzzle, materials, "rail-gun")
+			break
+		case "ion-beam-rifle":
+			buildLongGun(root, muzzle, materials, "ion-beam-rifle")
+			break
+		case "heavy-laser":
+			buildLongGun(root, muzzle, materials, "heavy-laser")
+			break
+		case "vamp":
+			buildLongGun(root, muzzle, materials, "vamp")
 			break
 		default:
 			assertUnhandledGun(id)
