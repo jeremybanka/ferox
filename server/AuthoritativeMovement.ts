@@ -8,8 +8,10 @@ import {
 	directionalDoubleJumpImpulse,
 } from "../src/DirectionalJumpPhysics.ts"
 import {
+	PLAYER_AIR_CONTROL_ACCELERATION,
 	PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT,
-	PLAYER_SPRINT_SPEED_LIMIT,
+	PLAYER_STANDING_ACCELERATION,
+	PLAYER_STANDING_SPEED_LIMIT,
 } from "../src/game-constants.ts"
 import {
 	INITIAL_MANTLE_STATE,
@@ -32,7 +34,8 @@ import {
 } from "../src/WallTraversal.ts"
 
 export const AUTHORITATIVE_TRAVERSAL_TRAVEL_TOLERANCE = 0.12
-export const AUTHORITATIVE_PLANAR_ACCELERATION = 31
+export const AUTHORITATIVE_GROUND_ACCELERATION = PLAYER_STANDING_ACCELERATION
+export const AUTHORITATIVE_AIR_ACCELERATION = PLAYER_AIR_CONTROL_ACCELERATION
 export const AUTHORITATIVE_VELOCITY_TOLERANCE = 0.35
 export const AUTHORITATIVE_EXTERNAL_SPEED_LIMIT =
 	PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT
@@ -130,10 +133,13 @@ export function limitAuthoritativeDesiredVelocity(
 	previous: readonly [number, number, number],
 	desired: readonly [number, number, number],
 	delta: number,
+	grounded = true,
 ): readonly [number, number, number] {
 	const previousSpeed = Math.hypot(previous[0], previous[2])
 	const desiredSpeed = Math.hypot(desired[0], desired[2])
-	const maximumSpeed = Math.max(previousSpeed, PLAYER_SPRINT_SPEED_LIMIT)
+	const maximumSpeed = grounded
+		? Math.max(previousSpeed, PLAYER_STANDING_SPEED_LIMIT)
+		: Number.POSITIVE_INFINITY
 	const speedScale =
 		desiredSpeed > maximumSpeed ? maximumSpeed / desiredSpeed : 1
 	const desiredX = desired[0] * speedScale
@@ -142,7 +148,10 @@ export function limitAuthoritativeDesiredVelocity(
 	const differenceZ = desiredZ - previous[2]
 	const difference = Math.hypot(differenceX, differenceZ)
 	const maximumDifference =
-		AUTHORITATIVE_PLANAR_ACCELERATION * Math.max(0, delta) +
+		(grounded
+			? AUTHORITATIVE_GROUND_ACCELERATION
+			: AUTHORITATIVE_AIR_ACCELERATION) *
+			Math.max(0, delta) +
 		AUTHORITATIVE_VELOCITY_TOLERANCE
 	const scale =
 		difference > maximumDifference && difference > 1e-9
@@ -268,6 +277,7 @@ export function reconcileAuthoritativeMovement(
 						input.previousVelocity,
 						desiredWithoutJumpImpulse,
 						input.delta,
+						input.grounded,
 					)
 	const traversal = stepWallTraversal(input.previousWallTraversal, {
 		blocked: input.grappleAttached === true,

@@ -2,99 +2,71 @@ import { describe, expect, test } from "vitest"
 
 import {
 	INITIAL_MOVEMENT_CORE_STATE,
-	isForwardish,
 	resetMovementCore,
 	stepMovementCore,
 } from "./MovementCore.ts"
 
 describe("movement core", () => {
-	test("latches forward sprint on an LS edge until the stick returns neutral", () => {
+	test("LS toggles autorun on an edge at rest and waits for intentional input", () => {
 		let step = stepMovementCore(INITIAL_MOVEMENT_CORE_STATE, {
-			canSprint: true,
-			leftStickPressed: true,
-			stick: { x: 0.2, y: -0.9 },
-		})
-		expect(step.state.sprintLatched).toBe(true)
-		step = stepMovementCore(step.state, {
-			canSprint: true,
-			leftStickPressed: false,
-			stick: { x: 0.2, y: -0.9 },
-		})
-		expect(step.state.sprintLatched).toBe(true)
-		step = stepMovementCore(step.state, {
-			canSprint: true,
-			leftStickPressed: false,
-			stick: { x: 0.02, y: 0 },
-		})
-		expect(step.state.sprintLatched).toBe(false)
-	})
-
-	test("stationary LS toggles freerun and persists the last direction", () => {
-		let step = stepMovementCore(INITIAL_MOVEMENT_CORE_STATE, {
-			canSprint: true,
 			leftStickPressed: true,
 			stick: { x: 0, y: 0 },
 		})
-		expect(step.state.freerun).toBe(true)
+		expect(step.state.autorun).toBe(true)
+		expect(step.direction).toEqual({ x: 0, y: 0 })
+
 		step = stepMovementCore(step.state, {
-			canSprint: true,
-			leftStickPressed: false,
+			leftStickPressed: true,
+			stick: { x: 0, y: 0 },
+		})
+		expect(step.state.autorun).toBe(true)
+	})
+
+	test("autorun remembers and updates the latest intentional direction", () => {
+		let step = stepMovementCore(INITIAL_MOVEMENT_CORE_STATE, {
+			leftStickPressed: true,
 			stick: { x: 0.8, y: 0 },
 		})
-		step = stepMovementCore(step.state, {
-			canSprint: true,
-			leftStickPressed: false,
-			stick: { x: 0, y: 0 },
-		})
+		expect(step.state.autorun).toBe(true)
 		expect(step.direction).toEqual({ x: 1, y: 0 })
+
 		step = stepMovementCore(step.state, {
-			canSprint: true,
-			leftStickPressed: true,
+			leftStickPressed: false,
+			stick: { x: 0, y: -0.9 },
+		})
+		step = stepMovementCore(step.state, {
+			leftStickPressed: false,
 			stick: { x: 0, y: 0 },
 		})
-		expect(step.state.freerun).toBe(false)
-		expect(step.direction).toEqual({ x: 0, y: 0 })
+		expect(step.direction).toEqual({ x: 0, y: -1 })
 	})
 
-	test("distinct forward pushes toggle freerun sprint without held-repeat", () => {
-		let state = stepMovementCore(INITIAL_MOVEMENT_CORE_STATE, {
-			canSprint: true,
+	test("LS toggles autorun off in motion without held-repeat", () => {
+		let step = stepMovementCore(INITIAL_MOVEMENT_CORE_STATE, {
 			leftStickPressed: true,
-			stick: { x: 0, y: 0 },
-		}).state
-		state = stepMovementCore(state, {
-			canSprint: true,
-			leftStickPressed: false,
 			stick: { x: 0, y: -1 },
-		}).state
-		expect(state.sprintLatched).toBe(false)
-		state = stepMovementCore(state, {
-			canSprint: true,
+		})
+		step = stepMovementCore(step.state, {
 			leftStickPressed: false,
 			stick: { x: 0, y: 0 },
-		}).state
-		state = stepMovementCore(state, {
-			canSprint: true,
-			leftStickPressed: false,
-			stick: { x: 0, y: -1 },
-		}).state
-		expect(state.sprintLatched).toBe(true)
-		state = stepMovementCore(state, {
-			canSprint: true,
-			leftStickPressed: false,
-			stick: { x: 0, y: -1 },
-		}).state
-		expect(state.sprintLatched).toBe(true)
+		})
+		expect(step.direction).toEqual({ x: 0, y: -1 })
+		step = stepMovementCore(step.state, {
+			leftStickPressed: true,
+			stick: { x: 0.4, y: -0.8 },
+		})
+		expect(step.state.autorun).toBe(false)
+		expect(step.direction.x).toBeCloseTo(1 / Math.sqrt(5))
+		expect(step.direction.y).toBeCloseTo(-2 / Math.sqrt(5))
 	})
 
-	test("rejects sideways sprint, ignores drift, and resets lifecycle state", () => {
-		expect(isForwardish({ x: 1, y: 0 })).toBe(false)
+	test("ignores drift and lifecycle reset clears autorun memory", () => {
 		const step = stepMovementCore(INITIAL_MOVEMENT_CORE_STATE, {
-			canSprint: true,
-			leftStickPressed: true,
+			leftStickPressed: false,
 			stick: { x: 0.12, y: -0.02 },
 		})
-		expect(step.state).toMatchObject({ freerun: false, sprintLatched: false })
+		expect(step.direction).toEqual({ x: 0, y: 0 })
+		expect(step.state.rememberedDirection).toBeNull()
 		expect(resetMovementCore()).toEqual(INITIAL_MOVEMENT_CORE_STATE)
 	})
 })

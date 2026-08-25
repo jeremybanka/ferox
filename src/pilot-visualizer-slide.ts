@@ -2,7 +2,7 @@ import type {
 	BaseAnimation,
 	PilotVisualizerControls,
 } from "./pilot-visualizer-state.ts"
-import { PLAYER_SPRINT_SPEED_LIMIT } from "./game-constants.ts"
+import { PLAYER_STANDING_SPEED_LIMIT } from "./game-constants.ts"
 import type { SlideHeading, SlideMotion } from "./pilot/SlideAnimation.ts"
 import {
 	clampSlideInclinationDegrees,
@@ -10,7 +10,7 @@ import {
 	type SlideSurfaceFrame,
 } from "./pilot/SlideSurface.ts"
 
-export const PILOT_VISUALIZER_SLIDE_SPEED = PLAYER_SPRINT_SPEED_LIMIT
+export const PILOT_VISUALIZER_SLIDE_SPEED = PLAYER_STANDING_SPEED_LIMIT
 export const PILOT_VISUALIZER_GROUND_HEIGHT = -0.15
 
 export type PilotVisualizerSlideVector = {

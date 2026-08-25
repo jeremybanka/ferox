@@ -2,11 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "vitest"
 
 import { arenaHeightAt } from "./arena-terrain.ts"
-import {
-	ARENA_SEED,
-	PLAYER_RUN_SPEED_LIMIT,
-	PLAYER_SPRINT_SPEED_LIMIT,
-} from "./game-constants.ts"
+import { ARENA_SEED, PLAYER_STANDING_SPEED_LIMIT } from "./game-constants.ts"
 import { JUMP_PHYSICS, stepJumpPhysics } from "./JumpPhysics.ts"
 import {
 	limitHorizontalSpeed,
@@ -28,9 +24,9 @@ function gradientAtDegrees(degrees: number): { x: number; z: number } {
 test("flat crouching requires planar momentum strictly above base move speed", () => {
 	const epsilon = 0.001
 	const outcomes = [
-		{ expected: false, speed: PLAYER_RUN_SPEED_LIMIT - epsilon },
-		{ expected: false, speed: PLAYER_RUN_SPEED_LIMIT },
-		{ expected: true, speed: PLAYER_RUN_SPEED_LIMIT + epsilon },
+		{ expected: false, speed: SLIDE_PHYSICS.entryPlanarSpeed - epsilon },
+		{ expected: false, speed: SLIDE_PHYSICS.entryPlanarSpeed },
+		{ expected: true, speed: SLIDE_PHYSICS.entryPlanarSpeed + epsilon },
 	]
 
 	for (const outcome of outcomes) {
@@ -269,7 +265,7 @@ test("slide exits below its flat-ground floor and immediately when airborne", ()
 
 test("an active slide uses exit-speed hysteresis below the entry speed", () => {
 	const continued = stepSlidePhysics(
-		{ sliding: true, x: PLAYER_RUN_SPEED_LIMIT, z: 0 },
+		{ sliding: true, x: SLIDE_PHYSICS.entryPlanarSpeed, z: 0 },
 		{
 			crouching: true,
 			delta: 0,
@@ -372,7 +368,7 @@ test("leaving and re-entering a slide permits one new entry boost", () => {
 		terrainGradient: flatGradient,
 	}
 	const first = stepSlidePhysics(
-		{ sliding: false, x: PLAYER_RUN_SPEED_LIMIT + 1, z: 0 },
+		{ sliding: false, x: SLIDE_PHYSICS.entryPlanarSpeed + 1, z: 0 },
 		options,
 	)
 	const exited = stepSlidePhysics(
@@ -417,7 +413,7 @@ test("a crouched high-speed landing resolves slide without losing momentum", () 
 
 test("airborne crouch waits for a qualifying landing before entering slide", () => {
 	const airborne = stepSlidePhysics(
-		{ sliding: false, x: PLAYER_RUN_SPEED_LIMIT + 1, z: 0 },
+		{ sliding: false, x: SLIDE_PHYSICS.entryPlanarSpeed + 1, z: 0 },
 		{
 			crouching: true,
 			delta: 0,
@@ -426,7 +422,7 @@ test("airborne crouch waits for a qualifying landing before entering slide", () 
 		},
 	)
 	const exactBaseLanding = stepSlidePhysics(
-		{ sliding: false, x: PLAYER_RUN_SPEED_LIMIT, z: 0 },
+		{ sliding: false, x: SLIDE_PHYSICS.entryPlanarSpeed, z: 0 },
 		{
 			crouching: true,
 			delta: 0,
@@ -446,7 +442,7 @@ test("airborne crouch waits for a qualifying landing before entering slide", () 
 
 	assert.equal(airborne.movementState, "airborne")
 	assert.equal(airborne.sliding, false)
-	assert.equal(airborne.x, PLAYER_RUN_SPEED_LIMIT + 1)
+	assert.equal(airborne.x, SLIDE_PHYSICS.entryPlanarSpeed + 1)
 	assert.equal(exactBaseLanding.movementState, "crouching")
 	assert.equal(steepLanding.movementState, "sliding")
 })
@@ -481,42 +477,32 @@ test("slide jump and airborne transitions retain planar momentum", () => {
 			crouching: true,
 			grounded: false,
 			sliding: false,
-			sprinting: false,
 		}),
 		null,
 	)
 })
 
-test("airborne horizontal speed accumulates beyond the old cap without truncation", () => {
-	const velocity = { x: PLAYER_SPRINT_SPEED_LIMIT + 6, z: 9 }
+test("airborne horizontal speed accumulates beyond the standing cap without truncation", () => {
+	const velocity = { x: PLAYER_STANDING_SPEED_LIMIT + 6, z: 9 }
 	const limited = limitHorizontalSpeed(velocity, {
 		crouching: false,
 		grounded: false,
 		sliding: false,
-		sprinting: false,
 	})
 
 	assert.deepEqual(limited, velocity)
-	assert.ok(Math.hypot(limited.x, limited.z) > PLAYER_SPRINT_SPEED_LIMIT)
+	assert.ok(Math.hypot(limited.x, limited.z) > PLAYER_STANDING_SPEED_LIMIT)
 })
 
-test("grounded run and sprint caps remain unchanged", () => {
-	const velocity = { x: PLAYER_SPRINT_SPEED_LIMIT + 6, z: 0 }
-	const run = limitHorizontalSpeed(velocity, {
+test("grounded standing movement has one top-speed cap", () => {
+	const velocity = { x: PLAYER_STANDING_SPEED_LIMIT + 6, z: 0 }
+	const standing = limitHorizontalSpeed(velocity, {
 		crouching: false,
 		grounded: true,
 		sliding: false,
-		sprinting: false,
-	})
-	const sprint = limitHorizontalSpeed(velocity, {
-		crouching: false,
-		grounded: true,
-		sliding: false,
-		sprinting: true,
 	})
 
-	assert.equal(Math.hypot(run.x, run.z), PLAYER_RUN_SPEED_LIMIT)
-	assert.equal(Math.hypot(sprint.x, sprint.z), PLAYER_SPRINT_SPEED_LIMIT)
+	assert.equal(Math.hypot(standing.x, standing.z), PLAYER_STANDING_SPEED_LIMIT)
 })
 
 test("slide speed cap is 500 km/h in both slide limit paths", () => {
@@ -542,7 +528,7 @@ test("slide speed cap is 500 km/h in both slide limit paths", () => {
 	)
 	const loopLimited = limitHorizontalSpeed(
 		{ x: cap * 2, z: cap },
-		{ crouching: true, grounded: true, sliding: true, sprinting: false },
+		{ crouching: true, grounded: true, sliding: true },
 	)
 
 	assert.equal(atCap.x, cap)

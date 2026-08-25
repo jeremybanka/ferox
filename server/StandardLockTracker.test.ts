@@ -20,7 +20,6 @@ function pilot(
 		freeAim: false,
 		id,
 		position,
-		sprinting: false,
 		...overrides,
 	}
 }
@@ -121,13 +120,10 @@ describe("authoritative standard lock tracking", () => {
 		expect(tracker.reconcile(pilots)).toEqual([
 			{ playerId: "second", snapshot: { attackers: 1 } },
 		])
-		attacker.sprinting = true
+		attacker.equippedWeapon = "mini-missile"
 		expect(tracker.reconcile(pilots)).toEqual([
 			{ playerId: "second", snapshot: { attackers: 0 } },
 		])
-		attacker.sprinting = false
-		attacker.equippedWeapon = "mini-missile"
-		expect(tracker.reconcile(pilots)).toEqual([])
 		attacker.equippedWeapon = "arc-blaster"
 		expect(tracker.reconcile(pilots)).toEqual([
 			{ playerId: "second", snapshot: { attackers: 1 } },

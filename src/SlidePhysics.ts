@@ -1,13 +1,14 @@
 import {
 	PLAYER_CROUCH_BASE_SPEED_LIMIT,
-	PLAYER_RUN_SPEED_LIMIT,
-	PLAYER_SPRINT_SPEED_LIMIT,
+	PLAYER_STANDING_SPEED_LIMIT,
 } from "./game-constants.ts"
 
 export const SLIDE_PHYSICS = {
 	contactSeparationTolerance: 0.035,
 	entrySpeedBoost: 1.2,
-	entryPlanarSpeed: PLAYER_RUN_SPEED_LIMIT,
+	// Slide entry retains its established threshold independently of the
+	// standing top speed.
+	entryPlanarSpeed: 9.2,
 	entrySlopeDegrees: 30,
 	entrySlopeNormalUpDot: Math.cos(Math.PI / 6),
 	entrySlopeRadians: Math.PI / 6,
@@ -190,14 +191,12 @@ export function movementSpeedLimit(options: {
 	crouching: boolean
 	grounded: boolean
 	sliding: boolean
-	sprinting: boolean
 }): number | null {
 	if (!options.grounded) return null
 	if (options.sliding) return SLIDE_PHYSICS.maximumSpeed
-	if (options.sprinting) return PLAYER_SPRINT_SPEED_LIMIT
 	return options.crouching
 		? PLAYER_CROUCH_BASE_SPEED_LIMIT
-		: PLAYER_RUN_SPEED_LIMIT
+		: PLAYER_STANDING_SPEED_LIMIT
 }
 
 /**
@@ -247,7 +246,6 @@ export function limitHorizontalSpeed(
 		crouching: boolean
 		grounded: boolean
 		sliding: boolean
-		sprinting: boolean
 	},
 ): PlanarVelocity {
 	const cap = movementSpeedLimit(options)

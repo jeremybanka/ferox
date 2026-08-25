@@ -100,7 +100,6 @@ export type PlayerSnapshot = {
 	respawnAt: number | null
 	rotation: [number, number]
 	sliding: boolean
-	sprinting: boolean
 	velocity: Vector3Tuple
 	wallTraversal: WallTraversalSnapshot
 	visorExpression: VisorExpression

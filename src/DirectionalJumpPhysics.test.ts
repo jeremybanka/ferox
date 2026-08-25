@@ -13,6 +13,10 @@ import {
 const closeTo = (actual: number, expected: number): void =>
 	assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`)
 
+test("directional second-jump impulse is stronger than the previous tuning", () => {
+	assert.ok(DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed > 3.2)
+})
+
 test("camera yaw rotates cardinal and normalized diagonal movement", () => {
 	assert.deepEqual(cameraRelativeMovementDirection({ x: 0, y: -1 }, 0), {
 		x: 0,

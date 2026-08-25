@@ -56,6 +56,7 @@ import {
 	isVisorExpression,
 } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
+import { airControlOwner, applyAirControl } from "./AirControlPhysics.ts"
 import {
 	arenaGravityScaleAtStepStart,
 	ZERO_GRAVITY_ZONE,
@@ -142,6 +143,7 @@ import {
 	type HoldInputState,
 } from "./game-input.ts"
 import { constrainGrappleMotion } from "./GrapplePhysics.ts"
+import { stepGroundMovement } from "./GroundMovementPhysics.ts"
 import type { GameHudState } from "./game-state.ts"
 import {
 	applyDirectionalDoubleJump,
@@ -428,7 +430,6 @@ type RemotePilot = {
 	reload: ReloadSnapshot | null
 	slideHeading: SlideHeading
 	sliding: boolean
-	sprinting: boolean
 	wallTraversal: PlayerSnapshot["wallTraversal"]
 	target: THREE.Vector3
 	velocity: THREE.Vector3
@@ -619,7 +620,6 @@ export class ArenaGame {
 	#slidePoseWeight = 0
 	#wasSliding = false
 	#snapshotElapsed = 0
-	#sprinting = false
 	#movementCore: MovementCoreState = INITIAL_MOVEMENT_CORE_STATE
 	#movementToggleQueued = false
 	#gamepadConnected = false
@@ -1008,7 +1008,6 @@ export class ArenaGame {
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
 			sliding: false,
-			sprinting: false,
 			velocity: [0, 0, 0],
 			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 			visorExpression: this.#visorExpression,
@@ -1097,7 +1096,6 @@ export class ArenaGame {
 					reload: null,
 					slideHeading: initialSlideHeading(),
 					sliding: false,
-					sprinting: false,
 					wallTraversal: { mode: "none", normal: [0, 0, 0] },
 					target: new THREE.Vector3(),
 					velocity: new THREE.Vector3(),
@@ -1210,7 +1208,6 @@ export class ArenaGame {
 				model.landingStartedAt = animationEventTime
 				model.landingImpactVelocity = Math.max(0, -previousVerticalVelocity)
 			}
-			model.sprinting = snapshot.sprinting
 			model.wallTraversal = snapshot.wallTraversal
 			model.reload = model.dead ? null : snapshot.reload
 			model.sliding = snapshot.sliding === true && !model.dead
@@ -2142,7 +2139,6 @@ export class ArenaGame {
 		this.#slidePoseWeight = 0
 		this.#wasSliding = false
 		this.#slideDustElapsed = 0
-		this.#sprinting = false
 		this.#movementCore = resetMovementCore()
 		this.#movementToggleQueued = false
 		this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
@@ -2189,7 +2185,7 @@ export class ArenaGame {
 		pickup: boolean
 		reload: boolean
 		salute: boolean
-		sprint: boolean
+		autorun: boolean
 		switchWeapon: boolean
 		switchGrenade: boolean
 		wave: boolean
@@ -2212,7 +2208,7 @@ export class ArenaGame {
 				pickup: false,
 				reload: false,
 				salute: false,
-				sprint: false,
+				autorun: false,
 				switchWeapon: false,
 				switchGrenade: false,
 				wave: false,
@@ -2234,7 +2230,7 @@ export class ArenaGame {
 		const lock = gamepad.buttons[4]?.pressed ?? false
 		const pickup = isPickupGamepadInput(gamepad.buttons)
 		const reload = gamepad.buttons[5]?.pressed ?? false
-		const sprint = gamepad.buttons[10]?.pressed ?? false
+		const autorun = gamepad.buttons[10]?.pressed ?? false
 		const switchWeapon = isWeaponSwitchGamepadInput(gamepad.buttons)
 		const gestures = gamepadGestureInputs(gamepad.buttons)
 		const switchGrenade = isGrenadeSwitchGamepadInput(gamepad.buttons)
@@ -2251,7 +2247,7 @@ export class ArenaGame {
 			pickup,
 			reload,
 			salute: gestures.salute,
-			sprint,
+			autorun,
 			switchWeapon,
 			switchGrenade,
 			wave: gestures.wave,
@@ -2445,13 +2441,7 @@ export class ArenaGame {
 		)
 		if (physicalInput.length() > 1) physicalInput.normalize()
 		const movementStep = stepMovementCore(this.#movementCore, {
-			canSprint:
-				grounded &&
-				!crouch &&
-				!this.#slide &&
-				!this.#surfaceSlide &&
-				!this.#dead,
-			leftStickPressed: gamepad.sprint || this.#movementToggleQueued,
+			leftStickPressed: gamepad.autorun || this.#movementToggleQueued,
 			stick: { x: physicalInput.x, y: physicalInput.y },
 		})
 		this.#movementToggleQueued = false
@@ -2460,57 +2450,42 @@ export class ArenaGame {
 			movementStep.direction.x,
 			movementStep.direction.y,
 		)
-		const sprint =
-			this.#keys.has("ShiftLeft") ||
-			this.#keys.has("ShiftRight") ||
-			this.#movementCore.sprintLatched
-		this.#sprinting =
-			grounded &&
-			!crouch &&
-			sprint &&
-			input.lengthSq() > 0 &&
-			!this.#slide &&
-			!this.#surfaceSlide
-		if (
-			grounded &&
-			input.lengthSq() > 0 &&
-			!this.#slide &&
-			!this.#surfaceSlide
-		) {
-			const forward = new THREE.Vector3(
-				-Math.sin(this.#player.yaw),
-				0,
-				-Math.cos(this.#player.yaw),
+		const desiredPlanarDirection = cameraRelativeMovementDirection(
+			movementStep.direction,
+			this.#player.yaw,
+		)
+		if (grounded && !this.#slide && !this.#surfaceSlide) {
+			const groundedVelocity = stepGroundMovement(
+				{ x: this.#player.velocity.x, z: this.#player.velocity.z },
+				{
+					crouching: crouch,
+					delta,
+					desiredDirection: desiredPlanarDirection,
+				},
 			)
-			const right = new THREE.Vector3(
-				Math.cos(this.#player.yaw),
-				0,
-				-Math.sin(this.#player.yaw),
+			this.#player.velocity.x = groundedVelocity.x
+			this.#player.velocity.z = groundedVelocity.z
+		} else if (!grounded) {
+			const controlled = applyAirControl(
+				{ x: this.#player.velocity.x, z: this.#player.velocity.z },
+				desiredPlanarDirection,
+				delta,
+				airControlOwner({
+					grappleAttached,
+					mantling: this.#mantle.mode !== "none",
+					sliding: this.#slide || this.#surfaceSlide,
+					wallTraversal: this.#wallTraversal.mode !== "none",
+				}),
 			)
-			const force = forward
-				.multiplyScalar(-input.y)
-				.add(right.multiplyScalar(input.x))
-				.normalize()
-			const acceleration = crouch ? 18 : sprint ? 31 : 23
-			this.#player.velocity.addScaledVector(force, acceleration * delta)
+			this.#player.velocity.x = controlled.x
+			this.#player.velocity.z = controlled.z
 		}
-		const friction = grounded
-			? this.#slide || this.#surfaceSlide
-				? 0
-				: input.lengthSq() > 0
-					? 1.7
-					: 8.5
-			: 0
-		const damping = Math.exp(-friction * delta)
-		this.#player.velocity.x *= damping
-		this.#player.velocity.z *= damping
 		const limitedVelocity = limitHorizontalSpeed(
 			{ x: this.#player.velocity.x, z: this.#player.velocity.z },
 			{
 				crouching: crouch,
 				grounded,
 				sliding: this.#slide || this.#surfaceSlide,
-				sprinting: this.#sprinting,
 			},
 		)
 		this.#player.velocity.x = limitedVelocity.x
@@ -2557,7 +2532,6 @@ export class ArenaGame {
 			this.#coyoteRemaining = null
 			this.#slide = false
 			this.#surfaceSlide = false
-			this.#sprinting = false
 			this.#jumpQueued = false
 			this.#audioJumpImpulse = null
 			this.#audioLandingImpact = 0
@@ -2636,9 +2610,7 @@ export class ArenaGame {
 			this.#coyoteRemaining = grappleAttached ? null : jumpStep.coyoteRemaining
 			this.#player.jumps = jumpStep.jumpCount
 			const doubleJumpDirection =
-				jumpStep.impulse === 2
-					? cameraRelativeMovementDirection(physicalInput, this.#player.yaw)
-					: null
+				jumpStep.impulse === 2 ? desiredPlanarDirection : null
 			if (jumpStep.impulse === 1 || jumpStep.impulse === 2) {
 				this.#jumpSequence += 1
 				this.#pendingJumpDirection =
@@ -2960,7 +2932,6 @@ export class ArenaGame {
 			this.#ammo === 0
 		)
 			return
-		if (this.#sprinting) return
 		if (
 			this.#lockedTargetId !== null &&
 			this.#acquiredTargetId === null &&
@@ -3914,10 +3885,6 @@ export class ArenaGame {
 			desired.multiply(
 				new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.08, 0, 0.13)),
 			)
-		} else if (this.#sprinting) {
-			desired.multiply(
-				new THREE.Quaternion().setFromEuler(new THREE.Euler(1.05, 0, 0)),
-			)
 		} else if (targetPosition !== null) {
 			const localTarget = this.#camera.worldToLocal(targetPosition)
 			const direction = localTarget.sub(this.#weapon.position).normalize()
@@ -4155,12 +4122,7 @@ export class ArenaGame {
 			if (model.emote === "wave" && emoteActive) {
 				constraints.push(waveTowardConstraint(lookDirection, 0.9))
 			}
-			if (
-				model.weaponsFreeWeight > 0 &&
-				!model.sprinting &&
-				model.reload === null &&
-				!model.dead
-			) {
+			if (model.weaponsFreeWeight > 0 && model.reload === null && !model.dead) {
 				constraints.push(
 					pointBlasterConstraint(pointingDirection, model.weaponsFreeWeight),
 				)
@@ -4252,7 +4214,7 @@ export class ArenaGame {
 						? "focus"
 						: this.#fireCooldown > 0
 							? "angry"
-							: this.#sprinting || horizontalSpeed > 6
+							: horizontalSpeed > 6
 								? "angry"
 								: "neutral"
 		if (visorExpression !== this.#visorExpression) {
@@ -4271,7 +4233,6 @@ export class ArenaGame {
 			position: this.#player.position.toArray(),
 			rotation: [this.#player.yaw, this.#player.pitch],
 			sliding: this.#slide,
-			sprinting: this.#sprinting,
 			velocity: this.#player.velocity.toArray(),
 			wallTraversal: this.#replicatedWallTraversal(),
 			visorExpression: this.#visorExpression,
@@ -4434,7 +4395,6 @@ export class ArenaGame {
 			jumpImpulse: this.#audioJumpImpulse,
 			landingImpact: this.#audioLandingImpact,
 			sliding: this.#slide,
-			sprinting: this.#sprinting,
 			threats: this.#incomingMissileLocks + this.#incomingStandardLocks,
 		})
 		this.#audioJumpImpulse = null

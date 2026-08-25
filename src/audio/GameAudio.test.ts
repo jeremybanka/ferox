@@ -53,7 +53,7 @@ describe("authored procedural audio", () => {
 			horizontalSpeed: 0,
 			threats: 0,
 		})
-		const sprinting = deriveMusicIntensity({
+		const topSpeed = deriveMusicIntensity({
 			combatHeat: 0,
 			connected: true,
 			engagement: 0,
@@ -70,7 +70,7 @@ describe("authored procedural audio", () => {
 			threats: 2,
 		})
 		expect(calm).toBeCloseTo(0.12)
-		expect(sprinting).toBeGreaterThan(calm)
+		expect(topSpeed).toBeGreaterThan(calm)
 		expect(pressured).toBe(1)
 		expect(
 			deriveMusicIntensity({

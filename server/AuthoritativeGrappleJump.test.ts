@@ -108,8 +108,8 @@ describe("authoritative grapple jump protocol", () => {
 		)
 
 		expect(client.impulse).toBe(1)
-		expect(client.velocityY).toBeCloseTo(10.6)
-		expect(client.positionY).toBeCloseTo(5.53)
+		expect(client.velocityY).toBeCloseTo(JUMP_PHYSICS.jumpVelocity)
+		expect(client.positionY).toBeCloseTo(5 + JUMP_PHYSICS.jumpVelocity * delta)
 		expect(jump).toMatchObject({ acceptedImpulse: 1, jumpCount: 1 })
 		expect(ground.applyGravity).toBe(false)
 		expect(server.velocity.y).toBeCloseTo(client.velocityY, 8)
@@ -159,38 +159,18 @@ describe("authoritative grapple jump protocol", () => {
 	test.each([
 		{
 			direction: [1, 0] as [number, number],
-			expectedVelocity: {
-				x: -1.2170479625809507,
-				y: 7.667456603686249,
-				z: 0,
-			},
 			label: "taut cardinal",
 		},
 		{
 			direction: [Math.SQRT1_2, Math.SQRT1_2] as [number, number],
-			expectedVelocity: {
-				x: -1.2344471446297145,
-				y: 8.089254956383538,
-				z: 2.6624023975875617,
-			},
 			label: "taut outward diagonal",
 		},
 		{
 			direction: [-1, 0] as [number, number],
-			expectedVelocity: {
-				x: -4.115721252659031,
-				y: 8.612566666185101,
-				z: 0,
-			},
 			label: "taut inward",
 		},
 		{
 			direction: [0, 0] as [number, number],
-			expectedVelocity: {
-				x: -1.2389696933101206,
-				y: 8.198892500150958,
-				z: 0,
-			},
 			label: "taut zero",
 		},
 	])("$label matches client position and velocity", (sample) => {
@@ -247,35 +227,21 @@ describe("authoritative grapple jump protocol", () => {
 		expect(server.velocity.x).toBeCloseTo(client.velocity.x, 10)
 		expect(server.velocity.y).toBeCloseTo(client.velocity.y, 10)
 		expect(server.velocity.z).toBeCloseTo(client.velocity.z, 10)
-		expect(server.velocity.x).toBeCloseTo(sample.expectedVelocity.x, 10)
-		expect(server.velocity.y).toBeCloseTo(sample.expectedVelocity.y, 10)
-		expect(server.velocity.z).toBeCloseTo(sample.expectedVelocity.z, 10)
 	})
 
 	test.each([
 		{
 			direction: [1, 0] as [number, number],
-			expectedVelocity: {
-				x: 3.2328882669150754,
-				y: 7.851354340423324,
-				z: 0,
-			},
 		},
 		{
 			direction: [Math.SQRT1_2, Math.SQRT1_2] as [number, number],
-			expectedVelocity: {
-				x: 2.2654367009674603,
-				y: 8.217333319145355,
-				z: 2.6613964689025424,
-			},
 		},
 		{
 			direction: [0, 0] as [number, number],
-			expectedVelocity: { x: 0, y: 8.25, z: 0 },
 		},
 	])(
 		"slack direction $direction preserves client ordering",
-		({ direction, expectedVelocity }) => {
+		({ direction }) => {
 			const jump = reconcileAuthoritativeGrappleJump({
 				groundedBefore: false,
 				jumpCount: 1,
@@ -284,6 +250,24 @@ describe("authoritative grapple jump protocol", () => {
 			})
 			const planarImpulse = authoritativeGrappleJumpPlanarImpulse(jump)
 			const steering = { x: direction[0], y: 0, z: direction[1] }
+			const verticalVelocity =
+				JUMP_PHYSICS.doubleJumpVelocity - JUMP_PHYSICS.gravity * delta
+			const client = constrainGrappleMotion(
+				{
+					position: { x: 5, y: verticalVelocity * delta, z: 0 },
+					velocity: {
+						x: planarImpulse.x,
+						y: verticalVelocity,
+						z: planarImpulse.z,
+					},
+				},
+				{
+					anchor: { x: 0, y: 0, z: 0 },
+					delta,
+					ropeLength: 10,
+					steering,
+				},
+			)
 			const server = stepAuthoritativeGrappleDirectionalJumpMotion(
 				{
 					position: { x: 5, y: 0, z: 0 },
@@ -303,9 +287,9 @@ describe("authoritative grapple jump protocol", () => {
 			expect(server.position.x).toBe(5)
 			expect(server.position.y).toBeCloseTo(0.4125, 10)
 			expect(server.position.z).toBe(0)
-			expect(server.velocity.x).toBeCloseTo(expectedVelocity.x, 10)
-			expect(server.velocity.y).toBeCloseTo(expectedVelocity.y, 10)
-			expect(server.velocity.z).toBeCloseTo(expectedVelocity.z, 10)
+			expect(server.velocity.x).toBeCloseTo(client.velocity.x, 10)
+			expect(server.velocity.y).toBeCloseTo(client.velocity.y, 10)
+			expect(server.velocity.z).toBeCloseTo(client.velocity.z, 10)
 		},
 	)
 

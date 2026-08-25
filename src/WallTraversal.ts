@@ -1,5 +1,5 @@
 import type { ArenaSurfaceContact } from "./ArenaWorld.ts"
-import { PLAYER_SPRINT_SPEED_LIMIT } from "./game-constants.ts"
+import { PLAYER_STANDING_SPEED_LIMIT } from "./game-constants.ts"
 import { SLIDE_PHYSICS, stepContactSlidePhysics } from "./SlidePhysics.ts"
 
 export const WALL_MINIMUM_INCLINATION_RADIANS = (80 * Math.PI) / 180
@@ -15,7 +15,7 @@ export const WALL_JUMP_OUTWARD_SPEED = 6.8
 export const WALL_JUMP_UPWARD_SPEED = 7.6
 export const WALL_RECONTACT_SECONDS = 0.22
 export const WALL_TRAVERSAL_MAXIMUM_PLANAR_SPEED =
-	PLAYER_SPRINT_SPEED_LIMIT * 1.25
+	PLAYER_STANDING_SPEED_LIMIT * 1.25
 
 export type WallTraversalMode = "crouch-slide" | "none" | "run" | "slide"
 

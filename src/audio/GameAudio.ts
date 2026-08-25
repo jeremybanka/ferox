@@ -1,4 +1,5 @@
 import type { GunId } from "../guns/GunDefinitions.ts"
+import { PLAYER_STANDING_SPEED_LIMIT } from "../game-constants.ts"
 import {
 	DEFAULT_GAME_AUDIO,
 	type GameAudioDefinition,
@@ -22,7 +23,6 @@ export type GameAudioFrame = {
 	jumpImpulse: 1 | 2 | null
 	landingImpact: number
 	sliding: boolean
-	sprinting: boolean
 	threats: number
 }
 
@@ -47,7 +47,7 @@ export function deriveMusicIntensity(
 	>,
 ): number {
 	if (!frame.connected) return 0
-	const motion = clamp01(frame.horizontalSpeed / 14.8)
+	const motion = clamp01(frame.horizontalSpeed / PLAYER_STANDING_SPEED_LIMIT)
 	const combat = clamp01(frame.combatHeat)
 	const engagement = clamp01(frame.engagement)
 	const danger = clamp01(frame.threats / 2)
@@ -231,7 +231,9 @@ export class GameAudio {
 		}
 		if (frame.sliding && !this.#previousSliding) {
 			this.playEffect("slide-start", {
-				gain: 0.6 + clamp01(frame.horizontalSpeed / 14.8) * 0.4,
+				gain:
+					0.6 +
+					clamp01(frame.horizontalSpeed / PLAYER_STANDING_SPEED_LIMIT) * 0.4,
 			})
 			this.#slideGritRemaining = 0.08
 		}
@@ -241,7 +243,9 @@ export class GameAudio {
 			this.#slideGritRemaining -= frame.delta
 			if (this.#slideGritRemaining <= 0) {
 				this.playEffect("slide-grit", {
-					gain: 0.35 + clamp01(frame.horizontalSpeed / 14.8) * 0.38,
+					gain:
+						0.35 +
+						clamp01(frame.horizontalSpeed / PLAYER_STANDING_SPEED_LIMIT) * 0.38,
 					pan: this.#footstepSide * 0.08,
 				})
 				this.#footstepSide *= -1
@@ -260,11 +264,14 @@ export class GameAudio {
 			return
 		}
 		this.#footstepDistance += frame.horizontalSpeed * frame.delta
-		const stride = frame.sprinting ? 2.25 : 1.7
+		const speedFraction = clamp01(
+			frame.horizontalSpeed / PLAYER_STANDING_SPEED_LIMIT,
+		)
+		const stride = 1.7 + (2.25 - 1.7) * speedFraction
 		if (this.#footstepDistance < stride) return
 		this.#footstepDistance %= stride
 		this.playEffect("run-step", {
-			gain: 0.42 + clamp01(frame.horizontalSpeed / 14.8) * 0.48,
+			gain: 0.42 + speedFraction * 0.48,
 			pan: this.#footstepSide * 0.14,
 		})
 		this.#footstepSide *= -1

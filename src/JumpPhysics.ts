@@ -4,7 +4,7 @@ export const JUMP_PHYSICS = {
 	gravity: 23,
 	groundContactTolerance: 0.12,
 	maximumGroundSnapDownPerSample: 0.45,
-	jumpVelocity: 10.6,
+	jumpVelocity: 11.6,
 	maximumStepSeconds: 0.04,
 	previewStepSeconds: 1 / 60,
 } as const

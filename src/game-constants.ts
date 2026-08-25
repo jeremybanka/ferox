@@ -183,8 +183,12 @@ export type PlayerSpawnPoint = readonly [x: number, z: number, yaw: number]
 export const PLAYER_POPULATION_CAP = 12
 export const PLAYER_RESPAWN_DELAY_MS = 5_000
 export const PLAYER_CROUCH_BASE_SPEED_LIMIT = 4.3
-export const PLAYER_RUN_SPEED_LIMIT = 9.2
-export const PLAYER_SPRINT_SPEED_LIMIT = 14.8
+export const PLAYER_CROUCH_ACCELERATION = 18
+// Standing locomotion has one acceleration/top-speed contract. Faster motion
+// remains available only through traversal and external impulses.
+export const PLAYER_STANDING_ACCELERATION = 31
+export const PLAYER_STANDING_SPEED_LIMIT = 14.8
+export const PLAYER_AIR_CONTROL_ACCELERATION = 5.5
 export const PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT = 40
 export const PLAYER_SLIDE_DUST_CADENCE_SECONDS = 0.14
 export const PLAYER_SLIDE_DUST_LIFETIME_SECONDS = 0.52

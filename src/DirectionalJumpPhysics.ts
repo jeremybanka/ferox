@@ -4,7 +4,7 @@ import type { JumpCount } from "./JumpPhysics.ts"
 
 export const DIRECTIONAL_DOUBLE_JUMP = {
 	directionEpsilon: 1e-6,
-	planarImpulseSpeed: 3.2,
+	planarImpulseSpeed: 4.8,
 } as const
 
 export function isBoundedDirectionalJumpDirection(
