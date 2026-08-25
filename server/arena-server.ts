@@ -204,7 +204,6 @@ const applyPlayerDamage = (
 				recoilStartedAt: 0,
 				respawnAt: lifecycle.respawnAt,
 				sliding: false,
-				sprinting: false,
 				velocity: [0, 0, 0],
 				wallTraversal: { mode: "none", normal: [0, 0, 0] },
 				visorExpression: "defeated",
@@ -482,7 +481,6 @@ realtime(
 			reload: null,
 			respawnAt: null,
 			sliding: false,
-			sprinting: false,
 			velocity: [0, 0, 0],
 			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 			visorExpression: "boot",
@@ -531,7 +529,6 @@ realtime(
 				typeof payload.crouching !== "boolean" ||
 				typeof payload.freeAim !== "boolean" ||
 				typeof payload.sliding !== "boolean" ||
-				typeof payload.sprinting !== "boolean" ||
 				!isWallTraversalSnapshot(payload.wallTraversal) ||
 				(payload.mantle !== undefined && !isMantleSnapshot(payload.mantle)) ||
 				typeof payload.weaponsFree !== "boolean" ||
@@ -969,7 +966,6 @@ realtime(
 				respawnAt: null,
 				rotation: payload.rotation,
 				sliding: finalSliding,
-				sprinting: payload.sprinting,
 				velocity: finalVelocity,
 				visorExpression: payload.visorExpression,
 				visorStartedAt: payload.visorStartedAt,
@@ -1369,7 +1365,6 @@ setInterval(() => {
 			respawnAt: null,
 			rotation: [spawnYaw, 0],
 			sliding: false,
-			sprinting: false,
 			velocity: [0, 0, 0],
 			wallTraversal: { mode: "none", normal: [0, 0, 0] },
 			visorExpression: "boot",

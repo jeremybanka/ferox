@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest"
 
 import type { ArenaSurfaceContact } from "../src/ArenaWorld.ts"
+import { DIRECTIONAL_DOUBLE_JUMP } from "../src/DirectionalJumpPhysics.ts"
+import { JUMP_PHYSICS } from "../src/JumpPhysics.ts"
 import { SLIDE_PHYSICS } from "../src/SlidePhysics.ts"
 import {
 	INITIAL_WALL_TRAVERSAL_STATE,
@@ -13,6 +15,7 @@ import {
 	AUTHORITATIVE_EXTERNAL_SPEED_LIMIT,
 	AUTHORITATIVE_TRAVERSAL_TRAVEL_TOLERANCE,
 	consumeAuthoritativeJumpSignal,
+	limitAuthoritativeDesiredVelocity,
 	limitAuthoritativeTraversalDestination,
 	reconcileAuthoritativeMovement,
 } from "./AuthoritativeMovement.ts"
@@ -26,6 +29,25 @@ const wallContact: ArenaSurfaceContact = {
 }
 
 describe("authoritative wall movement", () => {
+	test("accepts legal air steering and bounds forged planar acceleration", () => {
+		const previous = [18, 2, 0] as const
+		const legal = limitAuthoritativeDesiredVelocity(
+			previous,
+			[18, 2, -0.55],
+			0.1,
+			false,
+		)
+		expect(legal).toEqual([18, 2, -0.55])
+
+		const forged = limitAuthoritativeDesiredVelocity(
+			previous,
+			[18, 2, -20],
+			0.1,
+			false,
+		)
+		expect(Math.hypot(forged[0] - 18, forged[2])).toBeCloseTo(0.9)
+	})
+
 	test("applies a rail impulse once and bounds total external speed", () => {
 		expect(applyAuthoritativeExternalImpulse([2, 0, 0], [0, 0, -8])).toEqual([
 			2, 0, -8,
@@ -242,7 +264,7 @@ describe("authoritative wall movement", () => {
 			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
 			resolvedPosition: [0.25, 5.4725, 0],
 			sliding: false,
-			velocity: [5, 9.45, 0],
+			velocity: [5, JUMP_PHYSICS.jumpVelocity - JUMP_PHYSICS.gravity * 0.05, 0],
 			viewDirection: [0, 0, 1],
 		})
 		const expired = reconcileAuthoritativeMovement({
@@ -267,7 +289,9 @@ describe("authoritative wall movement", () => {
 		expect(atBoundary.jump).toBe(1)
 		expect(atBoundary.coyoteRemaining).toBeNull()
 		expect(atBoundary.resolvedPosition).toEqual([0.25, 5.4725, 0])
-		expect(atBoundary.velocity[1]).toBeCloseTo(9.45)
+		expect(atBoundary.velocity[1]).toBeCloseTo(
+			JUMP_PHYSICS.jumpVelocity - JUMP_PHYSICS.gravity * 0.05,
+		)
 		expect(expired.jump).toBe(1)
 		expect(expired.coyoteRemaining).toBeNull()
 		expect(expired.velocity[1]).toBeCloseTo(-1 - 23 * 0.05)
@@ -647,7 +671,7 @@ describe("authoritative movement packet envelopes", () => {
 			previousWallTraversal: first.traversalState,
 			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
 			sliding: false,
-			velocity: [3.2, 1_000, 0],
+			velocity: [DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed, 1_000, 0],
 			viewDirection: [0, 0, 1],
 		})
 
@@ -689,15 +713,15 @@ describe("authoritative movement packet envelopes", () => {
 			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
 			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
 			sliding: false,
-			velocity: [0, 1_000, -3.2],
+			velocity: [0, 1_000, -DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed],
 			viewDirection: [0, 0, 1],
 		})
 
 		expect(first.jump).toBe(1)
-		expect(first.velocity[1]).toBe(10.6)
+		expect(first.velocity[1]).toBe(JUMP_PHYSICS.jumpVelocity)
 		expect(second.jump).toBe(2)
 		expect(second.velocity[1]).toBeCloseTo(8.25)
-		expect(second.velocity[2]).toBe(-3.2)
+		expect(second.velocity[2]).toBe(-DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed)
 	})
 
 	test("matches the client's canonical directional double-jump impulse", () => {
@@ -716,41 +740,69 @@ describe("authoritative movement packet envelopes", () => {
 			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
 			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
 			sliding: false,
-			velocity: [4 + 3.2 * direction[0], 1_000, 2 + 3.2 * direction[1]],
+			velocity: [
+				4 + DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed * direction[0],
+				1_000,
+				2 + DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed * direction[1],
+			],
 			viewDirection: [0, 0, 1],
 		})
 
 		expect(state.velocity).toEqual([
-			4 + 3.2 * direction[0],
+			4 + DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed * direction[0],
 			8.25,
-			2 + 3.2 * direction[1],
+			2 + DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed * direction[1],
 		])
 	})
 
 	test.each([
 		{
-			clientVelocity: [3.2, 1_000, 0] as const,
+			clientVelocity: [
+				DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed,
+				1_000,
+				0,
+			] as const,
 			direction: [1, 0] as const,
-			expectedVelocity: [3.2, 8.25, 0] as const,
+			expectedVelocity: [
+				DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed,
+				8.25,
+				0,
+			] as const,
 			label: "cardinal",
 			previousVelocity: [0, -2, 0] as const,
 			resolvedPosition: [0, 5.4125, 0] as const,
 		},
 		{
-			clientVelocity: [3.2 * Math.SQRT1_2, 1_000, 3.2 * Math.SQRT1_2] as const,
+			clientVelocity: [
+				DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed * Math.SQRT1_2,
+				1_000,
+				DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed * Math.SQRT1_2,
+			] as const,
 			direction: [Math.SQRT1_2, Math.SQRT1_2] as const,
-			expectedVelocity: [3.2 * Math.SQRT1_2, 8.25, 3.2 * Math.SQRT1_2] as const,
+			expectedVelocity: [
+				DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed * Math.SQRT1_2,
+				8.25,
+				DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed * Math.SQRT1_2,
+			] as const,
 			label: "diagonal",
 			previousVelocity: [0, -2, 0] as const,
 			resolvedPosition: [0, 5.4125, 0] as const,
 		},
 		{
-			clientVelocity: [0.8, 1_000, 0] as const,
+			clientVelocity: [
+				8 - DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed,
+				1_000,
+				0,
+			] as const,
 			direction: [-1, 0] as const,
-			expectedVelocity: [0.8, 8.25, 0] as const,
+			expectedVelocity: [
+				8 - DIRECTIONAL_DOUBLE_JUMP.planarImpulseSpeed,
+				8.25,
+				0,
+			] as const,
 			label: "opposite",
-			previousVelocity: [4, -2, 0] as const,
-			resolvedPosition: [0.2, 5.4125, 0] as const,
+			previousVelocity: [8, -2, 0] as const,
+			resolvedPosition: [0.4, 5.4125, 0] as const,
 		},
 		{
 			clientVelocity: [2, 1_000, 1] as const,

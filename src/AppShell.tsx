@@ -358,10 +358,8 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					<control-hint>
 						<kbd>WASD</kbd>
 						<span>MOVE</span>
-						<kbd>SHIFT</kbd>
-						<span>SPRINT</span>
 						<kbd>V / CAPS / LS</kbd>
-						<span>FREERUN</span>
+						<span>AUTORUN</span>
 						<kbd>SPACE ×2</kbd>
 						<span>DOUBLE JUMP</span>
 						<kbd>C</kbd>

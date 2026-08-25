@@ -4,8 +4,60 @@ import { test } from "vitest"
 import {
 	canFollowGroundContour,
 	JUMP_PHYSICS,
+	simulateFlatGroundJump,
 	stepJumpPhysics,
 } from "./JumpPhysics.ts"
+
+test("normal jump uses a stronger named impulse and higher deterministic arc", () => {
+	const previousJumpVelocity = 10.6
+	assert.ok(JUMP_PHYSICS.jumpVelocity > previousJumpVelocity)
+	const trajectory60 = simulateFlatGroundJump(1 / 60)
+	const trajectory120 = simulateFlatGroundJump(1 / 120)
+	const apex60 = Math.max(
+		...trajectory60.samples.map((sample) => sample.positionY),
+	)
+	const apex120 = Math.max(
+		...trajectory120.samples.map((sample) => sample.positionY),
+	)
+	const previousContinuousApex =
+		(previousJumpVelocity * previousJumpVelocity) / (2 * JUMP_PHYSICS.gravity)
+
+	assert.ok(apex60 > previousContinuousApex)
+	assert.ok(apex120 > previousContinuousApex)
+	assert.ok(Math.abs(apex60 - apex120) < 0.06)
+})
+
+test("grounded and coyote first jumps share the stronger first impulse", () => {
+	const grounded = stepJumpPhysics(
+		{ jumpCount: 0, positionY: 0, velocityY: 0 },
+		{
+			delta: 0,
+			groundAfter: 0,
+			groundBefore: 0,
+			jumpRequested: true,
+		},
+	)
+	const coyote = stepJumpPhysics(
+		{
+			coyoteRemaining: JUMP_PHYSICS.coyoteTimeSeconds,
+			jumpCount: 1,
+			positionY: 2,
+			velocityY: -1,
+		},
+		{
+			delta: 0,
+			groundAfter: 0,
+			groundBefore: 0,
+			jumpRequested: true,
+		},
+	)
+
+	assert.equal(grounded.impulse, 1)
+	assert.equal(coyote.impulse, 1)
+	assert.equal(grounded.velocityY, JUMP_PHYSICS.jumpVelocity)
+	assert.equal(coyote.velocityY, JUMP_PHYSICS.jumpVelocity)
+	assert.notEqual(JUMP_PHYSICS.doubleJumpVelocity, JUMP_PHYSICS.jumpVelocity)
+})
 
 test("grounded movement follows descending terrain without becoming airborne", () => {
 	const step = stepJumpPhysics(

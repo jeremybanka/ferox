@@ -17,7 +17,6 @@ export type StandardLockPilotState = {
 	freeAim: boolean
 	id: string
 	position: Vector3Tuple
-	sprinting: boolean
 }
 
 export type StandardLockUpdate = {
@@ -35,8 +34,7 @@ export function selectValidatedStandardLockTarget(
 ): string | null {
 	if (
 		gunDefinition(attacker.equippedWeapon).fire.type !== "projectile" ||
-		attacker.freeAim ||
-		attacker.sprinting
+		attacker.freeAim
 	)
 		return null
 	const aimLength = vectorLength(attacker.aimDirection)
