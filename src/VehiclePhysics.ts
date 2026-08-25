@@ -11,7 +11,7 @@ export type VehicleMotion = Readonly<{
 
 export type VehiclePhysicsInput = Readonly<{
 	afterburner: boolean
-	brake: boolean
+	handbrake: boolean
 	steering: number
 	throttle: number
 }>
@@ -28,7 +28,8 @@ export type VehiclePhysicsWorld = Readonly<{
 export const VEHICLE_TUNING = {
 	bike: {
 		acceleration: 20,
-		brake: 34,
+		serviceBrake: 34,
+		handbrake: 44,
 		chassisHeight: 0.72,
 		drag: 1.1,
 		gravity: 21,
@@ -41,14 +42,15 @@ export const VEHICLE_TUNING = {
 		wheelbase: 1.55,
 	},
 	jeep: {
-		acceleration: 16,
-		brake: 28,
+		acceleration: 23,
+		serviceBrake: 31,
+		handbrake: 39,
 		chassisHeight: 1.05,
 		drag: 0.78,
 		gravity: 21,
 		lateralGrip: 4.2,
 		maxReverse: 9,
-		maxSpeed: 19,
+		maxSpeed: 21,
 		radius: 1.75,
 		restitution: 0.64,
 		steerRate: 1.18,
@@ -58,6 +60,15 @@ export const VEHICLE_TUNING = {
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
 	Math.max(minimum, Math.min(maximum, value))
+
+const moveToward = (
+	value: number,
+	target: number,
+	maximumStep: number,
+): number =>
+	value < target
+		? Math.min(target, value + maximumStep)
+		: Math.max(target, value - maximumStep)
 
 /**
  * Fixed-step arcade chassis integration shared by server authority and tests.
@@ -96,17 +107,34 @@ export function stepVehicleMotion(
 	const steering = clamp(input.steering, -1, 1)
 	const speedLimit =
 		tuning.maxSpeed * (input.afterburner && kind === "bike" ? 1.48 : 1)
-	forwardSpeed += throttle * tuning.acceleration * delta
+	const requestsOppositeDirection =
+		Math.abs(forwardSpeed) > 0.35 && throttle * forwardSpeed < 0
+	if (requestsOppositeDirection) {
+		// S/down/LT is a service brake while rolling forward (and vice versa),
+		// crossing into reverse only after the chassis has nearly stopped.
+		forwardSpeed = moveToward(
+			forwardSpeed,
+			0,
+			tuning.serviceBrake * Math.abs(throttle) * delta,
+		)
+	} else {
+		const driveScale = throttle < 0 ? 0.72 : 1
+		forwardSpeed += throttle * tuning.acceleration * driveScale * delta
+	}
 	if (input.afterburner && kind === "bike" && throttle > 0)
 		forwardSpeed += 19 * throttle * delta
-	if (input.brake)
-		forwardSpeed *= Math.exp(
-			(-tuning.brake * delta) / Math.max(1, Math.abs(forwardSpeed)),
-		)
+	if (input.handbrake) {
+		forwardSpeed = moveToward(forwardSpeed, 0, tuning.handbrake * delta)
+		lateralSpeed *= Math.exp(-11 * delta)
+	}
 	forwardSpeed = clamp(forwardSpeed, -tuning.maxReverse, speedLimit)
 	lateralSpeed *= Math.exp(-tuning.lateralGrip * delta)
-	const steerScale = clamp(Math.abs(forwardSpeed) / 4, 0.18, 1)
-	yaw +=
+	const steerScale =
+		clamp(Math.abs(forwardSpeed) / 4, 0.12, 1) *
+		clamp(1 - Math.max(0, Math.abs(forwardSpeed) - 10) / 38, 0.58, 1)
+	// In this coordinate system decreasing yaw turns the chassis right. Reverse
+	// travel naturally inverts the yaw response like a conventional car.
+	yaw -=
 		steering *
 		tuning.steerRate *
 		steerScale *
@@ -140,6 +168,16 @@ export function stepVehicleMotion(
 		forwardSpeed *= 0.2
 	}
 	const halfWheelbase = tuning.wheelbase * 0.5
+	const previousFrontGround = world.groundAt(
+		motion.position[0] + forwardX * halfWheelbase,
+		motion.position[2] + forwardZ * halfWheelbase,
+	)
+	const previousRearGround = world.groundAt(
+		motion.position[0] - forwardX * halfWheelbase,
+		motion.position[2] - forwardZ * halfWheelbase,
+	)
+	const previousSupport =
+		Math.max(previousFrontGround, previousRearGround) + tuning.chassisHeight
 	const frontGround = world.groundAt(
 		resolved.x + nextForwardX * halfWheelbase,
 		resolved.z + nextForwardZ * halfWheelbase,
@@ -152,9 +190,12 @@ export function stepVehicleMotion(
 	let y = motion.position[1] + vy * delta
 	let airborne = y > support + 0.16
 	if (y <= support) {
-		const landingSpeed = Math.max(0, -vy)
+		const terrainImpactSpeed =
+			delta > 0 ? Math.max(0, support - previousSupport) / delta : 0
+		const landingSpeed = Math.max(0, -vy, terrainImpactSpeed * 0.52)
 		y = support
-		vy = landingSpeed > 2.5 ? Math.min(9, landingSpeed * tuning.restitution) : 0
+		vy =
+			landingSpeed > 2.5 ? Math.min(8.5, landingSpeed * tuning.restitution) : 0
 		airborne = vy > 0.5
 	}
 	const terrainPitch = Math.atan2(frontGround - rearGround, tuning.wheelbase)

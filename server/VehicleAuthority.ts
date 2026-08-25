@@ -65,9 +65,14 @@ export type VehicleAuthorityOptions = {
 	world: VehiclePhysicsWorld
 }
 
-// A generous beacon radius keeps three spawn-ring pilots able to crew the jeep
-// without overlapping its chassis while seat contention remains authoritative.
-const ENTRY_RADIUS = 13.5
+export const VEHICLE_ENTRY_RADIUS = 4
+export const STARTING_ROOM_RADIUS = 18
+export const VEHICLE_SPAWNS = {
+	bike: { position: [0, 0, 12] as Vector3Tuple, yaw: 0 },
+	// The jeep sits beyond the central spawn ring, faces back into the arena,
+	// and has a clear full-radius footprint in the deterministic world layout.
+	jeep: { position: [0, 0, 28] as Vector3Tuple, yaw: 0 },
+} as const
 const NAPALM_DAMAGE = 6
 const NAPALM_DAMAGE_INTERVAL_SECONDS = 0.5
 const NAPALM_LIFETIME_SECONDS = 4
@@ -101,8 +106,18 @@ export class VehicleAuthority {
 		this.#nowMs = options.nowMs ?? Date.now
 		this.#world = options.world
 		this.#vehicles = [
-			this.#createVehicle("bike-1", "bike", [0, 0, 12], 0),
-			this.#createVehicle("jeep-1", "jeep", [0, 0, 0], Math.PI),
+			this.#createVehicle(
+				"bike-1",
+				"bike",
+				VEHICLE_SPAWNS.bike.position,
+				VEHICLE_SPAWNS.bike.yaw,
+			),
+			this.#createVehicle(
+				"jeep-1",
+				"jeep",
+				VEHICLE_SPAWNS.jeep.position,
+				VEHICLE_SPAWNS.jeep.yaw,
+			),
 		]
 	}
 
@@ -146,7 +161,8 @@ export class VehicleAuthority {
 		if (intent.type === "enter") {
 			if (
 				occupied !== null ||
-				this.#distance(player.position, vehicle.motion.position) > ENTRY_RADIUS
+				this.#distance(player.position, vehicle.motion.position) >
+					VEHICLE_ENTRY_RADIUS
 			)
 				return false
 		} else {
@@ -171,7 +187,7 @@ export class VehicleAuthority {
 			return false
 		vehicle.control = {
 			afterburner: intent.afterburner,
-			brake: intent.brake,
+			handbrake: intent.handbrake,
 			steering: intent.steering,
 			throttle: intent.throttle,
 		}
@@ -231,7 +247,7 @@ export class VehicleAuthority {
 		vehicle.seats.set(occupied.seatId, null)
 		vehicle.control = {
 			afterburner: false,
-			brake: false,
+			handbrake: false,
 			steering: 0,
 			throttle: 0,
 		}
@@ -293,7 +309,12 @@ export class VehicleAuthority {
 			afterburnerCooldown: 0,
 			afterburnerHeld: false,
 			afterburnerRemaining: 0,
-			control: { afterburner: false, brake: false, steering: 0, throttle: 0 },
+			control: {
+				afterburner: false,
+				handbrake: false,
+				steering: 0,
+				throttle: 0,
+			},
 			emptySeconds: 0,
 			id,
 			kind,
@@ -303,7 +324,7 @@ export class VehicleAuthority {
 				lean: 0,
 				pitch: 0,
 				position: groundedPosition,
-				velocity: [0, kind === "jeep" ? 5 : 0, 0],
+				velocity: [0, 0, 0],
 				yaw,
 			},
 			revision: 0,

@@ -104,7 +104,7 @@ export class VehicleVisualSystem {
 
 	nearestAvailableSeat(
 		position: THREE.Vector3,
-		maximumDistance = 13.5,
+		maximumDistance = 4,
 	): Readonly<{
 		kind: VehicleKind
 		seatId: VehicleSeatId

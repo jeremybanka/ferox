@@ -192,6 +192,10 @@ import {
 	type RecoilSpreadState,
 } from "./RecoilSpread.ts"
 import { ShotgunPelletField } from "./ShotgunPelletField.ts"
+import {
+	isVehicleDriverKeyboardCode,
+	vehicleDriverInput,
+} from "./VehicleInput.ts"
 import { VehicleVisualSystem } from "./VehicleVisualSystem.ts"
 import {
 	BoundedDamageEffects,
@@ -634,6 +638,7 @@ export class ArenaGame {
 	#weaponsFreeUntil = 0
 	#weaponKind: WeaponKind = DEFAULT_GUN_ID
 	#vehicleActionSequence = 0
+	#vehicleActionHeld = false
 	#vehicleControlElapsed = 0
 	#vehicleControlSequence = 0
 	#vehicleTurretSequence = 0
@@ -831,13 +836,15 @@ export class ArenaGame {
 	readonly #onKeyDown = (event: KeyboardEvent): void => {
 		if (this.#dead || this.#gameplayInputSuppressed) return
 		this.#keys.add(event.code)
-		if (
-			!event.repeat &&
-			(event.code === "ShiftLeft" || event.code === "ShiftRight")
-		)
+		if (isVehicleDriverKeyboardCode(event.code))
 			this.#sendVehicleDriverControl()
 		if (!event.repeat && event.code === "KeyF") this.#sendVehicleTurret(true)
-		if (event.code === "Space" && !event.repeat) this.#jumpQueued = true
+		if (
+			event.code === "Space" &&
+			!event.repeat &&
+			this.#vehicles.localSeat(this.#socket.id) === null
+		)
+			this.#jumpQueued = true
 		if ((event.code === "CapsLock" || event.code === "KeyV") && !event.repeat)
 			this.#movementToggleQueued = true
 		if (event.code === "KeyR" && !event.repeat) this.#requestReload()
@@ -982,6 +989,7 @@ export class ArenaGame {
 		this.#grappleStates.clear()
 		this.#pendingGrappleAttachmentId = null
 		this.#grappleTriggerHeld = false
+		this.#vehicleActionHeld = false
 	}
 
 	readonly #onSpawn = (spawn: SpawnSnapshot): void => {
@@ -2155,6 +2163,9 @@ export class ArenaGame {
 			salute: false,
 			wave: false,
 		}
+		this.#vehicleActionHeld = false
+		this.#vehicleMouseFire = false
+		this.#sendVehicleDriverControl()
 	}
 
 	#resetTransientState(): void {
@@ -2180,6 +2191,7 @@ export class ArenaGame {
 		this.#shotHeld = false
 		this.#grenadeHeld = false
 		this.#grappleTriggerHeld = false
+		this.#vehicleActionHeld = false
 		this.#jumpQueued = false
 		this.#jumpSequence = 0
 		this.#pendingJumpDirection = null
@@ -2218,6 +2230,10 @@ export class ArenaGame {
 		switchWeapon: boolean
 		switchGrenade: boolean
 		wave: boolean
+		vehicleAccelerator: number
+		vehicleAction: boolean
+		vehicleAfterburner: boolean
+		vehicleBrakeReverse: number
 		x: number
 		y: number
 	} {
@@ -2242,6 +2258,10 @@ export class ArenaGame {
 				switchWeapon: false,
 				switchGrenade: false,
 				wave: false,
+				vehicleAccelerator: 0,
+				vehicleAction: false,
+				vehicleAfterburner: false,
+				vehicleBrakeReverse: 0,
 				x: 0,
 				y: 0,
 			}
@@ -2277,6 +2297,10 @@ export class ArenaGame {
 				switchWeapon: false,
 				switchGrenade: false,
 				wave: false,
+				vehicleAccelerator: 0,
+				vehicleAction: false,
+				vehicleAfterburner: false,
+				vehicleBrakeReverse: 0,
 				x: 0,
 				y: 0,
 			}
@@ -2305,6 +2329,10 @@ export class ArenaGame {
 			switchWeapon: controllerActionHeld(resolved, "switchWeapon"),
 			switchGrenade: controllerActionHeld(resolved, "switchGrenade"),
 			wave: controllerActionHeld(resolved, "wave"),
+			vehicleAccelerator: resolved.values.fire,
+			vehicleAction: controllerActionHeld(resolved, "switchWeapon"),
+			vehicleAfterburner: controllerActionHeld(resolved, "lock"),
+			vehicleBrakeReverse: resolved.values.grapple,
 			x: deadzone(resolved.values.moveX),
 			y: deadzone(resolved.values.moveY),
 		}
@@ -2332,8 +2360,24 @@ export class ArenaGame {
 			this.#coyoteRemaining = null
 		}
 		this.#gamepadConnected = gamepad.connected
+		const vehicleActionContext =
+			this.#vehicles.localSeat(this.#socket.id) !== null ||
+			this.#vehicles.nearestAvailableSeat(this.#player.position) !== null
+		const vehicleActionWasHeld = this.#vehicleActionHeld
+		const vehicleActionEdge = inputEdge(
+			gamepad.vehicleAction,
+			vehicleActionWasHeld,
+		)
+		this.#vehicleActionHeld = vehicleActionEdge.held
+		if (vehicleActionEdge.triggered && vehicleActionContext)
+			this.#requestVehicleAction()
 		if (this.#updateVehicleControl(gamepad, delta)) return
-		const switchEdge = inputEdge(gamepad.switchWeapon, this.#switchHeld)
+		const switchEdge = inputEdge(
+			gamepad.switchWeapon &&
+				!vehicleActionContext &&
+				!(gamepad.vehicleAction && vehicleActionWasHeld),
+			this.#switchHeld,
+		)
 		this.#switchHeld = switchEdge.held
 		if (switchEdge.triggered) this.#requestSwitch(1)
 		const grenadeSwitchEdge = inputEdge(
@@ -2862,9 +2906,10 @@ export class ArenaGame {
 		gamepad: Readonly<{
 			fire: boolean
 			jump: boolean
-			sprint: boolean
+			vehicleAccelerator: number
+			vehicleAfterburner: boolean
+			vehicleBrakeReverse: number
 			x: number
-			y: number
 		}>,
 		delta: number,
 	): boolean {
@@ -2873,7 +2918,6 @@ export class ArenaGame {
 		if (seat === null) return false
 		this.#slide = false
 		this.#surfaceSlide = false
-		this.#sprinting = false
 		this.#crouching = false
 		this.#wallTraversal = INITIAL_WALL_TRAVERSAL_STATE
 		this.#mantle = INITIAL_MANTLE_STATE
@@ -2908,29 +2952,35 @@ export class ArenaGame {
 	#sendVehicleDriverControl(
 		gamepad: Readonly<{
 			jump: boolean
-			sprint: boolean
+			vehicleAccelerator: number
+			vehicleAfterburner: boolean
+			vehicleBrakeReverse: number
 			x: number
-			y: number
-		}> = { jump: false, sprint: false, x: 0, y: 0 },
+		}> = {
+			jump: false,
+			vehicleAccelerator: 0,
+			vehicleAfterburner: false,
+			vehicleBrakeReverse: 0,
+			x: 0,
+		},
 	): void {
 		const seat = this.#vehicles.localSeat(this.#socket.id)
 		if (seat === null || (seat.seatId !== "rider" && seat.seatId !== "driver"))
 			return
-		const keyboardSteering =
-			Number(this.#keys.has("KeyD")) - Number(this.#keys.has("KeyA"))
-		const keyboardThrottle =
-			Number(this.#keys.has("KeyW")) - Number(this.#keys.has("KeyS"))
+		const control = vehicleDriverInput(seat.kind, this.#keys, {
+			accelerator: gamepad.vehicleAccelerator,
+			afterburner: gamepad.vehicleAfterburner,
+			brakeReverse: gamepad.vehicleBrakeReverse,
+			handbrake: gamepad.jump,
+			steering: gamepad.x,
+		})
 		this.#vehicleControlSequence += 1
 		this.#socket.emit("arena:vehicle-control", {
-			afterburner:
-				seat.kind === "bike" &&
-				(this.#keys.has("ShiftLeft") ||
-					this.#keys.has("ShiftRight") ||
-					gamepad.sprint),
-			brake: this.#keys.has("Space") || gamepad.jump,
+			afterburner: control.afterburner,
 			clientInputId: this.#vehicleControlSequence,
-			steering: THREE.MathUtils.clamp(keyboardSteering + gamepad.x, -1, 1),
-			throttle: THREE.MathUtils.clamp(keyboardThrottle - gamepad.y, -1, 1),
+			handbrake: control.handbrake,
+			steering: control.steering,
+			throttle: control.throttle,
 			vehicleId: seat.vehicleId,
 		} satisfies VehicleControlIntent)
 	}

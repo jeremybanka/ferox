@@ -305,10 +305,31 @@ export function AppShell({ socket }: AppShellProps): VNode {
 							: `${hud.vehicleKind?.toUpperCase()} • ${hud.vehicleSeat.toUpperCase()} SEAT`}
 					</strong>
 					<span>
-						<kbd>E</kbd>
-						{hud.vehicleSeat === null ? " ENTER" : " DISMOUNT"}
-						{hud.vehicleSeat === "rider" ? " • SHIFT AFTERBURNER" : null}
-						{hud.vehicleSeat === "turret" ? " • FIRE TURRET" : null}
+						{hud.vehicleSeat === "rider" || hud.vehicleSeat === "driver" ? (
+							<>
+								<kbd>W</kbd>/<kbd>RT</kbd> DRIVE • <kbd>S</kbd>/<kbd>LT</kbd>{" "}
+								BRAKE/REVERSE • <kbd>A/D</kbd>/<kbd>LS</kbd> STEER •{" "}
+								<kbd>SPACE</kbd>/<kbd>A</kbd> HANDBRAKE
+								{hud.vehicleSeat === "rider" ? (
+									<>
+										{" • "}
+										<kbd>SHIFT</kbd>/<kbd>LB</kbd> AFTERBURNER
+									</>
+								) : null}
+								{" • "}
+								<kbd>E</kbd>/<kbd>Y</kbd> EXIT
+							</>
+						) : hud.vehicleSeat === "turret" ? (
+							<>
+								<kbd>MOUSE1</kbd>/<kbd>RT</kbd> FIRE • <kbd>E</kbd>/<kbd>Y</kbd>{" "}
+								EXIT
+							</>
+						) : (
+							<>
+								<kbd>E</kbd>/<kbd>Y</kbd>{" "}
+								{hud.vehicleSeat === null ? "ENTER" : "EXIT"}
+							</>
+						)}
 					</span>
 				</vehicle-action-prompt>
 

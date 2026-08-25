@@ -45,7 +45,7 @@ export type VehicleSeatIntent = Readonly<{
 
 export type VehicleControlIntent = Readonly<{
 	afterburner: boolean
-	brake: boolean
+	handbrake: boolean
 	clientInputId: number
 	steering: number
 	throttle: number
@@ -98,7 +98,7 @@ export function isVehicleControlIntent(
 		Number.isSafeInteger(record["clientInputId"]) &&
 		(record["clientInputId"] as number) >= 0 &&
 		typeof record["afterburner"] === "boolean" &&
-		typeof record["brake"] === "boolean" &&
+		typeof record["handbrake"] === "boolean" &&
 		typeof record["steering"] === "number" &&
 		Math.abs(record["steering"] as number) <= 1 &&
 		typeof record["throttle"] === "number" &&

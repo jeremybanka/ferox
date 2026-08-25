@@ -6,7 +6,13 @@ import type {
 	VehicleSeatIntent,
 	VehicleTurretIntent,
 } from "../src/arena-protocol.ts"
+import { arenaHeightAt } from "../src/arena-terrain.ts"
+import { resolveArenaMotion } from "../src/ArenaWorld.ts"
+import { ARENA_SEED } from "../src/game-constants.ts"
 import {
+	STARTING_ROOM_RADIUS,
+	VEHICLE_ENTRY_RADIUS,
+	VEHICLE_SPAWNS,
 	VehicleAuthority,
 	type VehicleAuthorityPlayer,
 } from "./VehicleAuthority.ts"
@@ -29,25 +35,25 @@ const makeHarness = () => {
 		{
 			dead: false,
 			id: "driver",
-			position: [0, 1.05, 0],
+			position: [0, 1.05, 28],
 			velocity: [0, 0, 0],
 		},
 		{
 			dead: false,
 			id: "passenger",
-			position: [0, 1.05, 1],
+			position: [0, 1.05, 29],
 			velocity: [0, 0, 0],
 		},
 		{
 			dead: false,
 			id: "gunner",
-			position: [1, 1.05, 0],
+			position: [1, 1.05, 28],
 			velocity: [0, 0, 0],
 		},
 		{
 			dead: false,
 			id: "target",
-			position: [0, 4.15, 40],
+			position: [0, 4.15, 0],
 			velocity: [0, 0, 0],
 		},
 	]
@@ -89,6 +95,42 @@ const seat = (
 ): VehicleSeatIntent => ({ clientActionId, seatId, type, vehicleId })
 
 describe("vehicle occupancy authority", () => {
+	test("spawns the jeep outside the starting room on a clear arena footprint", () => {
+		const { authority } = makeHarness()
+		const jeep = authority
+			.snapshots()
+			.find((vehicle) => vehicle.id === "jeep-1")!
+		expect(Math.hypot(jeep.position[0], jeep.position[2])).toBeGreaterThan(
+			STARTING_ROOM_RADIUS,
+		)
+		expect([jeep.position[0], jeep.position[2]]).toEqual([
+			VEHICLE_SPAWNS.jeep.position[0],
+			VEHICLE_SPAWNS.jeep.position[2],
+		])
+		const [x, , z] = VEHICLE_SPAWNS.jeep.position
+		const result = resolveArenaMotion(
+			ARENA_SEED,
+			[x, z],
+			[x, z],
+			arenaHeightAt(ARENA_SEED, x, z) + 1,
+			1.75,
+		)
+		expect(result).toMatchObject({ contact: null, x, z })
+	})
+
+	test("requires normal close proximity to enter", () => {
+		const { authority, players } = makeHarness()
+		const driver = players.find((player) => player.id === "driver")!
+		driver.position = [0, 1.05, 28 + VEHICLE_ENTRY_RADIUS + 0.1]
+		expect(
+			authority.requestSeat("driver", seat(1, "enter", "jeep-1", "driver")),
+		).toBe(false)
+		driver.position = [0, 1.05, 28 + VEHICLE_ENTRY_RADIUS - 0.1]
+		expect(
+			authority.requestSeat("driver", seat(2, "enter", "jeep-1", "driver")),
+		).toBe(true)
+	})
+
 	test("resolves contention and rejects stale, distant, and cross-role control", () => {
 		const { authority } = makeHarness()
 		expect(
@@ -103,7 +145,7 @@ describe("vehicle occupancy authority", () => {
 		expect(
 			authority.control("beta", {
 				afterburner: true,
-				brake: false,
+				handbrake: false,
 				clientInputId: 1,
 				steering: 0,
 				throttle: 1,
@@ -131,7 +173,7 @@ describe("vehicle occupancy authority", () => {
 		).toBe(true)
 		const control: VehicleControlIntent = {
 			afterburner: false,
-			brake: false,
+			handbrake: false,
 			clientInputId: 1,
 			steering: 0.2,
 			throttle: 1,
@@ -175,7 +217,7 @@ describe("vehicle combat authority", () => {
 		authority.requestSeat("alpha", seat(1, "enter", "bike-1", "rider"))
 		authority.control("alpha", {
 			afterburner: true,
-			brake: false,
+			handbrake: false,
 			clientInputId: 1,
 			steering: 0,
 			throttle: 1,
@@ -194,7 +236,7 @@ describe("vehicle combat authority", () => {
 		authority.requestSeat("gunner", seat(1, "enter", "jeep-1", "turret"))
 		const intent: VehicleTurretIntent = {
 			clientInputId: 1,
-			direction: [0, 0, 1],
+			direction: [0, 0, -1],
 			fire: true,
 			vehicleId: "jeep-1",
 		}
