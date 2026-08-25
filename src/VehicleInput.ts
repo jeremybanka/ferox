@@ -1,4 +1,8 @@
 import type { VehicleKind } from "./arena-protocol.ts"
+import {
+	controllerActionHeld,
+	type ResolvedControllerActions,
+} from "./game-input.ts"
 
 export type VehicleGamepadInput = Readonly<{
 	accelerator: number
@@ -14,6 +18,9 @@ export type VehicleDriverInput = Readonly<{
 	steering: number
 	throttle: number
 }>
+
+export type VehicleControllerInput = VehicleGamepadInput &
+	Readonly<{ action: boolean }>
 
 const clamp = (value: number): number =>
 	Math.max(-1, Math.min(1, Number.isFinite(value) ? value : 0))
@@ -34,6 +41,24 @@ const VEHICLE_DRIVER_KEY_CODES = new Set([
 
 export function isVehicleDriverKeyboardCode(code: string): boolean {
 	return VEHICLE_DRIVER_KEY_CODES.has(code)
+}
+
+/**
+ * Reuses the active controller profile contextually: fire/RT drives,
+ * grapple/LT brakes and reverses, jump/A handbrakes, switch/Y enters or exits,
+ * and lock/LB activates the bike afterburner.
+ */
+export function vehicleControllerInput(
+	actions: ResolvedControllerActions,
+): VehicleControllerInput {
+	return {
+		accelerator: actions.values.fire,
+		action: controllerActionHeld(actions, "switchWeapon"),
+		afterburner: controllerActionHeld(actions, "lock"),
+		brakeReverse: actions.values.grapple,
+		handbrake: controllerActionHeld(actions, "jump"),
+		steering: actions.values.moveX,
+	}
 }
 
 /**

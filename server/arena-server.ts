@@ -1345,7 +1345,8 @@ realtime(
 			}
 			cancelPlayerReload(socketId)
 			railCharges.delete(socketId)
-			if (grapple.detach(socketId)) emitGrapple()
+			const grappleState = grapple.detach(socketId)
+			if (grappleState !== null) emitGrapple(grappleState)
 			emitStandardLockUpdates(standardLocks.clearPlayer(socketId))
 			io.emit("arena:players", [...players.values()])
 			io.emit("arena:snapshot", arenaSnapshot())

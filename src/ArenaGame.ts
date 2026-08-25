@@ -194,6 +194,7 @@ import {
 import { ShotgunPelletField } from "./ShotgunPelletField.ts"
 import {
 	isVehicleDriverKeyboardCode,
+	vehicleControllerInput,
 	vehicleDriverInput,
 } from "./VehicleInput.ts"
 import { VehicleVisualSystem } from "./VehicleVisualSystem.ts"
@@ -2312,6 +2313,7 @@ export class ArenaGame {
 			deadzone(resolved.values.lookY),
 		)
 		const pickupReload = controllerActionHeld(resolved, "pickupReload")
+		const vehicle = vehicleControllerInput(resolved)
 		return {
 			autorun: controllerActionHeld(resolved, "autorun"),
 			bomb: controllerActionHeld(resolved, "bomb"),
@@ -2320,7 +2322,7 @@ export class ArenaGame {
 			fire: resolved.values.fire > 0.25,
 			fistbump: controllerActionHeld(resolved, "fistbump"),
 			grappleTrigger: resolved.values.grapple,
-			jump: controllerActionHeld(resolved, "jump"),
+			jump: vehicle.handbrake,
 			lock: controllerActionHeld(resolved, "lock"),
 			punch: controllerActionHeld(resolved, "punch"),
 			pickup: pickupReload,
@@ -2329,11 +2331,11 @@ export class ArenaGame {
 			switchWeapon: controllerActionHeld(resolved, "switchWeapon"),
 			switchGrenade: controllerActionHeld(resolved, "switchGrenade"),
 			wave: controllerActionHeld(resolved, "wave"),
-			vehicleAccelerator: resolved.values.fire,
-			vehicleAction: controllerActionHeld(resolved, "switchWeapon"),
-			vehicleAfterburner: controllerActionHeld(resolved, "lock"),
-			vehicleBrakeReverse: resolved.values.grapple,
-			x: deadzone(resolved.values.moveX),
+			vehicleAccelerator: vehicle.accelerator,
+			vehicleAction: vehicle.action,
+			vehicleAfterburner: vehicle.afterburner,
+			vehicleBrakeReverse: vehicle.brakeReverse,
+			x: deadzone(vehicle.steering),
 			y: deadzone(resolved.values.moveY),
 		}
 	}
