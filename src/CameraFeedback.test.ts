@@ -44,47 +44,6 @@ describe("speed-based camera FOV", () => {
 		)
 		expect(oneStep).toBeCloseTo(twoSteps, 10)
 	})
-
-	test("composes speed with typed lock optics as one bounded projection", () => {
-		const shortRange = { maxFovReductionDegrees: 5, zoomMultiplier: 1.2 }
-		expect(cameraFovTarget(0, shortRange, true)).toBeCloseTo(71)
-		expect(cameraFovTarget(100 / 3.6, shortRange, true)).toBeCloseTo(86)
-		expect(
-			cameraFovTarget(
-				0,
-				{ maxFovReductionDegrees: 48, zoomMultiplier: 2 },
-				true,
-			),
-		).toBeCloseTo(42.68, 1)
-		expect(
-			cameraFovTarget(
-				0,
-				{ maxFovReductionDegrees: 58, zoomMultiplier: 3 },
-				true,
-			),
-		).toBeCloseTo(29.2, 1)
-		expect(cameraFovTarget(0, shortRange, false)).toBe(76)
-		expect(cameraFovTarget(0, { ...shortRange, zoomMultiplier: 0 }, true)).toBe(
-			76,
-		)
-	})
-
-	test("smoothly enters and leaves lock optics without frame-rate dependence", () => {
-		const optics = { maxFovReductionDegrees: 48, zoomMultiplier: 2 }
-		const entered = stepCameraFov(76, 0, 1 / 60, optics, true)
-		expect(entered).toBeLessThan(76)
-		const exited = stepCameraFov(entered, 0, 1 / 60, optics, false)
-		expect(exited).toBeGreaterThan(entered)
-		const oneStep = stepCameraFov(76, 0, 1 / 30, optics, true)
-		const twoSteps = stepCameraFov(
-			stepCameraFov(76, 0, 1 / 60, optics, true),
-			0,
-			1 / 60,
-			optics,
-			true,
-		)
-		expect(oneStep).toBeCloseTo(twoSteps, 10)
-	})
 })
 
 describe("wall traversal camera roll", () => {

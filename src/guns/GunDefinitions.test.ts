@@ -94,18 +94,28 @@ describe("gun definitions", () => {
 		expect(launcher.name).not.toBe(blaster.name)
 	})
 
-	test("defines lock-gated hitscan timing, damage, and optics in the catalog", () => {
+	test("defines lock-gated hitscan timing and damage without lock optics", () => {
 		expect(gunDefinition("ion-beam-rifle")).toMatchObject({
 			capabilities: { requiresLock: true },
 			fire: { type: "hitscan" },
-			lockOptics: { zoomMultiplier: 2 },
 			tuning: { chargeMs: 2_000, chargedDamage: 40, tapDamage: null },
 		})
 		expect(gunDefinition("heavy-laser")).toMatchObject({
 			capabilities: { requiresLock: true },
 			fire: { type: "hitscan" },
-			lockOptics: { zoomMultiplier: 3 },
 			tuning: { chargeMs: 5_000, chargedDamage: 120, tapDamage: 2 },
+		})
+		expect(gunDefinition("vamp")).toMatchObject({
+			capabilities: { requiresLock: true },
+			fire: { serverMinimumIntervalMs: 100, type: "hitscan" },
+			magazineSize: 100,
+			tuning: {
+				damage: 1,
+				firstIntervalMs: 1_000,
+				intervalStepMs: 150,
+				minimumIntervalMs: 100,
+				mode: "continuous",
+			},
 		})
 	})
 

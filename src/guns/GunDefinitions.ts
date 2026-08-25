@@ -22,6 +22,11 @@ import {
 	ION_BEAM_DAMAGE,
 	ION_BEAM_MAGAZINE_SIZE,
 	ION_BEAM_SERVER_MINIMUM_INTERVAL_MS,
+	VAMP_DAMAGE,
+	VAMP_FIRST_INTERVAL_MS,
+	VAMP_INTERVAL_STEP_MS,
+	VAMP_MAGAZINE_SIZE,
+	VAMP_MINIMUM_INTERVAL_MS,
 } from "../game-constants.ts"
 
 export const GUN_IDS = [
@@ -32,6 +37,7 @@ export const GUN_IDS = [
 	"mini-missile",
 	"ion-beam-rifle",
 	"heavy-laser",
+	"vamp",
 ] as const
 
 export type GunId = (typeof GUN_IDS)[number]
@@ -75,10 +81,6 @@ export type GunDefinition = {
 	magazineSize: number
 	model: GunModelId
 	name: string
-	lockOptics: null | {
-		maxFovReductionDegrees: number
-		zoomMultiplier: number
-	}
 	presentation: Readonly<Record<GunPresentationView, GunTransform>>
 	reload: GunReloadDefinition
 	tuning:
@@ -99,7 +101,16 @@ export type GunDefinition = {
 				chargeMs: number
 				chargedDamage: number
 				kind: "hitscan"
+				mode: "charged"
 				tapDamage: number | null
+		  }
+		| {
+				damage: number
+				firstIntervalMs: number
+				intervalStepMs: number
+				kind: "hitscan"
+				minimumIntervalMs: number
+				mode: "continuous"
 		  }
 }
 
@@ -123,7 +134,6 @@ export const GUN_DEFINITIONS = {
 		magazineSize: 28,
 		model: "arc-blaster",
 		name: "ARC BLASTER",
-		lockOptics: { maxFovReductionDegrees: 5, zoomMultiplier: 1.2 },
 		presentation: {
 			firstPerson: {
 				position: [0.35, -0.31, -0.7],
@@ -160,7 +170,6 @@ export const GUN_DEFINITIONS = {
 		magazineSize: MINI_MISSILE_AMMO,
 		model: "mini-missile",
 		name: "MINI-MISSILE",
-		lockOptics: { maxFovReductionDegrees: 5, zoomMultiplier: 1.2 },
 		presentation: {
 			firstPerson: {
 				position: [0.36, -0.3, -0.72],
@@ -202,7 +211,6 @@ export const GUN_DEFINITIONS = {
 		magazineSize: SHOTGUN_MAGAZINE_SIZE,
 		model: "shotgun",
 		name: "BREACH SHOTGUN",
-		lockOptics: { maxFovReductionDegrees: 5, zoomMultiplier: 1.2 },
 		presentation: {
 			firstPerson: {
 				position: [0.35, -0.32, -0.72],
@@ -239,7 +247,6 @@ export const GUN_DEFINITIONS = {
 		magazineSize: BUBBLE_GUN_MAGAZINE_SIZE,
 		model: "bubble-gun",
 		name: "BUBBLE GUN",
-		lockOptics: { maxFovReductionDegrees: 5, zoomMultiplier: 1.2 },
 		presentation: {
 			firstPerson: {
 				position: [0.35, -0.32, -0.72],
@@ -276,7 +283,6 @@ export const GUN_DEFINITIONS = {
 		magazineSize: RAIL_GUN_MAGAZINE_SIZE,
 		model: "rail-gun",
 		name: "RAIL GUN",
-		lockOptics: null,
 		presentation: {
 			firstPerson: {
 				position: [0.35, -0.33, -0.74],
@@ -310,7 +316,6 @@ export const GUN_DEFINITIONS = {
 			type: "hitscan",
 		},
 		id: "ion-beam-rifle",
-		lockOptics: { maxFovReductionDegrees: 48, zoomMultiplier: 2 },
 		magazineSize: ION_BEAM_MAGAZINE_SIZE,
 		model: "ion-beam-rifle",
 		name: "ION BEAM RIFLE",
@@ -336,6 +341,7 @@ export const GUN_DEFINITIONS = {
 			chargeMs: ION_BEAM_CHARGE_MS,
 			chargedDamage: ION_BEAM_DAMAGE,
 			kind: "hitscan",
+			mode: "charged",
 			tapDamage: null,
 		},
 	},
@@ -352,7 +358,6 @@ export const GUN_DEFINITIONS = {
 			type: "hitscan",
 		},
 		id: "heavy-laser",
-		lockOptics: { maxFovReductionDegrees: 58, zoomMultiplier: 3 },
 		magazineSize: HEAVY_LASER_MAGAZINE_SIZE,
 		model: "heavy-laser",
 		name: "HEAVY LASER",
@@ -378,7 +383,51 @@ export const GUN_DEFINITIONS = {
 			chargeMs: HEAVY_LASER_CHARGE_MS,
 			chargedDamage: HEAVY_LASER_CHARGED_DAMAGE,
 			kind: "hitscan",
+			mode: "charged",
 			tapDamage: HEAVY_LASER_TAP_DAMAGE,
+		},
+	},
+	vamp: {
+		capabilities: {
+			fire: true,
+			pickup: true,
+			reload: true,
+			requiresLock: true,
+		},
+		fire: {
+			clientCooldownSeconds: VAMP_MINIMUM_INTERVAL_MS / 1_000,
+			serverMinimumIntervalMs: VAMP_MINIMUM_INTERVAL_MS,
+			type: "hitscan",
+		},
+		id: "vamp",
+		magazineSize: VAMP_MAGAZINE_SIZE,
+		model: "vamp",
+		name: "VAMP",
+		presentation: {
+			firstPerson: {
+				position: [0.35, -0.33, -0.75],
+				rotation: zeroRotation,
+				scale: [0.88, 0.88, 0.88],
+			},
+			thirdPerson: {
+				position: [0, -0.1, -0.2],
+				rotation: [-Math.PI / 2, 0, 0],
+				scale: [0.92, 0.92, 0.92],
+			},
+		},
+		reload: {
+			ammoRule: "refill-magazine",
+			animation: "arc-cell",
+			durationSeconds: 2.5,
+			refillProgress: 0.82,
+		},
+		tuning: {
+			damage: VAMP_DAMAGE,
+			firstIntervalMs: VAMP_FIRST_INTERVAL_MS,
+			intervalStepMs: VAMP_INTERVAL_STEP_MS,
+			kind: "hitscan",
+			minimumIntervalMs: VAMP_MINIMUM_INTERVAL_MS,
+			mode: "continuous",
 		},
 	},
 } as const satisfies Record<GunId, GunDefinition>

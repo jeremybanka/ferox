@@ -48,6 +48,19 @@ test("dead players are excluded and disconnects cancel pending respawns", () => 
 	assert.deepEqual(lifecycle.advance(PLAYER_RESPAWN_DELAY_MS), [])
 })
 
+test("healing is authoritative, capped at 100, and excludes dead players", () => {
+	const lifecycle = new PlayerLifecycle()
+	lifecycle.add("pilot")
+	assert.equal(lifecycle.damage("pilot", 2, 0), "damaged")
+	assert.equal(lifecycle.heal("pilot", 1), 1)
+	assert.equal(lifecycle.get("pilot")?.health, 99)
+	assert.equal(lifecycle.heal("pilot", 5), 1)
+	assert.equal(lifecycle.get("pilot")?.health, 100)
+	assert.equal(lifecycle.heal("pilot", 1), 0)
+	lifecycle.damage("pilot", 100, 1)
+	assert.equal(lifecycle.heal("pilot", 1), 0)
+})
+
 test("ARC reload captures authoritative timing and emits one refill phase", () => {
 	let state = startReload({ ammo: 7, gunId: "arc-blaster", slot: 0 }, 100)
 	assert.deepEqual(state, {

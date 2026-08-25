@@ -129,7 +129,7 @@ function buildLongGun(
 	root: THREE.Group,
 	muzzle: THREE.Group,
 	materials: ReturnType<typeof materialPalette>,
-	id: "heavy-laser" | "ion-beam-rifle" | "rail-gun" | "shotgun",
+	id: "heavy-laser" | "ion-beam-rifle" | "rail-gun" | "shotgun" | "vamp",
 ): void {
 	const triggerPoint = new THREE.Vector3(0, -0.1, 0.08)
 	const precision = id === "rail-gun" || id === "ion-beam-rifle"
@@ -232,6 +232,9 @@ export function createGunModel(
 			break
 		case "heavy-laser":
 			buildLongGun(root, muzzle, materials, "heavy-laser")
+			break
+		case "vamp":
+			buildLongGun(root, muzzle, materials, "vamp")
 			break
 		default:
 			assertUnhandledGun(id)

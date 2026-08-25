@@ -662,6 +662,7 @@ export class ArenaSimulation {
 		clientShotId: number,
 		targetPlayerId: string,
 		damage: number,
+		requireLockedTargetHit = false,
 	): HitscanResult | null {
 		if (
 			!Number.isSafeInteger(clientShotId) ||
@@ -713,34 +714,38 @@ export class ArenaSimulation {
 		let hit: DirectHitResult | null = null
 		let travelFraction = 1
 		if (this.#collisionIsNearest(bubbleHit, droneHit, playerHit)) {
-			this.#damageBubble(bubbleHit.target, damage)
 			travelFraction = bubbleHit.travelFraction
+			if (!requireLockedTargetHit) this.#damageBubble(bubbleHit.target, damage)
 		} else if (this.#collisionIsNearest(droneHit, bubbleHit, playerHit)) {
-			this.#damageDrone(droneHit.target, damage, playerId)
 			travelFraction = droneHit.travelFraction
-			hit = {
-				classification: "normal",
-				clientShotId,
-				damage,
-				projectileId: beamId,
-				targetId: droneHit.target.id,
-				targetType: "drone",
+			if (!requireLockedTargetHit) {
+				this.#damageDrone(droneHit.target, damage, playerId)
+				hit = {
+					classification: "normal",
+					clientShotId,
+					damage,
+					projectileId: beamId,
+					targetId: droneHit.target.id,
+					targetType: "drone",
+				}
 			}
 		} else if (playerHit !== undefined) {
 			travelFraction = playerHit.travelFraction
-			const impact = start.clone().lerp(end, travelFraction)
-			this.#onPlayerDamage(playerHit.target.id, damage, {
-				direction: direction.toArray(),
-				position: impact.toArray(),
-				source: "hitscan",
-			})
-			hit = {
-				classification: playerHit.classification,
-				clientShotId,
-				damage,
-				projectileId: beamId,
-				targetId: playerHit.target.id,
-				targetType: "player",
+			if (!requireLockedTargetHit || playerHit.target.id === targetPlayerId) {
+				const impact = start.clone().lerp(end, travelFraction)
+				this.#onPlayerDamage(playerHit.target.id, damage, {
+					direction: direction.toArray(),
+					position: impact.toArray(),
+					source: "hitscan",
+				})
+				hit = {
+					classification: playerHit.classification,
+					clientShotId,
+					damage,
+					projectileId: beamId,
+					targetId: playerHit.target.id,
+					targetType: "player",
+				}
 			}
 		}
 		if (hit !== null) this.#onDirectHit(playerId, hit)

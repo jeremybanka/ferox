@@ -31,55 +31,24 @@ function approach(
 	)
 }
 
-export type LockOptics = {
-	maxFovReductionDegrees: number
-	zoomMultiplier: number
-}
-
-export function cameraFovTarget(
-	planarSpeedMetersPerSecond: number,
-	lockOptics: LockOptics | null = null,
-	locked = false,
-): number {
+export function cameraFovTarget(planarSpeedMetersPerSecond: number): number {
 	const speedKmh =
 		finiteNonNegative(planarSpeedMetersPerSecond) *
 		METERS_PER_SECOND_TO_KILOMETERS_PER_HOUR
 	const progress = Math.min(speedKmh / CAMERA_MAX_SPEED_FOV_KMH, 1)
-	const speedFov =
-		CAMERA_BASE_FOV_DEGREES + CAMERA_MAX_SPEED_FOV_BONUS_DEGREES * progress
-	if (
-		!locked ||
-		lockOptics === null ||
-		!Number.isFinite(lockOptics.zoomMultiplier) ||
-		lockOptics.zoomMultiplier <= 1 ||
-		!Number.isFinite(lockOptics.maxFovReductionDegrees) ||
-		lockOptics.maxFovReductionDegrees <= 0
-	)
-		return speedFov
-	// Optical zoom is one projection transform: divide the tangent of the
-	// half-angle, then cap short-range optics by their approved degree budget.
-	const radians = (speedFov * Math.PI) / 180
-	const zoomed =
-		(180 / Math.PI) *
-		2 *
-		Math.atan(Math.tan(radians / 2) / lockOptics.zoomMultiplier)
-
-	return Math.max(speedFov - lockOptics.maxFovReductionDegrees, zoomed)
+	return CAMERA_BASE_FOV_DEGREES + CAMERA_MAX_SPEED_FOV_BONUS_DEGREES * progress
 }
 
 export function stepCameraFov(
 	currentFovDegrees: number,
 	planarSpeedMetersPerSecond: number,
 	delta: number,
-	lockOptics: LockOptics | null = null,
-	locked = false,
 ): number {
-	const target = cameraFovTarget(planarSpeedMetersPerSecond, lockOptics, locked)
-	const minimum = Math.min(CAMERA_BASE_FOV_DEGREES, target)
+	const target = cameraFovTarget(planarSpeedMetersPerSecond)
 	return Math.min(
 		CAMERA_BASE_FOV_DEGREES + CAMERA_MAX_SPEED_FOV_BONUS_DEGREES,
 		Math.max(
-			minimum,
+			CAMERA_BASE_FOV_DEGREES,
 			approach(
 				currentFovDegrees,
 				target,

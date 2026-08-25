@@ -1054,5 +1054,6 @@ export const DEFAULT_GAME_AUDIO = defineGameAudio({
 		"mini-missile": miniMissile,
 		"rail-gun": railGun,
 		shotgun,
+		vamp: arcBlaster,
 	},
 } as const satisfies GameAudioDefinition)

@@ -26,7 +26,7 @@ export class LockHitscanChargeController {
 		)
 			return null
 		const tuning = gunDefinition(weapon).tuning
-		if (tuning.kind !== "hitscan") return null
+		if (tuning.kind !== "hitscan" || tuning.mode !== "charged") return null
 		this.#lastChargeId.set(ownerId, clientChargeId)
 		const snapshot: LockChargeSnapshot = {
 			chargeId: clientChargeId,
@@ -47,15 +47,13 @@ export class LockHitscanChargeController {
 	): LockChargeResolution | null {
 		const active = this.#active.get(ownerId)
 		if (active === undefined || active.chargeId !== clientChargeId) return null
+		// A release at or beyond the deadline cannot turn into the charged shot.
+		// Leave it active for the authoritative deadline resolver instead.
+		if (nowMs >= active.completesAt) return null
 		this.#active.delete(ownerId)
 		const tuning = gunDefinition(active.weapon).tuning
-		if (tuning.kind !== "hitscan") return null
-		const matured = nowMs >= active.completesAt
-		const damage = matured
-			? tuning.chargedDamage
-			: active.weapon === "heavy-laser"
-				? tuning.tapDamage
-				: null
+		if (tuning.kind !== "hitscan" || tuning.mode !== "charged") return null
+		const damage = active.weapon === "heavy-laser" ? tuning.tapDamage : null
 		return {
 			damage,
 			snapshot: { ...active, phase: damage === null ? "cancelled" : "fired" },
@@ -67,25 +65,41 @@ export class LockHitscanChargeController {
 		isValid: (snapshot: LockChargeSnapshot) => boolean,
 	): LockChargeResolution[] {
 		const resolved: LockChargeResolution[] = []
-		for (const [ownerId, active] of this.#active) {
-			if (!isValid(active)) {
-				this.#active.delete(ownerId)
-				resolved.push({
-					damage: null,
-					snapshot: { ...active, phase: "cancelled" },
-				})
-				continue
-			}
-			if (nowMs < active.completesAt) continue
-			this.#active.delete(ownerId)
-			const tuning = gunDefinition(active.weapon).tuning
-			if (tuning.kind !== "hitscan") continue
-			resolved.push({
-				damage: tuning.chargedDamage,
-				snapshot: { ...active, phase: "fired" },
-			})
+		for (const active of this.#active.values()) {
+			const resolution = this.resolveDue(
+				active.ownerId,
+				active.chargeId,
+				nowMs,
+				isValid,
+			)
+			if (resolution !== null) resolved.push(resolution)
 		}
 		return resolved
+	}
+
+	resolveDue(
+		ownerId: string,
+		clientChargeId: number,
+		nowMs: number,
+		isValid: (snapshot: LockChargeSnapshot) => boolean,
+	): LockChargeResolution | null {
+		const active = this.#active.get(ownerId)
+		if (active === undefined || active.chargeId !== clientChargeId) return null
+		if (!isValid(active)) {
+			this.#active.delete(ownerId)
+			return {
+				damage: null,
+				snapshot: { ...active, phase: "cancelled" },
+			}
+		}
+		if (nowMs < active.completesAt) return null
+		this.#active.delete(ownerId)
+		const tuning = gunDefinition(active.weapon).tuning
+		if (tuning.kind !== "hitscan" || tuning.mode !== "charged") return null
+		return {
+			damage: tuning.chargedDamage,
+			snapshot: { ...active, phase: "fired" },
+		}
 	}
 
 	cancel(ownerId: string): LockChargeSnapshot | null {

@@ -87,8 +87,9 @@ export class MiniMissileArmory {
 			"rail-gun",
 			"ion-beam-rifle",
 			"heavy-laser",
+			"vamp",
 		] as const
-		const preferredPads = [0, 2, 4, 1, 3]
+		const preferredPads = [0, 2, 4, 1, 3, 5]
 		const occupied = new Set<number>()
 		for (const [index, weapon] of guns.entries()) {
 			if (arenaPickupPads.length === 0) continue
@@ -386,6 +387,11 @@ export class MiniMissileArmory {
 		const weapon = equipment.slots[equipment.activeSlot]?.weapon
 		if (weapon !== undefined) return weapon
 		return assertUnhandledWeapon(weapon as never)
+	}
+
+	hasWeapon(playerId: string, weapon: GunId): boolean {
+		const inventory = this.#inventories.get(playerId)
+		return inventory?.slots.some((slot) => slot?.weapon === weapon) ?? false
 	}
 
 	pickup(): MiniMissilePickupSnapshot {

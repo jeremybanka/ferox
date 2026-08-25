@@ -84,10 +84,18 @@ export const HEAVY_LASER_CHARGE_MS = 5_000
 export const HEAVY_LASER_TAP_DAMAGE = 2
 export const HEAVY_LASER_CHARGED_DAMAGE = 120
 export const HEAVY_LASER_SERVER_MINIMUM_INTERVAL_MS = 650
+export const VAMP_MAGAZINE_SIZE = 100
+export const VAMP_DAMAGE = 1
+export const VAMP_FIRST_INTERVAL_MS = 1_000
+export const VAMP_INTERVAL_STEP_MS = 150
+export const VAMP_MINIMUM_INTERVAL_MS = 100
+export const VAMP_HEALTH_PICKUP_RADIUS = 1.25
+export const VAMP_HEALTH_PICKUP_LIFETIME_MS = 12_000
+export const VAMP_HEALTH_PICKUP_CAP = 64
 export const LOCK_HITSCAN_MAX_RANGE = 48
 export const HITSCAN_BEAM_LIFETIME_SECONDS = 0.2
 
-// Mid-arena armory pads are shared by the three standard weapon pickups. Their
+// Mid-arena armory pads are shared by the secondary weapon catalog. Their
 // initial pad indices are distinct and every return advances to the next pad
 // not reserved by another gun. Staggering and proportional return delays make
 // shotgun contests frequent, Bubble Gun contests medium, and Rail contests rare.
@@ -108,6 +116,7 @@ export const ARENA_WEAPON_INITIAL_DELAY_MS = {
 	"ion-beam-rifle": 30_000,
 	"rail-gun": 9_000,
 	shotgun: 0,
+	vamp: 0,
 } as const
 export const ARENA_WEAPON_RESPAWN_MS = {
 	"bubble-gun": 11_000,
@@ -115,6 +124,7 @@ export const ARENA_WEAPON_RESPAWN_MS = {
 	"ion-beam-rifle": 14_000,
 	"rail-gun": 16_000,
 	shotgun: 7_000,
+	vamp: 12_000,
 } as const
 
 export function railChargeFraction(durationMs: number): number {

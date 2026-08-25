@@ -42,6 +42,20 @@ export class PlayerLifecycle {
 		if (state !== undefined) state.score += 1
 	}
 
+	heal(playerId: string, amount: number): number {
+		const state = this.#players.get(playerId)
+		if (
+			state === undefined ||
+			state.dead ||
+			!Number.isFinite(amount) ||
+			amount <= 0
+		)
+			return 0
+		const previous = state.health
+		state.health = Math.min(100, state.health + amount)
+		return state.health - previous
+	}
+
 	damage(playerId: string, damage: number, nowMs: number): DamageResult {
 		const state = this.#players.get(playerId)
 		if (state === undefined || state.dead || damage <= 0) return "ignored"
