@@ -1,6 +1,12 @@
 import { atom } from "atom.io"
 
+import {
+	cloneControlProfile,
+	DEFAULT_CONTROL_PROFILE,
+	type ControlProfile,
+} from "./ControlProfile.ts"
 import { ARENA_SEED } from "./game-constants.ts"
+import type { ControllerActionId } from "./game-input.ts"
 import { DEFAULT_GUN_ID, gunDefinition } from "./guns/GunDefinitions.ts"
 import type {
 	EquipmentSlots,
@@ -112,4 +118,29 @@ export const gameHudStateAtom = atom<GameHudState>({
 export const arenaSeedAtom = atom<number>({
 	key: "arenaSeed",
 	default: ARENA_SEED,
+})
+
+export type ControlsMenuStatus = Readonly<{
+	kind: "error" | "idle" | "success"
+	message: string
+}>
+
+export type ControlsMenuState = Readonly<{
+	capturing: ControllerActionId | null
+	open: boolean
+	status: ControlsMenuStatus
+}>
+
+export const controlProfileAtom = atom<ControlProfile>({
+	key: "controlProfile",
+	default: cloneControlProfile(DEFAULT_CONTROL_PROFILE),
+})
+
+export const controlsMenuStateAtom = atom<ControlsMenuState>({
+	key: "controlsMenuState",
+	default: {
+		capturing: null,
+		open: false,
+		status: { kind: "idle", message: "" },
+	},
 })

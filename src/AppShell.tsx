@@ -5,11 +5,27 @@ import type { Socket } from "socket.io-client"
 
 import { ArenaGame } from "./ArenaGame.ts"
 import css from "./AppShell.module.css"
+import { loadControlProfile, type ControlProfile } from "./ControlProfile.ts"
+import { ControlsMenu } from "./ControlsMenu.tsx"
 import {
 	DRONE_POPULATION_CAP,
 	PLAYER_POPULATION_CAP,
 } from "./game-constants.ts"
-import { arenaSeedAtom, gameHudStateAtom } from "./game-state.ts"
+import {
+	arenaSeedAtom,
+	controlProfileAtom,
+	controlsMenuStateAtom,
+	gameHudStateAtom,
+} from "./game-state.ts"
+import {
+	controllerActionHeld,
+	DEFAULT_CONTROLLER_BINDINGS,
+	INITIAL_CONTROLLER_MENU_TOGGLE_STATE,
+	isControlsMenuKeyboardInput,
+	resolveControllerActions,
+	stepControllerMenuToggle,
+	type ControllerMenuToggleState,
+} from "./game-input.ts"
 import { gunDefinition } from "./guns/GunDefinitions.ts"
 
 type AppShellProps = {
@@ -20,10 +36,19 @@ export function AppShell({ socket }: AppShellProps): VNode {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const deployedRef = useRef(false)
 	const gameRef = useRef<ArenaGame | null>(null)
+	const menuToggleStateRef = useRef<ControllerMenuToggleState>(
+		INITIAL_CONTROLLER_MENU_TOGGLE_STATE,
+	)
 	const [deployed, setDeployed] = useState(false)
+	const controlProfile = useO(controlProfileAtom)
+	const controlsMenu = useO(controlsMenuStateAtom)
 	const hud = useO(gameHudStateAtom)
 	const seed = useO(arenaSeedAtom)
+	const setControlProfile = useI(controlProfileAtom)
+	const setControlsMenu = useI(controlsMenuStateAtom)
 	const setHud = useI(gameHudStateAtom)
+	const controlProfileRef = useRef<ControlProfile>(controlProfile)
+	controlProfileRef.current = controlProfile
 	const incomingThreats = hud.incomingMissileLocks + hud.incomingStandardLocks
 	const gun = gunDefinition(hud.weapon)
 	const nearbyGun =
@@ -36,15 +61,46 @@ export function AppShell({ socket }: AppShellProps): VNode {
 				: "standard"
 
 	useEffect(() => {
+		const loaded = loadControlProfile(globalThis.localStorage)
+		setControlProfile(loaded.profile)
+		if (loaded.message !== null) {
+			setControlsMenu({
+				capturing: null,
+				open: false,
+				status: {
+					kind: loaded.clearedInvalid ? "error" : "idle",
+					message: loaded.message,
+				},
+			})
+		}
+	}, [setControlProfile, setControlsMenu])
+
+	useEffect(() => {
 		const canvas = canvasRef.current
 		if (canvas === null) return
-		const game = new ArenaGame({ canvas, onHud: setHud, seed, socket })
+		const game = new ArenaGame({
+			canvas,
+			controllerBindings: controlProfileRef.current.bindings,
+			onHud: setHud,
+			seed,
+			socket,
+		})
 		gameRef.current = game
 		return () => {
 			game.dispose()
 			gameRef.current = null
 		}
 	}, [seed, setHud, socket])
+
+	useEffect(() => {
+		gameRef.current?.setControllerBindings(controlProfile.bindings)
+	}, [controlProfile])
+
+	useEffect(() => {
+		gameRef.current?.setGameplayInputSuppressed(controlsMenu.open)
+		if (controlsMenu.open && document.pointerLockElement !== null)
+			document.exitPointerLock()
+	}, [controlsMenu.open])
 
 	const deploy = useCallback((): void => {
 		if (deployedRef.current) return
@@ -53,17 +109,54 @@ export function AppShell({ socket }: AppShellProps): VNode {
 		gameRef.current?.start()
 	}, [])
 
+	const openControls = useCallback((): void => {
+		setControlsMenu({
+			capturing: null,
+			open: true,
+			status: { kind: "idle", message: "Gameplay input suspended" },
+		})
+		if (document.pointerLockElement !== null) document.exitPointerLock()
+	}, [setControlsMenu])
+
+	const closeControls = useCallback((): void => {
+		setControlsMenu({
+			capturing: null,
+			open: false,
+			status: { kind: "idle", message: "" },
+		})
+		gameRef.current?.start()
+	}, [setControlsMenu])
+
+	useEffect(() => {
+		if (!deployed) return
+		const handleControlsMenuKey = (event: KeyboardEvent): void => {
+			if (!isControlsMenuKeyboardInput(event.code, event.repeat)) return
+			event.preventDefault()
+			event.stopImmediatePropagation()
+			if (controlsMenu.open) closeControls()
+			else openControls()
+		}
+		window.addEventListener("keydown", handleControlsMenuKey, true)
+		return () =>
+			window.removeEventListener("keydown", handleControlsMenuKey, true)
+	}, [closeControls, controlsMenu.open, deployed, openControls])
+
 	useEffect(() => {
 		if (deployed || typeof navigator.getGamepads !== "function") return
 
 		let animationFrame = 0
 		const pollForDeploy = (): void => {
-			const requested = Array.from(navigator.getGamepads()).some(
-				(gamepad) =>
-					gamepad !== null &&
-					(gamepad.buttons[0]?.pressed === true ||
-						gamepad.buttons[9]?.pressed === true),
-			)
+			const requested = Array.from(navigator.getGamepads()).some((gamepad) => {
+				if (gamepad === null) return false
+				const actions = resolveControllerActions(
+					gamepad,
+					DEFAULT_CONTROLLER_BINDINGS,
+				)
+				return (
+					controllerActionHeld(actions, "jump") ||
+					controllerActionHeld(actions, "menu")
+				)
+			})
 			if (requested) {
 				deploy()
 				return
@@ -75,8 +168,45 @@ export function AppShell({ socket }: AppShellProps): VNode {
 		return () => cancelAnimationFrame(animationFrame)
 	}, [deploy, deployed])
 
+	useEffect(() => {
+		if (!deployed || typeof navigator.getGamepads !== "function") {
+			menuToggleStateRef.current = INITIAL_CONTROLLER_MENU_TOGGLE_STATE
+			return
+		}
+
+		let animationFrame = 0
+		const pollForMenu = (): void => {
+			const gamepad =
+				navigator.getGamepads().find((candidate) => candidate !== null) ?? null
+			const actions = resolveControllerActions(gamepad, controlProfile.bindings)
+			const toggle = stepControllerMenuToggle(
+				menuToggleStateRef.current,
+				controllerActionHeld(actions, "menu"),
+			)
+			menuToggleStateRef.current = toggle.state
+			if (toggle.toggled) {
+				if (controlsMenu.open) closeControls()
+				else openControls()
+			}
+			animationFrame = requestAnimationFrame(pollForMenu)
+		}
+
+		animationFrame = requestAnimationFrame(pollForMenu)
+		return () => cancelAnimationFrame(animationFrame)
+	}, [
+		closeControls,
+		controlProfile.bindings,
+		controlsMenu.open,
+		deployed,
+		openControls,
+	])
+
 	return (
-		<app-shell className={css.class} data-deployed={deployed}>
+		<app-shell
+			className={css.class}
+			data-controls-open={controlsMenu.open}
+			data-deployed={deployed}
+		>
 			<canvas ref={canvasRef} tabIndex={-1} aria-label="FEROX 3D arena" />
 			<game-hud aria-label="Arena heads-up display" data-dead={hud.dead}>
 				<game-header>
@@ -404,6 +534,27 @@ export function AppShell({ socket }: AppShellProps): VNode {
 						<strong>SEED {seed}</strong>
 					</terrain-readout>
 				</deploy-screen>
+			)}
+
+			{deployed && !controlsMenu.open && (
+				<button
+					type="button"
+					data-controls-launch
+					aria-keyshortcuts="F1"
+					onClick={openControls}
+					onKeyDown={(event) => {
+						if (event.key === " " || event.key === "Enter")
+							event.stopPropagation()
+					}}
+					onMouseDown={(event) => event.stopPropagation()}
+				>
+					<span>Controls</span>
+					<kbd>F1 / Start</kbd>
+				</button>
+			)}
+
+			{deployed && controlsMenu.open && (
+				<ControlsMenu onClose={closeControls} />
 			)}
 		</app-shell>
 	)
