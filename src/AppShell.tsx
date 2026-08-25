@@ -295,6 +295,44 @@ export function AppShell({ socket }: AppShellProps): VNode {
 					</span>
 				</drone-recovery-prompt>
 
+				<vehicle-action-prompt
+					data-active={hud.vehicleNearby || hud.vehicleSeat !== null}
+					aria-hidden={!hud.vehicleNearby && hud.vehicleSeat === null}
+				>
+					<strong>
+						{hud.vehicleSeat === null
+							? `${hud.vehicleKind?.toUpperCase() ?? "VEHICLE"} READY`
+							: `${hud.vehicleKind?.toUpperCase()} • ${hud.vehicleSeat.toUpperCase()} SEAT`}
+					</strong>
+					<span>
+						{hud.vehicleSeat === "rider" || hud.vehicleSeat === "driver" ? (
+							<>
+								<kbd>W</kbd>/<kbd>RT</kbd> DRIVE • <kbd>S</kbd>/<kbd>LT</kbd>{" "}
+								BRAKE/REVERSE • <kbd>A/D</kbd>/<kbd>LS</kbd> STEER •{" "}
+								<kbd>SPACE</kbd>/<kbd>A</kbd> HANDBRAKE
+								{hud.vehicleSeat === "rider" ? (
+									<>
+										{" • "}
+										<kbd>SHIFT</kbd>/<kbd>LB</kbd> AFTERBURNER
+									</>
+								) : null}
+								{" • "}
+								<kbd>E</kbd>/<kbd>Y</kbd> EXIT
+							</>
+						) : hud.vehicleSeat === "turret" ? (
+							<>
+								<kbd>MOUSE1</kbd>/<kbd>RT</kbd> FIRE • <kbd>E</kbd>/<kbd>Y</kbd>{" "}
+								EXIT
+							</>
+						) : (
+							<>
+								<kbd>E</kbd>/<kbd>Y</kbd>{" "}
+								{hud.vehicleSeat === null ? "ENTER" : "EXIT"}
+							</>
+						)}
+					</span>
+				</vehicle-action-prompt>
+
 				<pickup-status-board aria-label="Arena weapon pickup status">
 					{hud.pickupStatuses.map((pickup) => (
 						<pickup-status key={pickup.weapon} data-status={pickup.status}>

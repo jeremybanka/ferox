@@ -14,6 +14,9 @@ import {
 	isJumpSequence,
 	isMantleSnapshot,
 	isVisorExpression,
+	isVehicleControlIntent,
+	isVehicleSeatIntent,
+	isVehicleTurretIntent,
 	isWallTraversalSnapshot,
 	nextAcceptedRecoilSignal,
 	type CombatSnapshot,
@@ -27,6 +30,7 @@ import {
 	type PlayerDamageImpact,
 	type PlayerDamageSnapshot,
 	type PlayerSnapshot,
+	type ArenaSnapshot,
 } from "../src/arena-protocol.ts"
 import { arenaHeightAt } from "../src/arena-terrain.ts"
 import { arenaGravityScaleAtStepStart } from "../src/ArenaZones.ts"
@@ -101,6 +105,7 @@ import {
 } from "./StandardLockTracker.ts"
 import { PlayerLifecycle } from "./PlayerLifecycle.ts"
 import { GrappleUtility } from "./GrappleUtility.ts"
+import { VehicleAuthority } from "./VehicleAuthority.ts"
 type SpawnPayload = {
 	damageSequence: number
 	position: [number, number]
@@ -185,6 +190,8 @@ const applyPlayerDamage = (
 		serverTime: nowMs / 1_000,
 	} satisfies PlayerDamageSnapshot)
 	if (result === "died") {
+		vehicleAuthority.removePlayer(playerId)
+		const player = players.get(playerId)
 		cancelPlayerReload(playerId)
 		if (player !== undefined) {
 			Object.assign(player, {
@@ -350,6 +357,40 @@ const simulation = new ArenaSimulation({
 	seed: ARENA_SEED,
 })
 
+const vehicleAuthority = new VehicleAuthority({
+	applyDamage: (playerId, damage, impact) => {
+		applyPlayerDamage(playerId, damage, impact)
+	},
+	getPlayers: () => [...players.values()],
+	world: {
+		groundAt: (x, z) => arenaHeightAt(ARENA_SEED, x, z),
+		resolveMotion: (start, requested, radius) => {
+			const startHeight = arenaHeightAt(ARENA_SEED, start[0], start[1]) + 1
+			const resolved = resolveArenaMotion(
+				ARENA_SEED,
+				start,
+				requested,
+				startHeight,
+				radius,
+			)
+			return {
+				blocked:
+					resolved.contact !== null ||
+					Math.abs(resolved.x - requested[0]) > 0.01 ||
+					Math.abs(resolved.z - requested[1]) > 0.01,
+				x: resolved.x,
+				z: resolved.z,
+			}
+		},
+	},
+})
+
+const arenaSnapshot = (): ArenaSnapshot => ({
+	...simulation.snapshot(),
+	napalmHazards: vehicleAuthority.hazards(),
+	vehicles: vehicleAuthority.snapshots(),
+})
+
 const melee = new MeleeCombat({
 	getPlayers: () =>
 		[...players.values()]
@@ -494,7 +535,7 @@ realtime(
 				})
 			}
 			gameSocket.emit("arena:combat", combatSnapshot(socketId))
-			gameSocket.emit("arena:snapshot", simulation.snapshot())
+			gameSocket.emit("arena:snapshot", arenaSnapshot())
 			gameSocket.emit("arena:shotgun-pellets", simulation.shotgunPellets())
 			gameSocket.emit("arena:equipment", armory.equipment(socketId))
 			gameSocket.emit("arena:mini-missile-pickup", armory.pickup())
@@ -517,6 +558,7 @@ realtime(
 
 		const onMove = (payload: PlayerMoveSnapshot): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
+			if (vehicleAuthority.seat(socketId) !== null) return
 			if (
 				!Array.isArray(payload.aimDirection) ||
 				!Array.isArray(payload.position) ||
@@ -978,11 +1020,13 @@ realtime(
 		}
 		const onStandardLock = (payload: unknown): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
+			if (vehicleAuthority.seat(socketId) !== null) return
 			if (!standardLocks.acceptIntent(socketId, payload)) return
 			reconcileStandardLocks()
 		}
 		const onFire = (payload: FireIntent): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
+			if (vehicleAuthority.seat(socketId) !== null) return
 			const equipped = gunDefinition(armory.activeWeapon(socketId))
 			if (
 				equipped.fire.type !== "projectile" &&
@@ -1028,6 +1072,7 @@ realtime(
 		const onRailCharge = (payload: RailChargeIntent): void => {
 			if (
 				!playerLifecycle.isAlive(socketId) ||
+				vehicleAuthority.seat(socketId) !== null ||
 				payload === null ||
 				typeof payload !== "object" ||
 				!Number.isSafeInteger(payload.clientChargeId) ||
@@ -1093,6 +1138,7 @@ realtime(
 		}
 		const onFireMiniMissile = (payload: MiniMissileIntent): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
+			if (vehicleAuthority.seat(socketId) !== null) return
 			if (players.get(socketId)?.reload !== null) return
 			const equipped = gunDefinition(armory.activeWeapon(socketId))
 			if (equipped.fire.type !== "guided-missile") return
@@ -1117,6 +1163,7 @@ realtime(
 		}
 		const onInventoryAction = (payload: unknown): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
+			if (vehicleAuthority.seat(socketId) !== null) return
 			const previous = lastInventoryAction.get(socketId) ?? -1
 			if (!isNewInventoryActionIntent(payload, previous)) return
 			lastInventoryAction.set(socketId, payload.clientActionId)
@@ -1179,6 +1226,7 @@ realtime(
 		}
 		const onThrowGrenade = (payload: GrenadeIntent): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
+			if (vehicleAuthority.seat(socketId) !== null) return
 			const now = performance.now()
 			const previous =
 				lastPlayerGrenade.get(socketId) ?? Number.NEGATIVE_INFINITY
@@ -1194,6 +1242,7 @@ realtime(
 		const onGrappleAction = (payload: unknown): void => {
 			if (!playerLifecycle.isAlive(socketId) || !isGrappleActionIntent(payload))
 				return
+			if (vehicleAuthority.seat(socketId) !== null) return
 			const previous = lastGrappleAction.get(socketId) ?? -1
 			if (payload.clientActionId <= previous) return
 			lastGrappleAction.set(socketId, payload.clientActionId)
@@ -1274,7 +1323,46 @@ realtime(
 		}
 		const onGesture = (payload: unknown): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
+			if (vehicleAuthority.seat(socketId) !== null) return
 			melee.accept(socketId, payload, Date.now())
+		}
+		const onVehicleSeat = (payload: unknown): void => {
+			if (!playerLifecycle.isAlive(socketId) || !isVehicleSeatIntent(payload))
+				return
+			if (!vehicleAuthority.requestSeat(socketId, payload)) return
+			const player = players.get(socketId)
+			if (player !== undefined) {
+				Object.assign(player, {
+					crouching: false,
+					freeAim: false,
+					jump: 0,
+					mantle: { active: false, progress: 0, surfaceId: null },
+					sliding: false,
+					sprinting: false,
+					wallTraversal: { mode: "none", normal: [0, 0, 0] },
+					weaponsFree: false,
+				})
+			}
+			cancelPlayerReload(socketId)
+			railCharges.delete(socketId)
+			const grappleState = grapple.detach(socketId)
+			if (grappleState !== null) emitGrapple(grappleState)
+			emitStandardLockUpdates(standardLocks.clearPlayer(socketId))
+			io.emit("arena:players", [...players.values()])
+			io.emit("arena:snapshot", arenaSnapshot())
+		}
+		const onVehicleControl = (payload: unknown): void => {
+			if (
+				!playerLifecycle.isAlive(socketId) ||
+				!isVehicleControlIntent(payload)
+			)
+				return
+			vehicleAuthority.control(socketId, payload)
+		}
+		const onVehicleTurret = (payload: unknown): void => {
+			if (!playerLifecycle.isAlive(socketId) || !isVehicleTurretIntent(payload))
+				return
+			vehicleAuthority.turret(socketId, payload)
 		}
 		const acceptDroneAction = (payload: {
 			clientActionId: number
@@ -1317,8 +1405,12 @@ realtime(
 		gameSocket.on("arena:gesture", onGesture)
 		gameSocket.on("arena:recover-drone", onRecoverDrone)
 		gameSocket.on("arena:cycle-grenade", onCycleGrenade)
+		gameSocket.on("arena:vehicle-seat", onVehicleSeat)
+		gameSocket.on("arena:vehicle-control", onVehicleControl)
+		gameSocket.on("arena:vehicle-turret", onVehicleTurret)
 
 		return () => {
+			vehicleAuthority.removePlayer(socketId)
 			simulation.removePlayer(socketId, true)
 			const grappleDisconnected = grapple.disconnect(socketId)
 			emitMissileLockUpdates(armory.disconnect(socketId, Date.now()))
@@ -1352,6 +1444,9 @@ realtime(
 			gameSocket.off("arena:gesture", onGesture)
 			gameSocket.off("arena:recover-drone", onRecoverDrone)
 			gameSocket.off("arena:cycle-grenade", onCycleGrenade)
+			gameSocket.off("arena:vehicle-seat", onVehicleSeat)
+			gameSocket.off("arena:vehicle-control", onVehicleControl)
+			gameSocket.off("arena:vehicle-turret", onVehicleTurret)
 		}
 	},
 )
@@ -1459,6 +1554,7 @@ setInterval(() => {
 	}
 	if (playersChanged) io.emit("arena:players", [...players.values()])
 	simulation.update(delta)
+	vehicleAuthority.update(delta)
 	melee.update(nowMs)
 	if (armory.update(nowMs)) emitPickups()
 	for (const state of grapple.update(nowMs)) emitGrapple(state)
@@ -1466,7 +1562,7 @@ setInterval(() => {
 
 setInterval(() => {
 	io.emit("arena:players", [...players.values()])
-	io.emit("arena:snapshot", simulation.snapshot())
+	io.emit("arena:snapshot", arenaSnapshot())
 }, 50)
 
 httpServer.listen(port, () => {

@@ -3,6 +3,132 @@ import { isBoundedDirectionalJumpDirection } from "./DirectionalJumpPhysics.ts"
 
 export type Vector3Tuple = [number, number, number]
 
+export type VehicleKind = "bike" | "jeep"
+export type VehicleSeatId = "driver" | "rider" | "shotgun" | "turret"
+
+export type VehicleSeatSnapshot = Readonly<{
+	id: VehicleSeatId
+	occupantId: string | null
+}>
+
+export type VehicleSnapshot = Readonly<{
+	afterburner: boolean
+	airborne: boolean
+	id: string
+	kind: VehicleKind
+	lean: number
+	pitch: number
+	position: Vector3Tuple
+	revision: number
+	seats: readonly VehicleSeatSnapshot[]
+	turretFireSequence: number
+	turretPitch: number
+	turretYaw: number
+	velocity: Vector3Tuple
+	yaw: number
+}>
+
+export type NapalmHazardSnapshot = Readonly<{
+	expiresAt: number
+	id: number
+	ownerId: string
+	position: Vector3Tuple
+	radius: number
+}>
+
+export type VehicleSeatIntent = Readonly<{
+	clientActionId: number
+	seatId?: VehicleSeatId
+	type: "enter" | "exit" | "switch"
+	vehicleId?: string
+}>
+
+export type VehicleControlIntent = Readonly<{
+	afterburner: boolean
+	handbrake: boolean
+	clientInputId: number
+	steering: number
+	throttle: number
+	vehicleId: string
+}>
+
+export type VehicleTurretIntent = Readonly<{
+	clientInputId: number
+	direction: Vector3Tuple
+	fire: boolean
+	vehicleId: string
+}>
+
+const VEHICLE_SEAT_IDS: readonly VehicleSeatId[] = [
+	"driver",
+	"rider",
+	"shotgun",
+	"turret",
+]
+
+export function isVehicleSeatIntent(
+	value: unknown,
+): value is VehicleSeatIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	if (
+		!Number.isSafeInteger(record["clientActionId"]) ||
+		(record["clientActionId"] as number) < 0 ||
+		(record["type"] !== "enter" &&
+			record["type"] !== "exit" &&
+			record["type"] !== "switch")
+	)
+		return false
+	if (record["type"] === "exit") return Object.keys(record).length === 2
+	return (
+		typeof record["vehicleId"] === "string" &&
+		VEHICLE_SEAT_IDS.some((seat) => seat === record["seatId"]) &&
+		Object.keys(record).length === 4
+	)
+}
+
+export function isVehicleControlIntent(
+	value: unknown,
+): value is VehicleControlIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 6 &&
+		typeof record["vehicleId"] === "string" &&
+		Number.isSafeInteger(record["clientInputId"]) &&
+		(record["clientInputId"] as number) >= 0 &&
+		typeof record["afterburner"] === "boolean" &&
+		typeof record["handbrake"] === "boolean" &&
+		typeof record["steering"] === "number" &&
+		Math.abs(record["steering"] as number) <= 1 &&
+		typeof record["throttle"] === "number" &&
+		Math.abs(record["throttle"] as number) <= 1
+	)
+}
+
+export function isVehicleTurretIntent(
+	value: unknown,
+): value is VehicleTurretIntent {
+	if (value === null || typeof value !== "object") return false
+	const record = value as Record<string, unknown>
+	return (
+		Object.keys(record).length === 4 &&
+		typeof record["vehicleId"] === "string" &&
+		Number.isSafeInteger(record["clientInputId"]) &&
+		(record["clientInputId"] as number) >= 0 &&
+		typeof record["fire"] === "boolean" &&
+		isVector3Tuple(record["direction"]) &&
+		(record["direction"] as number[]).reduce(
+			(sum, component) => sum + component * component,
+			0,
+		) >= 0.8 &&
+		(record["direction"] as number[]).reduce(
+			(sum, component) => sum + component * component,
+			0,
+		) <= 1.2
+	)
+}
+
 export type WallTraversalSnapshot = Readonly<{
 	mode: "none" | "run" | "slide"
 	normal: Vector3Tuple
@@ -319,8 +445,10 @@ export type ArenaSnapshot = {
 	dronePayloads: DronePayloadSnapshot[]
 	droneWrecks: DroneWreckSnapshot[]
 	missiles: MiniMissileSnapshot[]
+	napalmHazards?: NapalmHazardSnapshot[]
 	sequence: number
 	serverTime: number
+	vehicles?: VehicleSnapshot[]
 }
 
 export type DroneWreckSnapshot = {
@@ -667,6 +795,8 @@ export type PlayerDamageImpact = {
 		| "melee"
 		| "mini-missile"
 		| "projectile"
+		| "napalm"
+		| "vehicle-turret"
 }
 
 export type PlayerDamageSnapshot = PlayerDamageImpact & {
