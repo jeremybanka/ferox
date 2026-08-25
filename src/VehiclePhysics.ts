@@ -130,7 +130,7 @@ export function stepVehicleMotion(
 	forwardSpeed = clamp(forwardSpeed, -tuning.maxReverse, speedLimit)
 	lateralSpeed *= Math.exp(-tuning.lateralGrip * delta)
 	const steerScale =
-		clamp(Math.abs(forwardSpeed) / 4, 0.12, 1) *
+		clamp(Math.abs(forwardSpeed) / 4, 0, 1) *
 		clamp(1 - Math.max(0, Math.abs(forwardSpeed) - 10) / 38, 0.58, 1)
 	// In this coordinate system decreasing yaw turns the chassis right. Reverse
 	// travel naturally inverts the yaw response like a conventional car.

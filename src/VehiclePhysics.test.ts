@@ -106,6 +106,20 @@ describe("vehicle fixed-step motion", () => {
 		expect(fast.velocity[0]).toBeGreaterThan(0)
 	})
 
+	test("does not pivot in place from steering alone", () => {
+		let state = initial
+		for (let index = 0; index < 120; index += 1)
+			state = stepVehicleMotion(
+				"jeep",
+				state,
+				{ ...neutral, steering: 1 },
+				1 / 60,
+				flatWorld,
+			)
+		expect(state.yaw).toBe(0)
+		expect(state.position).toEqual(initial.position)
+	})
+
 	test("brakes before crossing into reverse", () => {
 		let state: VehicleMotion = { ...initial, velocity: [0, 0, -12] }
 		state = stepVehicleMotion(
