@@ -822,11 +822,9 @@ app-shell.class {
 			}
 
 			> grapple-status {
-				&[data-owned="true"] {
-					border-color: #63eafa;
-					color: #baf8ff;
-					box-shadow: 0 0 0.7rem rgb(88 234 255 / 0.25);
-				}
+				border-color: #63eafa;
+				color: #baf8ff;
+				box-shadow: 0 0 0.7rem rgb(88 234 255 / 0.25);
 
 				&[data-phase="attached"] {
 					border-color: #fff27a;

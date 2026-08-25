@@ -1,62 +1,40 @@
 import type {
-	GrapplePickupSnapshot,
 	GrappleStateSnapshot,
 	Vector3Tuple,
 } from "../src/arena-protocol.ts"
 import {
 	GRAPPLE_MAX_ATTACH_SECONDS,
 	GRAPPLE_MIN_ROPE_LENGTH,
-	GRAPPLE_PICKUP_RADIUS,
-	GRAPPLE_PICKUP_RESPAWN_MS,
 } from "../src/game-constants.ts"
+import { advanceGrappleRopeLength } from "../src/GrapplePhysics.ts"
 import type { ArenaAnchorHit } from "../src/ArenaWorld.ts"
 
 const distance = (left: Vector3Tuple, right: Vector3Tuple): number =>
 	Math.hypot(left[0] - right[0], left[1] - right[1], left[2] - right[2])
 
+const copy = (state: GrappleStateSnapshot): GrappleStateSnapshot => ({
+	...state,
+	anchor: state.anchor === null ? null : [...state.anchor],
+})
+
+/** Server-owned, independent always-equipped grapple state for every pilot. */
 export class GrappleUtility {
-	readonly #connected = new Set<string>()
-	readonly #pickupPosition: Vector3Tuple
-	#available = true
-	#availableAt: number | null = null
-	#ownerId: string | null = null
-	#sequence = 0
-	#state: GrappleStateSnapshot = {
-		anchor: null,
-		attachedAt: null,
-		ownerId: null,
-		phase: "idle",
-		ropeLength: null,
-		sequence: 0,
-		surfaceId: null,
+	readonly #states = new Map<string, GrappleStateSnapshot>()
+
+	connect(playerId: string): GrappleStateSnapshot {
+		const current = this.#states.get(playerId)
+		if (current !== undefined) return copy(current)
+		const state = this.#idle(playerId, 0)
+		this.#states.set(playerId, state)
+		return copy(state)
 	}
 
-	constructor(position: Vector3Tuple) {
-		this.#pickupPosition = [...position]
-	}
-
-	connect(playerId: string): void {
-		this.#connected.add(playerId)
-	}
-
-	disconnect(playerId: string, nowMs: number): boolean {
-		this.#connected.delete(playerId)
-		return this.release(playerId, nowMs)
-	}
-
-	collect(playerId: string, position: Vector3Tuple): boolean {
-		if (
-			!this.#connected.has(playerId) ||
-			!this.#available ||
-			this.#ownerId !== null ||
-			distance(position, this.#pickupPosition) > GRAPPLE_PICKUP_RADIUS
-		)
-			return false
-		this.#available = false
-		this.#availableAt = null
-		this.#ownerId = playerId
-		this.#setIdle(playerId)
-		return true
+	disconnect(playerId: string): GrappleStateSnapshot | null {
+		const state = this.#states.get(playerId)
+		if (state === undefined) return null
+		const idle = this.#idle(playerId, state.sequence + 1)
+		this.#states.delete(playerId)
+		return copy(idle)
 	}
 
 	attach(
@@ -64,93 +42,112 @@ export class GrappleUtility {
 		playerPosition: Vector3Tuple,
 		hit: ArenaAnchorHit,
 		nowMs: number,
-	): boolean {
-		if (
-			this.#ownerId !== playerId ||
-			this.#state.phase === "attached" ||
-			!this.#connected.has(playerId)
-		)
-			return false
-		const ropeLength = Math.max(
-			GRAPPLE_MIN_ROPE_LENGTH,
-			distance(playerPosition, [...hit.point]),
-		)
-		this.#sequence += 1
-		this.#state = {
+		attachmentId: number,
+	): GrappleStateSnapshot | null {
+		const current = this.#states.get(playerId)
+		if (current === undefined || current.phase === "attached") return null
+		const state: GrappleStateSnapshot = {
 			anchor: [...hit.point],
+			attachmentId,
 			attachedAt: nowMs,
 			ownerId: playerId,
 			phase: "attached",
-			ropeLength,
-			sequence: this.#sequence,
+			ropeLength: Math.max(
+				GRAPPLE_MIN_ROPE_LENGTH,
+				distance(playerPosition, [...hit.point]),
+			),
+			sequence: current.sequence + 1,
 			surfaceId: hit.surfaceId,
 		}
-		return true
+		this.#states.set(playerId, state)
+		return copy(state)
 	}
 
-	detach(playerId: string): boolean {
-		if (this.#ownerId !== playerId || this.#state.phase !== "attached")
-			return false
-		this.#setIdle(playerId)
-		return true
+	detach(playerId: string): GrappleStateSnapshot | null {
+		const current = this.#states.get(playerId)
+		if (current === undefined || current.phase !== "attached") return null
+		const state = this.#idle(playerId, current.sequence + 1)
+		this.#states.set(playerId, state)
+		return copy(state)
 	}
 
-	release(playerId: string, nowMs: number): boolean {
-		if (this.#ownerId !== playerId) return false
-		this.#ownerId = null
-		this.#available = false
-		this.#availableAt = nowMs + GRAPPLE_PICKUP_RESPAWN_MS
-		this.#setIdle(null)
-		return true
+	reset(playerId: string): GrappleStateSnapshot | null {
+		const current = this.#states.get(playerId)
+		if (current === undefined || current.phase === "idle") return null
+		const state = this.#idle(playerId, current.sequence + 1)
+		this.#states.set(playerId, state)
+		return copy(state)
 	}
 
-	update(nowMs: number): boolean {
-		let changed = false
+	reel(
+		playerId: string,
+		position: Vector3Tuple,
+		aimDirection: Vector3Tuple,
+		delta: number,
+	): GrappleStateSnapshot | null {
+		const current = this.#states.get(playerId)
 		if (
-			this.#state.phase === "attached" &&
-			this.#state.attachedAt !== null &&
-			nowMs - this.#state.attachedAt >= GRAPPLE_MAX_ATTACH_SECONDS * 1_000
-		) {
-			this.#setIdle(this.#ownerId)
-			changed = true
-		}
-		if (this.#availableAt !== null && nowMs >= this.#availableAt) {
-			this.#available = true
-			this.#availableAt = null
-			changed = true
-		}
-		return changed
+			current === undefined ||
+			current.phase !== "attached" ||
+			current.anchor === null ||
+			current.ropeLength === null
+		)
+			return null
+		const ropeLength = advanceGrappleRopeLength({
+			aimDirection: {
+				x: aimDirection[0],
+				y: aimDirection[1],
+				z: aimDirection[2],
+			},
+			anchor: {
+				x: current.anchor[0],
+				y: current.anchor[1],
+				z: current.anchor[2],
+			},
+			delta,
+			position: { x: position[0], y: position[1], z: position[2] },
+			ropeLength: current.ropeLength,
+		})
+		if (ropeLength === current.ropeLength) return null
+		const state = { ...current, ropeLength, sequence: current.sequence + 1 }
+		this.#states.set(playerId, state)
+		return copy(state)
 	}
 
-	ownedBy(playerId: string): boolean {
-		return this.#ownerId === playerId
+	update(nowMs: number): GrappleStateSnapshot[] {
+		const updates: GrappleStateSnapshot[] = []
+		for (const [playerId, state] of this.#states) {
+			if (
+				state.phase === "attached" &&
+				state.attachedAt !== null &&
+				nowMs - state.attachedAt >= GRAPPLE_MAX_ATTACH_SECONDS * 1_000
+			) {
+				const idle = this.#idle(playerId, state.sequence + 1)
+				this.#states.set(playerId, idle)
+				updates.push(copy(idle))
+			}
+		}
+		return updates
 	}
 
-	pickup(): GrapplePickupSnapshot {
+	state(playerId: string): GrappleStateSnapshot | null {
+		const state = this.#states.get(playerId)
+		return state === undefined ? null : copy(state)
+	}
+
+	states(): GrappleStateSnapshot[] {
+		return [...this.#states.values()].map(copy)
+	}
+
+	#idle(playerId: string, sequence: number): GrappleStateSnapshot {
 		return {
-			available: this.#available,
-			availableAt: this.#availableAt,
-			ownerId: this.#ownerId,
-			position: [...this.#pickupPosition],
-		}
-	}
-
-	state(): GrappleStateSnapshot {
-		return {
-			...this.#state,
-			anchor: this.#state.anchor === null ? null : [...this.#state.anchor],
-		}
-	}
-
-	#setIdle(ownerId: string | null): void {
-		this.#sequence += 1
-		this.#state = {
 			anchor: null,
+			attachmentId: null,
 			attachedAt: null,
-			ownerId,
+			ownerId: playerId,
 			phase: "idle",
 			ropeLength: null,
-			sequence: this.#sequence,
+			sequence,
 			surfaceId: null,
 		}
 	}

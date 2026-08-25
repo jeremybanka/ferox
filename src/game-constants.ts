@@ -122,15 +122,17 @@ export const GRENADE_RADIUS = 0.18
 export const GRENADE_RESTITUTION = 0.56
 export const GRENADE_THROW_SPEED = 17
 
-// Grapple tuning deliberately favors a readable, momentum-led swing over a
-// winch. The rope is fixed at the acquisition distance; steering is projected
-// onto its tangent and tension only removes velocity that would lengthen it.
-export const GRAPPLE_PICKUP_POSITION: readonly [number, number] = [0, -27]
-export const GRAPPLE_PICKUP_RADIUS = 2.4
-export const GRAPPLE_PICKUP_RESPAWN_MS = 12_000
+// Grapple is standard pilot equipment. Attachment commits the pilot toward the
+// anchor once, then the authoritative rope reels by elapsed time. Looking more
+// directly at the anchor increases the bounded reel rate.
 export const GRAPPLE_MAX_RANGE = 52
 export const GRAPPLE_MIN_ROPE_LENGTH = 3.5
 export const GRAPPLE_MAX_ATTACH_SECONDS = 8
+export const GRAPPLE_ATTACH_IMPULSE = 8
+export const GRAPPLE_REEL_MIN_ALIGNMENT = -0.25
+export const GRAPPLE_REEL_MAX_ALIGNMENT = 0.95
+export const GRAPPLE_MIN_REEL_RATE = 2.5
+export const GRAPPLE_MAX_REEL_RATE = 10
 export const GRAPPLE_STEERING_ACCELERATION = 8
 export const GRAPPLE_TENSION_ACCELERATION = 18
 export const GRAPPLE_MAX_SPEED = 32

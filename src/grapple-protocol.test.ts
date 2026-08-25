@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest"
 
 import {
 	isGrappleActionIntent,
-	isGrapplePickupSnapshot,
 	isGrappleStateSnapshot,
 	isJumpDirection,
 	isJumpDirectionForImpulse,
@@ -36,7 +35,7 @@ describe("grapple protocol", () => {
 	})
 
 	test("strictly validates sequenced client actions", () => {
-		expect(isGrappleActionIntent({ clientActionId: 1, type: "collect" })).toBe(
+		expect(isGrappleActionIntent({ clientActionId: 1, type: "detach" })).toBe(
 			true,
 		)
 		expect(
@@ -51,14 +50,18 @@ describe("grapple protocol", () => {
 			false,
 		)
 		expect(
-			isGrappleActionIntent({ clientActionId: 1, extra: true, type: "drop" }),
+			isGrappleActionIntent({ clientActionId: 1, extra: true, type: "detach" }),
 		).toBe(false)
+		expect(isGrappleActionIntent({ clientActionId: 1, type: "collect" })).toBe(
+			false,
+		)
 	})
 
 	test("requires coherent explicit replicated phases", () => {
 		expect(
 			isGrappleStateSnapshot({
 				anchor: null,
+				attachmentId: null,
 				attachedAt: null,
 				ownerId: "pilot",
 				phase: "idle",
@@ -70,6 +73,7 @@ describe("grapple protocol", () => {
 		expect(
 			isGrappleStateSnapshot({
 				anchor: [0, 8, -10],
+				attachmentId: 14,
 				attachedAt: 2,
 				ownerId: "pilot",
 				phase: "attached",
@@ -81,6 +85,7 @@ describe("grapple protocol", () => {
 		expect(
 			isGrappleStateSnapshot({
 				anchor: null,
+				attachmentId: 14,
 				attachedAt: 2,
 				ownerId: "pilot",
 				phase: "attached",
@@ -91,15 +96,18 @@ describe("grapple protocol", () => {
 		).toBe(false)
 	})
 
-	test("validates pickup lifecycle without accepting extra fields", () => {
+	test("requires owner identity and a coherent attachment id", () => {
 		expect(
-			isGrapplePickupSnapshot({
-				available: true,
-				availableAt: null,
-				ownerId: null,
-				position: [0, 1, -27],
+			isGrappleStateSnapshot({
+				anchor: [0, 8, -10],
+				attachmentId: null,
+				attachedAt: 2,
+				ownerId: "pilot",
+				phase: "attached",
+				ropeLength: 12,
+				sequence: 2,
+				surfaceId: "wall-1",
 			}),
-		).toBe(true)
-		expect(isGrapplePickupSnapshot({ available: true })).toBe(false)
+		).toBe(false)
 	})
 })

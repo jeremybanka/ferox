@@ -20,6 +20,7 @@ import {
 	type FireIntent,
 	type MeleeHitResult,
 	type GrenadeIntent,
+	type GrappleStateSnapshot,
 	type MiniMissileIntent,
 	type RailChargeIntent,
 	type PlayerMoveSnapshot,
@@ -42,13 +43,13 @@ import {
 	GRAPPLE_AUTHORITY_AIR_ACCELERATION,
 	GRAPPLE_AUTHORITY_GROUND_ACCELERATION,
 	GRAPPLE_MAX_RANGE,
-	GRAPPLE_PICKUP_POSITION,
 	MINI_MISSILE_PICKUP_POSITION,
 	PLAYER_SPAWN_ORDER,
 	PLAYER_SPAWN_POINTS,
 	railChargeFraction,
 } from "../src/game-constants.ts"
 import {
+	applyGrappleAttachImpulse,
 	constrainGrappleMotion,
 	stepAuthoritativeGrappleDirectionalJumpMotion,
 	stepAuthoritativeGrappleMotion,
@@ -146,12 +147,7 @@ const armory = new MiniMissileArmory(
 	arenaPickupPads,
 	Date.now(),
 )
-const [grappleX, grappleZ] = GRAPPLE_PICKUP_POSITION
-const grapple = new GrappleUtility([
-	grappleX,
-	arenaHeightAt(ARENA_SEED, grappleX, grappleZ) + 0.82,
-	grappleZ,
-])
+const grapple = new GrappleUtility()
 const standardLocks = new StandardLockTracker()
 
 const applyPlayerDamage = (
@@ -220,7 +216,8 @@ const applyPlayerDamage = (
 		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
 		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
 		if (armory.release(playerId, nowMs)) emitPickups()
-		if (grapple.release(playerId, nowMs)) emitGrapple()
+		const grappleReset = grapple.reset(playerId)
+		if (grappleReset !== null) emitGrapple(grappleReset)
 		emitEquipment(playerId)
 		lastPlayerFire.delete(playerId)
 		lastPlayerGrenade.delete(playerId)
@@ -277,9 +274,8 @@ const emitPickups = (): void => {
 	io.emit("arena:weapon-pickups", armory.arenaPickups())
 }
 
-const emitGrapple = (): void => {
-	io.emit("arena:grapple-pickup", grapple.pickup())
-	io.emit("arena:grapple-state", grapple.state())
+const emitGrapple = (state: GrappleStateSnapshot): void => {
+	io.emit("arena:grapple-state", state)
 }
 
 const cancelPlayerReload = (playerId: string): boolean => {
@@ -433,7 +429,7 @@ realtime(
 		let authoritativeWallTraversal: WallTraversalState =
 			INITIAL_WALL_TRAVERSAL_STATE
 		let authoritativeGrappleJumps: 0 | 1 | 2 = 0
-		let authoritativeGrappleSequence = -1
+		let authoritativeGrappleAttachmentId = -1
 		let authoritativeMantle: MantleState = INITIAL_MANTLE_STATE
 		let authoritativeCoyoteRemaining: number | null = null
 		let authoritativeGrounded = true
@@ -503,8 +499,8 @@ realtime(
 			gameSocket.emit("arena:equipment", armory.equipment(socketId))
 			gameSocket.emit("arena:mini-missile-pickup", armory.pickup())
 			gameSocket.emit("arena:weapon-pickups", armory.arenaPickups())
-			gameSocket.emit("arena:grapple-pickup", grapple.pickup())
-			gameSocket.emit("arena:grapple-state", grapple.state())
+			for (const state of grapple.states())
+				gameSocket.emit("arena:grapple-state", state)
 			gameSocket.emit("arena:incoming-lock", armory.incoming(socketId))
 			gameSocket.emit(
 				"arena:drone-inventory",
@@ -559,7 +555,7 @@ realtime(
 				authoritativeLifeSequence = current.lifeSequence
 				authoritativeWallTraversal = INITIAL_WALL_TRAVERSAL_STATE
 				authoritativeGrappleJumps = 0
-				authoritativeGrappleSequence = -1
+				authoritativeGrappleAttachmentId = -1
 				authoritativeMantle = INITIAL_MANTLE_STATE
 				authoritativeCoyoteRemaining = null
 				authoritativeGrounded = true
@@ -577,14 +573,20 @@ realtime(
 			const eyeHeight = payload.crouching
 				? PILOT_CROUCH_EYE_HEIGHT
 				: PILOT_STANDING_EYE_HEIGHT
-			const grappleState = grapple.state()
+			const reelUpdate = grapple.reel(
+				socketId,
+				current.position,
+				payload.aimDirection,
+				delta,
+			)
+			if (reelUpdate !== null) emitGrapple(reelUpdate)
+			const grappleState = grapple.state(socketId)
 			const pilotGravityScale = arenaGravityScaleAtStepStart(
 				"pilot",
 				current.position,
 			)
 			const grappleAttached =
-				grappleState.phase === "attached" &&
-				grappleState.ownerId === socketId &&
+				grappleState?.phase === "attached" &&
 				grappleState.anchor !== null &&
 				grappleState.ropeLength !== null
 			const jumpRoute = routeAuthoritativeJumpSignal(authoritativeJumpRoute, {
@@ -635,8 +637,8 @@ realtime(
 					},
 					groundBefore,
 				)
-				if (authoritativeGrappleSequence !== grappleState.sequence) {
-					authoritativeGrappleSequence = grappleState.sequence
+				if (authoritativeGrappleAttachmentId !== grappleState.attachmentId) {
+					authoritativeGrappleAttachmentId = grappleState.attachmentId!
 					authoritativeGrappleJumps = groundedBefore
 						? 0
 						: authoritativeJump === 2
@@ -846,12 +848,12 @@ realtime(
 					Math.abs(payload.position[0]) > ARENA_PLAYABLE_HALF_EXTENT + 1 ||
 					Math.abs(payload.position[2]) > ARENA_PLAYABLE_HALF_EXTENT + 1
 				) {
-					grapple.detach(socketId)
-					emitGrapple()
+					const state = grapple.detach(socketId)
+					if (state !== null) emitGrapple(state)
 				}
 			} else {
 				const jumpSignal = jumpRoute.movement!
-				authoritativeGrappleSequence = -1
+				authoritativeGrappleAttachmentId = -1
 				const requestedPosition = limitAuthoritativeTraversalDestination(
 					current.position,
 					payload.position,
@@ -1197,13 +1199,8 @@ realtime(
 			lastGrappleAction.set(socketId, payload.clientActionId)
 			const player = players.get(socketId)
 			if (player === undefined) return
-			let changed = false
-			let pickupChanged = false
+			let state: GrappleStateSnapshot | null = null
 			switch (payload.type) {
-				case "collect":
-					changed = grapple.collect(socketId, player.position)
-					pickupChanged = changed
-					break
 				case "attach": {
 					if (
 						Math.hypot(
@@ -1232,20 +1229,48 @@ realtime(
 						GRAPPLE_MAX_RANGE,
 					)
 					if (hit === null) return
-					changed = grapple.attach(socketId, player.position, hit, Date.now())
+					state = grapple.attach(
+						socketId,
+						player.position,
+						hit,
+						Date.now(),
+						payload.clientActionId,
+					)
+					if (state !== null && state.anchor !== null) {
+						const impulsed = applyGrappleAttachImpulse(
+							{
+								position: {
+									x: player.position[0],
+									y: player.position[1],
+									z: player.position[2],
+								},
+								velocity: {
+									x: player.velocity[0],
+									y: player.velocity[1],
+									z: player.velocity[2],
+								},
+							},
+							{
+								x: state.anchor[0],
+								y: state.anchor[1],
+								z: state.anchor[2],
+							},
+						)
+						player.velocity = [
+							impulsed.velocity.x,
+							impulsed.velocity.y,
+							impulsed.velocity.z,
+						]
+					}
 					break
 				}
 				case "detach":
-					changed = grapple.detach(socketId)
-					break
-				case "drop":
-					changed = grapple.release(socketId, Date.now())
-					pickupChanged = changed
+					state = grapple.detach(socketId)
 					break
 			}
-			if (!changed) return
-			if (pickupChanged) io.emit("arena:grapple-pickup", grapple.pickup())
-			io.emit("arena:grapple-state", grapple.state())
+			if (state === null) return
+			emitGrapple(state)
+			io.emit("arena:players", [...players.values()])
 		}
 		const onGesture = (payload: unknown): void => {
 			if (!playerLifecycle.isAlive(socketId)) return
@@ -1295,7 +1320,7 @@ realtime(
 
 		return () => {
 			simulation.removePlayer(socketId, true)
-			grapple.disconnect(socketId, Date.now())
+			const grappleDisconnected = grapple.disconnect(socketId)
 			emitMissileLockUpdates(armory.disconnect(socketId, Date.now()))
 			emitStandardLockUpdates(standardLocks.clearPlayer(socketId))
 			players.delete(socketId)
@@ -1313,7 +1338,7 @@ realtime(
 			lastDroneAction.delete(socketId)
 			lastGrappleAction.delete(socketId)
 			emitPickups()
-			emitGrapple()
+			if (grappleDisconnected !== null) emitGrapple(grappleDisconnected)
 			io.emit("arena:players", [...players.values()])
 			gameSocket.off("arena:ready", onReady)
 			gameSocket.off("arena:move", onMove)
@@ -1379,7 +1404,8 @@ setInterval(() => {
 		emitMissileLockUpdates(armory.clearLocksForPlayer(playerId))
 		emitStandardLockUpdates(standardLocks.clearPlayer(playerId))
 		if (armory.release(playerId, nowMs)) emitPickups()
-		if (grapple.release(playerId, nowMs)) emitGrapple()
+		const grappleReset = grapple.reset(playerId)
+		if (grappleReset !== null) emitGrapple(grappleReset)
 		armory.resetLoadout(playerId)
 		playerReloads.delete(playerId)
 		emitEquipment(playerId)
@@ -1435,7 +1461,7 @@ setInterval(() => {
 	simulation.update(delta)
 	melee.update(nowMs)
 	if (armory.update(nowMs)) emitPickups()
-	if (grapple.update(nowMs)) emitGrapple()
+	for (const state of grapple.update(nowMs)) emitGrapple(state)
 }, 1_000 / 30)
 
 setInterval(() => {
