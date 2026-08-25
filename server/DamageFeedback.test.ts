@@ -57,6 +57,19 @@ describe("authoritative damage feedback", () => {
 		expect(duplicate.tracker).toBe(first.tracker)
 	})
 
+	test("accepts authoritative ballistic damage carrying a rail impulse", () => {
+		const observed = observeDamageFeedback(
+			initialDamageFeedbackTracker(),
+			damageEvent(1, {
+				impulse: [0, 0, -30],
+				source: "ballistic",
+			}),
+			10.02,
+		)
+		expect(observed.accepted).toBe(true)
+		expect(observed.tracker.sequence).toBe(1)
+	})
+
 	test("advances past stale events without replaying their feedback", () => {
 		const stale = observeDamageFeedback(
 			initialDamageFeedbackTracker(3),

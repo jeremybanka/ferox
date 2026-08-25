@@ -56,6 +56,10 @@ import {
 	isVisorExpression,
 } from "./arena-protocol.ts"
 import { arenaHeightAt, arenaSeededValue } from "./arena-terrain.ts"
+import {
+	arenaGravityScaleAtStepStart,
+	ZERO_GRAVITY_ZONE,
+} from "./ArenaZones.ts"
 import { parkourFeatureInfluenceAt } from "./ParkourArena.ts"
 import {
 	ARENA_GRID_DIVISIONS,
@@ -100,6 +104,7 @@ import {
 	HIT_MARKER_DURATION_SECONDS,
 	MINI_MISSILE_PICKUP_POSITION,
 	MINI_MISSILE_PICKUP_RADIUS,
+	PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT,
 	PLAYER_SLIDE_DUST_BUDGET,
 	PLAYER_SLIDE_DUST_LIFETIME_SECONDS,
 	RAIL_CHARGE_MAX_MS,
@@ -1292,6 +1297,16 @@ export class ArenaGame {
 			)
 			this.#localDamageTracker = observed.tracker
 			if (!observed.accepted) return
+			if (
+				event.impulse !== undefined &&
+				event.impulse.length === 3 &&
+				event.impulse.every(Number.isFinite) &&
+				event.source === "ballistic" &&
+				!event.fatal
+			)
+				this.#player.velocity
+					.add(new THREE.Vector3(...event.impulse))
+					.clampLength(0, PLAYER_EXTERNAL_IMPULSE_SPEED_LIMIT)
 			this.#audio.playEffect("damage", {
 				gain: event.fatal ? 1.25 : 0.75 + Math.min(0.35, event.damage / 100),
 			})
@@ -1846,6 +1861,22 @@ export class ArenaGame {
 			gridMaterial.opacity = 0.16
 		}
 		this.#scene.add(grid)
+
+		const zeroGravityGlow = new THREE.Mesh(
+			new THREE.SphereGeometry(ZERO_GRAVITY_ZONE.radius, 20, 12),
+			new THREE.MeshBasicMaterial({
+				color: "#55dce8",
+				depthWrite: false,
+				opacity: 0.1,
+				side: THREE.DoubleSide,
+				transparent: true,
+				wireframe: true,
+			}),
+		)
+		zeroGravityGlow.name = "faint cyan zero-gravity boundary"
+		zeroGravityGlow.position.set(...ZERO_GRAVITY_ZONE.center)
+		this.#structureMeshes.push(zeroGravityGlow)
+		this.#scene.add(zeroGravityGlow)
 
 		for (const [index, pillar] of arenaPillars(this.#seed).entries()) {
 			const axis = new THREE.Vector3(...pillarAxis(pillar))
@@ -2581,7 +2612,13 @@ export class ArenaGame {
 				},
 				{
 					delta,
-					gravityScale: wallStep.state.mode === "crouch-slide" ? 0 : 1,
+					gravityScale:
+						wallStep.state.mode === "crouch-slide"
+							? 0
+							: arenaGravityScaleAtStepStart(
+									"pilot",
+									this.#player.position.toArray(),
+								),
 					groundAfter: nextGround,
 					groundBefore: ground,
 					groundMidpoint: midpointGround,
@@ -3222,7 +3259,10 @@ export class ArenaGame {
 			const grenade = this.#grenades[index]
 			if (grenade === undefined) continue
 			grenade.life -= delta
-			grenade.velocity.y -= GRENADE_GRAVITY * delta
+			grenade.velocity.y -=
+				GRENADE_GRAVITY *
+				delta *
+				arenaGravityScaleAtStepStart("grenade", grenade.mesh.position.toArray())
 			const grenadeStartX = grenade.mesh.position.x
 			const grenadeStartZ = grenade.mesh.position.z
 			grenade.mesh.position.addScaledVector(grenade.velocity, delta)

@@ -211,7 +211,7 @@ export const GUN_DEFINITIONS = {
 	"rail-gun": {
 		capabilities: { fire: true, pickup: true, reload: true },
 		fire: {
-			clientCooldownSeconds: 1.08,
+			clientCooldownSeconds: RAIL_SERVER_MINIMUM_INTERVAL_MS / 1_000,
 			serverMinimumIntervalMs: RAIL_SERVER_MINIMUM_INTERVAL_MS,
 			type: "ballistic",
 		},

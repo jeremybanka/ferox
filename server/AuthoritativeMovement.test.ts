@@ -9,6 +9,8 @@ import {
 	type WallTraversalState,
 } from "../src/WallTraversal.ts"
 import {
+	applyAuthoritativeExternalImpulse,
+	AUTHORITATIVE_EXTERNAL_SPEED_LIMIT,
 	AUTHORITATIVE_TRAVERSAL_TRAVEL_TOLERANCE,
 	consumeAuthoritativeJumpSignal,
 	limitAuthoritativeTraversalDestination,
@@ -24,6 +26,59 @@ const wallContact: ArenaSurfaceContact = {
 }
 
 describe("authoritative wall movement", () => {
+	test("applies a rail impulse once and bounds total external speed", () => {
+		expect(applyAuthoritativeExternalImpulse([2, 0, 0], [0, 0, -8])).toEqual([
+			2, 0, -8,
+		])
+		const extreme = applyAuthoritativeExternalImpulse([30, 0, 0], [0, 0, -30])
+		expect(Math.hypot(...extreme)).toBeCloseTo(
+			AUTHORITATIVE_EXTERNAL_SPEED_LIMIT,
+		)
+		expect(
+			applyAuthoritativeExternalImpulse([2, 0, 0], [Number.NaN, 0, 0]),
+		).toEqual([2, 0, 0])
+	})
+
+	test("zero gravity preserves unsupported pilot inertia across server steps", () => {
+		const zeroGravity = reconcileAuthoritativeMovement({
+			contact: null,
+			crouching: false,
+			delta: 0.1,
+			gravityScale: 0,
+			grounded: false,
+			jump: 1,
+			previousGrounded: false,
+			previousJump: 1,
+			previousVelocity: [4, 3, -2],
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			sliding: false,
+			velocity: [4, 3, -2],
+			viewDirection: [0, 0, 1],
+		})
+		const ordinaryGravity = reconcileAuthoritativeMovement({
+			contact: null,
+			crouching: false,
+			delta: 0.1,
+			gravityScale: 1,
+			grounded: false,
+			jump: 1,
+			previousGrounded: false,
+			previousJump: 1,
+			previousVelocity: zeroGravity.velocity,
+			previousWallTraversal: INITIAL_WALL_TRAVERSAL_STATE,
+			reportedWallTraversal: { mode: "none", normal: [0, 0, 0] },
+			sliding: false,
+			velocity: zeroGravity.velocity,
+			viewDirection: [0, 0, 1],
+		})
+
+		expect(zeroGravity.velocity).toEqual([4, 3, -2])
+		expect(ordinaryGravity.velocity[1]).toBeCloseTo(0.7)
+		expect(ordinaryGravity.velocity[0]).toBe(4)
+		expect(ordinaryGravity.velocity[2]).toBe(-2)
+	})
+
 	test("does not reset jump availability for a forged wall mode away from geometry", () => {
 		const state = reconcileAuthoritativeMovement({
 			contact: null,
